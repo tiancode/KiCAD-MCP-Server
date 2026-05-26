@@ -5,14 +5,21 @@ Handles parsing sym-lib-table files, discovering symbols,
 and providing search functionality for component selection.
 """
 
+import atexit
 import logging
 import os
+import pickle
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("kicad_interface")
+
+# Bump when SymbolInfo fields or the cache structure change so older pickles
+# are rejected automatically instead of producing stale/misshapen data.
+_DISK_CACHE_VERSION = 1
+_DISK_CACHE_PATH = Path.home() / ".kicad-mcp" / "cache" / "symbol_libraries.pickle"
 
 
 @dataclass
@@ -54,16 +61,37 @@ class SymbolLibraryManager:
         self.project_path = project_path
         self.libraries: Dict[str, str] = {}  # nickname -> path mapping
         self.symbol_cache: Dict[str, List[SymbolInfo]] = {}  # library -> [SymbolInfo]
+        # Source-file mtime_ns at the time the matching symbol_cache entry was
+        # parsed.  list_symbols() compares against the current mtime to decide
+        # whether the cache is still fresh.  Persisted alongside symbol_cache
+        # so a session can reuse parses from previous sessions.
+        self._cache_mtimes: Dict[str, int] = {}
+        self._cache_dirty = False  # whether to flush to disk at shutdown
         self._load_libraries()
-        self._warm_cache()
+        # Restore previously parsed libraries from disk, if any.  This is what
+        # turns a cold start into a warm one: instead of re-parsing 200+
+        # .kicad_sym files (30-120 s) we read a single pickle (< 200 ms).
+        self._load_disk_cache()
+
+        # Eager full-warm is now opt-in: KICAD_MCP_EAGER_SYMBOL_CACHE=1.  The
+        # default lazy path costs nothing at startup and parses per-library on
+        # first list_symbols(nickname) call, which is bounded by what the
+        # user actually searches.  Combined with the disk cache above, even
+        # `search_symbols` over many libraries is fast after the first run.
+        if os.environ.get("KICAD_MCP_EAGER_SYMBOL_CACHE") == "1":
+            self._warm_cache()
+
+        # Persist anything we parsed at shutdown so the next run starts hot.
+        atexit.register(self._save_disk_cache)
 
     def _warm_cache(self) -> None:
-        """Pre-parse all symbol libraries so the first search is fast.
+        """Pre-parse all symbol libraries so the first search is instant.
 
-        Without this, the first ``search_symbols`` call parses every
-        .kicad_sym file on demand, which can take 30-120 s across
-        200+ libraries.  By populating the cache here (during startup,
-        before the READY handshake) the cost is paid once.
+        Opt-in via KICAD_MCP_EAGER_SYMBOL_CACHE=1.  Without it, libraries are
+        parsed lazily as ``list_symbols(nickname)`` is called.  Even with the
+        flag set the disk cache short-circuits most parses, so the price
+        ranges from "near-zero (cache hit)" to "30-120 s (cold disk, no
+        cache)".  See the module docstring for the cache file location.
         """
         for nickname in list(self.libraries.keys()):
             try:
@@ -74,6 +102,76 @@ class SymbolLibraryManager:
                 # also swallowed programmer bugs; tightened to file-IO and
                 # parse failures only.
                 logger.debug("Skipping unparseable library %s: %s", nickname, e)
+
+    def _load_disk_cache(self) -> None:
+        """Restore symbol_cache + _cache_mtimes from the on-disk pickle.
+
+        Silently skipped if the cache file is missing, unreadable, or
+        produced by an older version of the code.  list_symbols() is
+        responsible for re-checking each entry's mtime against the current
+        .kicad_sym file before serving from cache, so even if the disk
+        cache was written months ago and a few libraries changed, we only
+        re-parse what actually moved.
+        """
+        if not _DISK_CACHE_PATH.exists():
+            logger.debug("No symbol disk cache at %s; starting cold.", _DISK_CACHE_PATH)
+            return
+        try:
+            with _DISK_CACHE_PATH.open("rb") as fh:
+                data = pickle.load(fh)
+        except (OSError, pickle.UnpicklingError, EOFError, AttributeError) as e:
+            logger.warning("Could not read symbol disk cache (%s); will rebuild.", e)
+            return
+
+        if not isinstance(data, dict) or data.get("version") != _DISK_CACHE_VERSION:
+            logger.info(
+                "Symbol disk cache version mismatch (got %r, want %d); rebuilding.",
+                data.get("version") if isinstance(data, dict) else None,
+                _DISK_CACHE_VERSION,
+            )
+            return
+
+        symbol_cache = data.get("symbol_cache") or {}
+        mtimes = data.get("mtimes") or {}
+        if not isinstance(symbol_cache, dict) or not isinstance(mtimes, dict):
+            logger.warning("Symbol disk cache has unexpected shape; rebuilding.")
+            return
+
+        self.symbol_cache = symbol_cache
+        self._cache_mtimes = mtimes
+        logger.info(
+            "Restored %d libraries from symbol disk cache (%s)",
+            len(self.symbol_cache),
+            _DISK_CACHE_PATH,
+        )
+
+    def _save_disk_cache(self) -> None:
+        """Persist symbol_cache + mtimes to disk for the next session.
+
+        Best-effort.  Called via atexit.  No-op when the cache hasn't been
+        touched (saves an unnecessary pickle write on PCB-only sessions
+        that never invoke search_symbols).
+        """
+        if not self._cache_dirty:
+            return
+        try:
+            _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": _DISK_CACHE_VERSION,
+                "symbol_cache": self.symbol_cache,
+                "mtimes": self._cache_mtimes,
+            }
+            tmp = _DISK_CACHE_PATH.with_suffix(_DISK_CACHE_PATH.suffix + ".tmp")
+            with tmp.open("wb") as fh:
+                pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp.replace(_DISK_CACHE_PATH)
+            logger.info(
+                "Saved symbol disk cache: %d libraries to %s",
+                len(self.symbol_cache),
+                _DISK_CACHE_PATH,
+            )
+        except (OSError, pickle.PicklingError) as e:
+            logger.warning("Could not persist symbol disk cache: %s", e)
 
     def _load_libraries(self) -> None:
         """Load libraries from sym-lib-table files"""
@@ -368,29 +466,55 @@ class SymbolLibraryManager:
 
     def list_symbols(self, library_nickname: str) -> List[SymbolInfo]:
         """
-        List all symbols in a library
+        List all symbols in a library.
 
-        Args:
-            library_nickname: Library name (e.g., "Device")
+        Uses a two-tier cache:
 
-        Returns:
-            List of SymbolInfo objects
+          1. in-memory `self.symbol_cache` — populated this session, or
+             restored at __init__ from the on-disk pickle.
+          2. per-library mtime in `self._cache_mtimes` — validates each
+             cached entry against the source .kicad_sym file's current
+             mtime_ns.  A library that was edited (e.g. by the KiCAD UI
+             or a PCM update) since the cache was written is silently
+             re-parsed.
+
+        Cache misses fall through to the regex-based parser and are
+        written back to both tiers (in-memory now, disk at atexit).
         """
-        # Check cache first
-        if library_nickname in self.symbol_cache:
-            return self.symbol_cache[library_nickname]
-
         library_path = self.libraries.get(library_nickname)
         if not library_path:
             logger.warning(f"Library not found: {library_nickname}")
             return []
 
-        # Parse the library file
+        # Hot path: cache entry exists AND the source file hasn't moved.
+        if library_nickname in self.symbol_cache:
+            try:
+                current_mtime = os.stat(library_path).st_mtime_ns
+            except OSError:
+                # File disappeared — fall through to the parser which will
+                # also fail and log; don't serve a stale cache for a file
+                # that no longer exists.
+                current_mtime = None
+            if (
+                current_mtime is not None
+                and self._cache_mtimes.get(library_nickname) == current_mtime
+            ):
+                return self.symbol_cache[library_nickname]
+            logger.debug(
+                "Symbol cache stale for %s; re-parsing (mtime moved).",
+                library_nickname,
+            )
+
+        # Cache miss or stale — parse and refresh both tiers.
         symbols = self._parse_kicad_sym_file(library_path, library_nickname)
-
-        # Cache the results
         self.symbol_cache[library_nickname] = symbols
-
+        try:
+            self._cache_mtimes[library_nickname] = os.stat(library_path).st_mtime_ns
+        except OSError:
+            # Drop any stale mtime so a future call re-checks instead of
+            # serving from a cache entry with no validation anchor.
+            self._cache_mtimes.pop(library_nickname, None)
+        self._cache_dirty = True
         return symbols
 
     def search_symbols(
