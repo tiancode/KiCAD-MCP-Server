@@ -1,7 +1,7 @@
 # Known Issues & Workarounds
 
-**Last Updated:** 2026-03-21
-**Version:** 2.2.3
+**Last Updated:** 2026-05-27
+**Version:** 2.2.3+ (post-release `main`)
 
 This document tracks known issues and provides workarounds where available.
 
@@ -77,13 +77,63 @@ AttributeError: 'BOARD' object has no attribute 'LT_USER'
 
 ---
 
-### 5. package.json Version Mismatch
+---
 
-**Status:** KNOWN - Non-critical
+## Recently Fixed (post-2.2.3 on `main`)
 
-**Symptoms:** package.json shows version 2.1.0-alpha while CHANGELOG documents version 2.2.3
+### package.json version mismatch (Fixed)
 
-**Impact:** Cosmetic only. CHANGELOG.md is the authoritative version reference.
+- `package.json`, `pyproject.toml`, and the MCP `serverInfo.version`
+  field were `2.1.0-alpha`, `2.1.0`, and `"1.0.0"` respectively, while
+  CHANGELOG / README documented `2.2.3`. All three now read from
+  `package.json` at runtime and the file is bumped to `2.2.3`.
+
+### 30-120 s startup pause (Fixed)
+
+- `SymbolLibraryManager._warm_cache()` was eagerly parsing every
+  `.kicad_sym` file (200+) at startup. Now opt-in via
+  `KICAD_MCP_EAGER_SYMBOL_CACHE=1`; the default lazy path costs nothing
+  and a persistent disk cache at `~/.kicad-mcp/cache/` keeps repeat
+  starts fast.
+
+### Flatpak / sandboxed install support (Fixed)
+
+- IPC socket auto-detect now includes
+  `~/.var/app/org.kicad.KiCad/cache/tmp/kicad/api.sock` (Linux Flatpak)
+  and `~/Library/Caches/kicad/api.sock` (macOS sandbox).
+- `fp-lib-table` / `sym-lib-table` lookup includes
+  `~/.var/app/org.kicad.KiCad/config/kicad/<ver>/` and the macOS
+  Containers path.
+- `KICAD10_FOOTPRINT_DIR` / `KICAD10_SYMBOL_DIR` env vars now picked up;
+  Flatpak runtime library extension auto-globbed at
+  `/var/lib/flatpak/runtime/org.kicad.KiCad.Library.{Footprints,Symbols}/...`.
+
+### KiCAD 10 version detection (Fixed)
+
+- `get_backend_info` used to return `"unknown"` when connected KiCAD was
+  newer than the installed kipy (FutureVersionError swallowed by a bare
+  except). Now uses `KiCad.get_version().full_version` first and only
+  falls back to `check_version()` for kipy 9.x.
+
+### MCP protocol-level gaps (Fixed)
+
+- `execute_tool`, `get_backend_info`, and seven `ipc_*` tools were
+  referenced everywhere but never registered on the TS side. All
+  registered now; tool count: 142 → 151.
+
+### CI failure masking (Fixed)
+
+- `.github/workflows/ci.yml` no longer trails every step with `|| echo
+"... not configured yet"`. The 19 pollution failures it used to
+  hide were root-caused (unconditional `import pcbnew` + missing `mil`
+  enums in three schemas) and fixed. Full sweep now 856 / 0 / 11.
+
+### `_current_board_path` in IPC mode (Fixed)
+
+- `get_backend_state` reported `loadedBoard: false` and the wrong
+  `projectPath` when running on IPC (it only checked `self.board`, the
+  SWIG state). Now stitches `document.project.path` +
+  `document.board_filename` from kipy.
 
 ---
 

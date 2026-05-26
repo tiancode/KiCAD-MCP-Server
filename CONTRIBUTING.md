@@ -172,11 +172,11 @@ The KiCAD MCP Server is organized into several key components:
 
 - **TypeScript MCP Server** (`src/`) - Handles MCP protocol communication and tool routing
 - **Python KiCAD Interface** (`python/`) - Interfaces with KiCAD's Python API (pcbnew)
-- **Tool Router** - Organizes 122 tools into 16 discoverable categories
+- **Tool Router** - Organizes 151 tools into 16 discoverable categories
 - **Resource System** - Provides dynamic project/board state information
 - **Prompt System** - Offers context-aware design prompts
 
-**Current Tool Count:** 122 tools across 16 categories (direct + routed).
+**Current Tool Count:** 151 tools across 16 categories (direct + routed).
 See [docs/TOOL_INVENTORY.md](docs/TOOL_INVENTORY.md) for the authoritative
 breakdown and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system
 layering.

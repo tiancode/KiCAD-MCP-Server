@@ -33,74 +33,73 @@ The server has two layers:
 
 ```
 KiCAD-MCP-Server/
-  src/                        # TypeScript MCP server
-    server.ts                 # Main server, tool registration, Python subprocess
-    logger.ts                 # Logging configuration
-    tools/                    # Tool definitions (one file per category)
-      registry.ts             # Tool category definitions and lookup
-      router.ts               # Router tools (list/search/execute)
-      project.ts              # Project management tools
-      board.ts                # Board operations tools
-      component.ts            # Component tools
-      routing.ts              # Routing tools
-      design-rules.ts         # DRC tools
-      export.ts               # Export tools
-      schematic.ts            # Schematic tools
-      library.ts              # Footprint library tools
-      library-symbol.ts       # Symbol library tools
-      footprint.ts            # Footprint creator tools
-      symbol-creator.ts       # Symbol creator tools
-      datasheet.ts            # Datasheet tools
-      jlcpcb-api.ts           # JLCPCB integration tools
-      freerouting.ts          # Autorouter tools
-      ui.ts                   # UI management tools
-    resources/                # MCP resource definitions
-    prompts/                  # MCP prompt templates
-    utils/                    # Utility functions
+  src/                          # TypeScript MCP server
+    server.ts                   # Server lifecycle, queue, READY/warm-up handshake
+    index.ts                    # Entry point — wires together server + config
+    config.ts                   # Config loader (LOG_LEVEL, optional --config file)
+    logger.ts                   # Logging
+    tools/                      # MCP tool registrations (one file per category)
+      registry.ts               # Direct vs. routed tool categorisation
+      router.ts                 # list_tool_categories / search_tools / execute_tool
+      project.ts, board.ts, component.ts, routing.ts, design-rules.ts,
+      export.ts, schematic.ts, library.ts, library-symbol.ts,
+      footprint.ts, symbol-creator.ts, datasheet.ts, jlcpcb-api.ts,
+      freerouting.ts, ui.ts     # Each calls server.tool(...) for its commands
+    resources/                  # kicad:// resource handlers
+    prompts/                    # MCP prompt templates
 
-  python/                     # Python KiCAD interface
-    kicad_interface.py        # Main entry point, command router
-    commands/                 # Command implementations
-      project.py              # Project operations
-      board.py                # Board manipulation
-      component.py            # PCB component operations
-      component_schematic.py  # Schematic component operations
-      connection_schematic.py # Schematic wiring and connections
-      schematic.py            # Schematic file management
-      routing.py              # Trace routing
-      design_rules.py         # DRC operations
-      export.py               # File export
-      library.py              # Footprint library access
-      library_symbol.py       # Symbol library access
-      footprint.py            # Custom footprint creation
-      symbol_creator.py       # Custom symbol creation
-      datasheet_manager.py    # Datasheet enrichment
-      jlcpcb.py               # JLCPCB API client
-      jlcsearch.py            # JLCSearch public API client
-      jlcpcb_parts.py         # JLCPCB parts database
-      freerouting.py          # Freerouting autorouter
-      svg_import.py           # SVG to PCB polygon conversion
-      dynamic_symbol_loader.py # Dynamic symbol injection
-      wire_manager.py         # S-expression wire creation
-      pin_locator.py          # Pin position discovery
-      layers.py               # Layer utilities
-      outline.py              # Board outline utilities
-      size.py                 # Size/dimension utilities
-      view.py                 # Board rendering utilities
-    kicad_api/                # Backend abstraction
-      base.py                 # Abstract base class
-      factory.py              # Backend auto-detection
-      swig_backend.py         # pcbnew SWIG API backend
-      ipc_backend.py          # KiCAD 9.0 IPC API backend
-    schemas/                  # JSON Schema definitions
-      tool_schemas.py         # Tool parameter schemas
-    resources/                # Resource handlers
-    templates/                # Schematic/project templates
-    tests/                    # Python test suite
-    utils/                    # Platform detection, helpers
+  python/
+    kicad_interface.py          # ~2 800-line dispatcher: command_routes,
+                                # _HANDLER_MAP, __getattr__ shim, auto-save,
+                                # SWIG dehydration recovery, IPC reconnect
+    handlers/                   # Per-tool handler implementations
+      __init__.py               # Calling convention docstring
+      ui.py                     # check_kicad_ui, launch_kicad_ui,
+                                # get_backend_info, get_backend_state
+      project.py                # open / create / snapshot_project
+      board.py                  # place_component, import_svg_logo
+      footprint.py              # 4 custom-footprint handlers
+      symbol_creator.py         # 4 custom-symbol handlers
+      jlcpcb.py                 # 5 JLCPCB DB handlers
+      datasheet.py              # enrich_datasheets, get_datasheet_url
+      ipc.py                    # 7 ipc_* real-time IPC handlers
+      routing.py                # refill_zones (only non-trivial routing handler)
+      schematic_component.py    # 9 component CRUD
+      schematic_wire.py         # 10 wire/label/connection handlers
+      schematic_query.py        # 13 list_/get_/find_ handlers
+      schematic_io.py           # 8 IO/export/erc/netlist/sync handlers
+      schematic_view.py         # 8 view/analysis handlers
+    commands/                   # Lower-level command classes (BoardCommands,
+                                # ComponentCommands, RoutingCommands, …) plus
+                                # pcbnew helpers (wire_manager, pin_locator,
+                                # dynamic_symbol_loader, freerouting, jlcpcb,
+                                # jlcsearch, datasheet_manager, …).  Most
+                                # handlers/<m>.py modules delegate to these.
+    kicad_api/                  # Backend abstraction
+      base.py                   # KiCADBackend + BoardAPI abstract bases
+      factory.py                # Auto-detection: IPC first, SWIG fallback
+      swig_backend.py           # pcbnew SWIG bindings (deprecated path)
+      ipc_backend.py            # kipy IPC client (KiCAD 9.0+ / 10.0+)
+    schemas/tool_schemas.py     # JSON Schema definitions for every tool
+    annotations/                # IPC-annotation loader for tool descriptions
+    resources/                  # Resource read handlers
+    templates/                  # Pre-built schematic / project templates
+    parsers/                    # KiCAD file format parsers (kicad_mod)
+    utils/                      # platform_helper, kicad_process
 
-  docs/                       # Documentation
-  config/                     # Configuration examples
+  tests/                        # Flat test layout; pytest discovers test_*.py
+    conftest.py                 # pcbnew + skip MagicMock stubbing
+    fixtures/                   # .kicad_sym fixtures
+    test_*.py                   # ~80 test files
+
+  scripts/
+    swig_smoke_test.py          # End-to-end against real pcbnew
+    download_jlcpcb.py          # JLCPCB parts DB downloader
+    test-router.js              # Router registry sanity test
+    install-linux.sh, auto_refresh_kicad.sh, generate_tool_annotations.py
+
+  docs/                         # Documentation
+  config/                       # Configuration examples
 ```
 
 ---
@@ -138,11 +137,11 @@ server.tool(
 
 ### Tool Router (`src/tools/router.ts` and `src/tools/registry.ts`)
 
-The router pattern reduces AI context usage:
+The router pattern is primarily a discoverability layer:
 
-- `registry.ts` defines tool categories and which tools are "direct" (always visible) vs "routed" (discoverable)
-- `router.ts` provides 4 meta-tools: `list_tool_categories`, `get_category_tools`, `search_tools`, `execute_tool`
-- Routed tools are not registered as individual MCP tools -- they are invoked through `execute_tool`
+- `registry.ts` defines tool categories and tags each tool as "direct" (always visible) or "routed" (discoverable via the category browser).
+- `router.ts` provides 4 meta-tools: `list_tool_categories`, `get_category_tools`, `search_tools`, `execute_tool`.
+- **All tools — direct AND routed — are registered as MCP tools** and can be called by name. `execute_tool` is a thin passthrough that lets clients run any tool through a single entry point (useful when discovering tools dynamically). The "router" name is historical; today the registry mostly drives `list_tool_categories` output.
 
 ### Python Subprocess Communication
 
@@ -165,13 +164,38 @@ The router pattern reduces AI context usage:
 - Handles backend selection (SWIG vs IPC)
 - Auto-saves after board-modifying operations
 
-### Command Routing
+### Command Routing — `_HANDLER_MAP` + `__getattr__`
 
-Commands are routed by name to handler methods. The mapping is defined in `kicad_interface.py`. Each handler:
+The dispatcher used to carry 81 inline `_handle_<command>` methods that
+imported the matching `handlers/<module>.py` and forwarded. That's
+collapsed into a single `__getattr__` shim driven by a `_HANDLER_MAP`
+class attribute on `KiCADInterface`:
 
-1. Receives a params dict
-2. Calls the appropriate command class method
-3. Returns a result dict with `success`, `message`, and any additional data
+```python
+class KiCADInterface:
+    _HANDLER_MAP: Dict[str, str] = {
+        "check_kicad_ui": "ui",
+        "place_component": "board",
+        "add_schematic_wire": "schematic_wire",
+        # … one entry per MCP command
+    }
+
+    def __getattr__(self, name):
+        if name.startswith("_handle_"):
+            cmd = name[len("_handle_"):]
+            module_name = type(self)._HANDLER_MAP.get(cmd)
+            if module_name is not None:
+                module = importlib.import_module(f"handlers.{module_name}")
+                handler = getattr(module, f"handle_{cmd}")
+                return lambda params, _h=handler: _h(self, params)
+        raise AttributeError(name)
+```
+
+Tests that call `iface._handle_check_kicad_ui({})` continue to work
+through `__getattr__`. Each handler module exposes free functions of
+the form `handle_<command>(iface, params) -> dict`; the `iface`
+parameter gives them access to shared state (`iface.board`,
+`iface.ipc_board_api`, `iface._safe_load_board`, …).
 
 ### Backend System (`python/kicad_api/`)
 
@@ -250,20 +274,35 @@ registerMyTools(server, callKicadScript);
 
 ### Step 4: Implement the Python Handler
 
-Add a handler in `python/kicad_interface.py` or create a new command module in `python/commands/`:
+Pick the right handler module in `python/handlers/<module>.py` (or
+create a new one). Add a free function with the standard signature:
 
 ```python
-def handle_my_new_tool(self, params):
-    # Implementation using pcbnew API
+def handle_my_new_tool(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    # Implementation using iface.board / iface.ipc_board_api / pcbnew /
+    # the appropriate commands.* module.
     return {"success": True, "message": "Done", "data": result}
 ```
 
-Route the command in the main handler:
+Then register the routing in `python/kicad_interface.py` by adding an
+entry to `_HANDLER_MAP` and to `command_routes`:
 
 ```python
-elif command == "my_new_tool":
-    return self.handle_my_new_tool(params)
+class KiCADInterface:
+    _HANDLER_MAP: Dict[str, str] = {
+        # …
+        "my_new_tool": "my_module",
+    }
+
+    # In __init__, command_routes table:
+    self.command_routes = {
+        # …
+        "my_new_tool": self._handle_my_new_tool,
+    }
 ```
+
+`self._handle_my_new_tool` materialises via `__getattr__` — no
+trampoline method to write.
 
 ### Step 5: Build and Test
 
@@ -303,7 +342,7 @@ Key test files:
 ## Key Design Decisions
 
 - **TypeScript + Python split**: TypeScript handles MCP protocol (well-supported SDK), Python handles KiCAD (only available API)
-- **Router pattern**: Reduces AI context from ~80K tokens (122 tools) to manageable size
+- **Router pattern**: Reduces AI context from ~80K tokens (151 tools) to manageable size
 - **Auto-save**: Every board-modifying SWIG operation auto-saves to prevent data loss
 - **Dynamic symbol loading**: Works around kicad-skip's inability to create symbols from scratch
 - **S-expression wire injection**: Works around kicad-skip's inability to create wires

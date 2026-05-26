@@ -1,8 +1,14 @@
 # KiCAD MCP Server - Complete Tool Inventory
 
-**Version:** 2.1.0-alpha
-**Total Tools:** 137 (verifiziert via VS Code MCP Discovery Log)
-**Last Updated:** 2026-05-02
+**Version:** 2.2.3+ (post-release `main`)
+**Total Tools:** 151 (verified via MCP `tools/list` against KiCAD 10.0.3)
+**Last Updated:** 2026-05-27
+
+**What changed since 137:** registered `execute_tool` (router passthrough),
+`get_backend_info`, and the seven `ipc_*` tools (`ipc_add_track`, `ipc_add_via`,
+`ipc_add_text`, `ipc_list_components`, `ipc_get_tracks`, `ipc_get_vias`,
+`ipc_save_board`). Net +9 tools. See `CHANGELOG.md` for the full list of
+MCP-protocol-level fixes from this session.
 
 ## How Tools Are Organized
 

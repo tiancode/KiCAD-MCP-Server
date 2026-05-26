@@ -12,7 +12,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 122 tools across 16 categories with JSON Schema validation
+- 151 tools across 16 categories with JSON Schema validation
 - Smart tool discovery with router pattern (reduces AI context by 70%)
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 27 tools and dynamic symbol loading (~10,000 symbols)
@@ -28,6 +28,68 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 ## Try out Arduino MCP - now you can get Claude to help in the IDE, real time!:
 
 https://github.com/mixelpixx/arduino-ide
+
+## What's New (post-2.2.3, on `main`)
+
+### Faster startup, lazy symbol library
+
+The biggest user-visible regression in older builds was a 30 – 120 s
+startup pause while every `.kicad_sym` file in the global library was
+parsed up front. That eager warm is **opt-in via
+`KICAD_MCP_EAGER_SYMBOL_CACHE=1`** now. The default path is lazy —
+libraries are parsed on first `list_symbols(nickname)` call. A
+persistent disk cache at `~/.kicad-mcp/cache/symbol_libraries.pickle`
+with per-library mtime validation means even broad
+`search_symbols` calls are fast on subsequent runs.
+
+### KiCAD 10 + Flatpak ergonomics
+
+End-to-end tested against KiCAD 10.0.3 (Flathub Flatpak):
+
+- IPC socket auto-detected under
+  `~/.var/app/org.kicad.KiCad/cache/tmp/kicad/api.sock` and the macOS
+  sandbox equivalent — no more manually setting `KICAD_API_SOCKET`.
+- `fp-lib-table` / `sym-lib-table` auto-discovered in the sandbox
+  config dir.
+- `KICAD10_FOOTPRINT_DIR` / `KICAD10_SYMBOL_DIR` recognised; the
+  Flatpak runtime library extension at
+  `/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints/.../files/footprints`
+  is probed as a last resort.
+- KiCAD-10 version detection no longer reports "unknown" when the
+  installed kipy is one patch version behind.
+
+### MCP-protocol fixes
+
+- The router's `execute_tool` is finally registered (every
+  `list_tool_categories` response told you to use it, but the actual
+  MCP tool was missing).
+- `get_backend_info` and seven `ipc_*` tools (`ipc_list_components`,
+  `ipc_add_track`, etc.) now have proper MCP wrappers; previously
+  only the Python handlers existed. Total MCP tool count: 142 → **151**.
+- `get_backend_state` reports the correct project / board paths in
+  IPC mode.
+
+### Server architecture refactor
+
+`python/kicad_interface.py` shrank from **6 668 → 2 797 lines (−58 %)**.
+81 inline `_handle_*` methods moved into a new `python/handlers/`
+package (one module per tool category); a single `__getattr__` +
+`_HANDLER_MAP` replaces the 80 trampoline methods. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the new layout.
+
+### Cleanup that also shipped
+
+- `LOG_LEVEL` env var is now honoured by the Python side too (was
+  hardcoded `DEBUG`).
+- CI workflow no longer masks failures with `|| echo "... not
+configured yet"`; the 19 pollution failures it used to hide were
+  root-caused and fixed.
+- `express` dropped (`npm audit --high` → 0 vulnerabilities).
+- `scripts/swig_smoke_test.py` runs the full create-project → place
+  components → route → save chain against real `pcbnew` for catching
+  regressions pytest's MagicMock can't see.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
 
 ## What's New in v2.2.3
 
@@ -251,7 +313,7 @@ Access project state without executing tools:
 
 ## Available Tools
 
-The server provides **122 tools** organized into 16 functional categories. With the router pattern, tools are automatically discovered as needed -- just ask Claude what you want to accomplish.
+The server provides **151 tools** organized into 16 functional categories. With the router pattern, tools are automatically discovered as needed -- just ask Claude what you want to accomplish.
 
 For the complete tool reference with access types (direct/routed/additional), see [Tool Inventory](docs/TOOL_INVENTORY.md).
 
@@ -1258,7 +1320,7 @@ npm run format
 
 See [STATUS_SUMMARY.md](docs/STATUS_SUMMARY.md) for the complete status matrix and [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
-**Working Features (122 tools):**
+**Working Features (151 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)

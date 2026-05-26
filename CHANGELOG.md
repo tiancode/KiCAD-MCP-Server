@@ -4,6 +4,154 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Server Internals — Architecture Refactor
+
+- **`python/kicad_interface.py` reduced from 6 668 → 2 797 lines (−58 %)** by
+  splitting per-tool handlers into a `python/handlers/` package. 81 of 81
+  inline `_handle_*` methods (~3 600 lines of mechanical logic) now live in
+  14 per-domain modules: `ui.py`, `project.py`, `footprint.py`,
+  `symbol_creator.py`, `jlcpcb.py`, `datasheet.py`, `ipc.py`, `routing.py`,
+  `schematic_component.py`, `schematic_wire.py`, `schematic_query.py`,
+  `schematic_io.py`, `schematic_view.py`, `board.py`. The 80 trampoline
+  methods on `KiCADInterface` were replaced by a single `__getattr__`
+  dispatcher driven by a `_HANDLER_MAP` class attribute, so tests calling
+  `iface._handle_<command>(params)` keep working unchanged.
+
+- **MCP server identity now comes from `package.json`** at module load
+  instead of being hardcoded as `"1.0.0"`. Clients negotiating capabilities
+  now see the real release version (`2.2.3`).
+
+- **`express` dropped from dependencies** (it was imported but never used);
+  removing it cleared 6 transitive npm-audit advisories (`hono`, `qs`,
+  `ip-address`, `express-rate-limit`, `fast-uri`). `npm audit --high`
+  now reports 0 vulnerabilities.
+
+### Performance
+
+- **30 – 120 s startup latency on a real KiCAD install fixed.** Eager
+  `SymbolLibraryManager._warm_cache()` (which parsed all 200 + `.kicad_sym`
+  files on every startup) is now **opt-in via
+  `KICAD_MCP_EAGER_SYMBOL_CACHE=1`**. The default path is lazy — libraries
+  are parsed on first `list_symbols(nickname)` call, which is bounded by
+  what the user actually searches.
+
+- **Persistent on-disk symbol cache** at
+  `~/.kicad-mcp/cache/symbol_libraries.pickle`. `list_symbols()` validates
+  each cached entry against the live `.kicad_sym` mtime so libraries
+  edited by the KiCAD UI / PCM update silently re-parse; everything else
+  hits the disk cache in roughly 100 ms instead of re-parsing. An atexit
+  hook flushes the cache only when it was modified (PCB-only sessions
+  don't write anything).
+
+### Bug Fixes
+
+- **MCP-protocol-level gaps fixed.** End-to-end testing against a real
+  KiCAD 10 + a JSON-RPC client surfaced four tools the docs/registry
+  referenced but the TypeScript layer never registered:
+  `execute_tool` (router pass-through), `get_backend_info`, and the seven
+  `ipc_*` tools (`ipc_add_track`, `ipc_add_via`, `ipc_add_text`,
+  `ipc_list_components`, `ipc_get_tracks`, `ipc_get_vias`,
+  `ipc_save_board`). Tool count grew from 142 → **151 MCP tools**.
+
+- **`get_backend_state` now reports the correct project path under IPC.**
+  Previously `_current_board_path` only inspected the SWIG board, so an
+  IPC-only session returned `loadedBoard: false` even with a board open
+  in the UI. The fix stitches `document.project.path` +
+  `document.board_filename` rather than relying on the bare filename
+  resolved against the MCP server's cwd.
+
+- **Auto-detect IPC socket in sandboxed installs.** The Flathub Flatpak
+  build of KiCAD puts the IPC socket under
+  `~/.var/app/org.kicad.KiCad/cache/tmp/kicad/api.sock` (not the
+  documented `/tmp/kicad/api.sock`); macOS sandbox installs use
+  `~/Library/Caches/kicad/api.sock`. Both are now in the auto-detect
+  list, so most installs no longer need `KICAD_API_SOCKET` set manually.
+
+- **KiCAD 10 version detection.** `get_backend_info` returned `"unknown"`
+  when the connected KiCAD was newer than the installed kipy
+  (`FutureVersionError`). Now uses `KiCad.get_version().full_version`
+  (the modern kipy API) and falls back to the older `check_version()` /
+  `get_api_version()` path only when the new one isn't present. KiCAD
+  10.0.3 now reports correctly.
+
+- **Library tables in Flatpak / macOS sandbox installs.**
+  `fp-lib-table`, `sym-lib-table`, and the `KICAD10_FOOTPRINT_DIR` /
+  `KICAD10_SYMBOL_DIR` references now resolve correctly across the
+  native + sandbox layouts. Verified end-to-end on a KiCAD 10.0.3 Flathub
+  install: stock `Resistor_SMD:R_0603_1608Metric` placement works without
+  manually exporting any env vars.
+
+- **CI failure masking removed.** `.github/workflows/ci.yml` used to
+  trail every step with `|| echo "... not configured yet"`, so pytest
+  exit code 5 (no tests collected), eslint failures, mypy errors all
+  turned the run green. CI also ran `pytest python/` while real tests
+  live in `tests/` — discovery found 0 tests there. Both fixed; the
+  19 pre-existing pollution failures that this used to hide were
+  root-caused (unconditional `import pcbnew` instead of conditional)
+  and the suite is now 856 / 0 / 11 (passed / failed / skipped).
+
+- **Python `LOG_LEVEL` is now honored.** Previously hardcoded to
+  `DEBUG` regardless of env, flooding `~/.kicad-mcp/logs/` and (on the
+  no-write fallback) stderr — which the TS layer re-logs as ERROR. The
+  same `LOG_LEVEL` env var the TS server already respects now applies
+  to the Python subprocess too.
+
+- **`SWIGBoardAPI.get_size()` implemented.** Used to raise
+  `NotImplementedError` — now delegates to `BoardCommands.get_board_info`
+  the same way the rest of the SWIG wrapper methods do.
+
+### Tooling / DX
+
+- **`execute_tool` works.** Every router tool's response told you to
+  "use `execute_tool` to run any of these tools", but `execute_tool`
+  itself was never registered — calling it threw `MCP error -32602:
+Tool not found`. Registered.
+
+- **`scripts/swig_smoke_test.py`** added. Runs the full
+  `create_project` → board outline → mounting holes → place_component →
+  routing → save chain in-process against a real `pcbnew`, prints a
+  per-step status. Complements pytest (which uses a MagicMock `pcbnew`)
+  by catching regressions that only surface against the real C++
+  bindings — SWIG dehydration, library URI resolution, layer enum drift,
+  …
+
+- **`exec()` → `execFile()` for Python prerequisite checks** in
+  `src/server.ts`. Avoids shell-quoting edge cases on paths with spaces
+  or `$` while keeping the same error reporting.
+
+- **Repo-root scripts moved into `scripts/`.** `download_jlcpcb.py` and
+  `test-router.js` lived at the repo root; both are now under
+  `scripts/` next to the other one-off helpers.
+
+- **MAX_PARTS probe bumped 30 → 60** in
+  `scripts/download_jlcpcb.py`. JLCPCB's pre-built cache has grown past
+  30 split volumes since the old limit was set, so downloads were
+  silently truncated.
+
+- **`exception Exception` audit across `python/commands/`.** ~40 broad
+  `except Exception` clauses in `pin_locator.py`, `freerouting.py`,
+  `component.py`, `wire_manager.py`, `connection_schematic.py`,
+  `library*.py` were narrowed to specific exception types where the
+  catch was masking real bugs; the verbose
+  `import traceback; logger.error(traceback.format_exc())` pattern was
+  replaced with `logger.exception(...)` in API-boundary catches.
+
+### Docs / Repo Hygiene
+
+- **`CONTRIBUTING.md`** project-structure block + tool count brought
+  in line with reality (122 → **151 tools across 16 categories**;
+  removed dead references to `python/integrations/`, `tests/unit/`,
+  `tests/integration/`, missing `docs/REBUILD_PLAN.md`).
+- **`README.md`** broken link to missing `docs/WINDOWS_SETUP.md`
+  replaced with a pointer to `setup-windows.ps1` +
+  `docs/WINDOWS_TROUBLESHOOTING.md`.
+- **`tests/conftest.py`** mock `pcbnew.__file__` was advertising
+  `cpython-313`; tightened to `cpython-39` (the project's lowest
+  supported Python).
+- **Three `mil` unit enums** in `python/schemas/tool_schemas.py`
+  were missing — `mounting_hole.position`, plus two more — now
+  consistent with the rest of the schema.
+
 ### Bug Fixes
 
 - **`rotate_component` now treats `angle` as an absolute target rotation**,
@@ -65,7 +213,6 @@ All notable changes to the KiCAD MCP Server project are documented here.
   copper — this implementation explicitly walks all layers.
 
   Combines three placement strategies, freely composable:
-
   - `grid` — regular grid across the board interior.
   - `around_refs` — densify around named footprints (good for tucking
     extra ground under MCUs, switching regulators, or RF parts).
@@ -77,12 +224,12 @@ All notable changes to the KiCAD MCP Server project are documented here.
   `clearance`, `edgeMargin`), an `maxVias` cap for incremental work,
   auto-detection of the GND net (tries `GND` / `GROUND` / `VSS` /
   `/GND`), and a `dryRun` mode that returns the placements that
-  *would* be made without modifying the board — useful for previewing
+  _would_ be made without modifying the board — useful for previewing
   before committing.
 
   Returns `{ placed: [{x, y, unit}, ...], summary: {placed_count,
-  candidates_evaluated, skipped_by_zone_membership,
-  skipped_by_collision, ...} }`.
+candidates_evaluated, skipped_by_zone_membership,
+skipped_by_collision, ...} }`.
 
   Approach ported from
   [morningfire-pcb-automation](https://github.com/NiNjA-CodE/morningfire-pcb-automation)

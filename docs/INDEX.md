@@ -2,7 +2,7 @@
 
 KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 
-**Version:** 2.2.3 | **Tools:** 122 | **Last Updated:** 2026-03-21
+**Version:** 2.2.3 (Unreleased: see CHANGELOG) | **Tools:** 151 | **Last Updated:** 2026-05-27
 
 ---
 
@@ -21,7 +21,7 @@ KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 
 | Document                                                                | Description                                                 |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Tool Inventory](TOOL_INVENTORY.md)                                     | Complete list of all 122 tools with access types            |
+| [Tool Inventory](TOOL_INVENTORY.md)                                     | Complete list of all 151 tools with access types            |
 | [Schematic Tools Reference](SCHEMATIC_TOOLS_REFERENCE.md)               | 27 schematic tools -- components, wiring, analysis, export  |
 | [Routing Tools Reference](ROUTING_TOOLS_REFERENCE.md)                   | 13 routing tools -- traces, vias, differential pairs, zones |
 | [Footprint and Symbol Creator Guide](FOOTPRINT_SYMBOL_CREATOR_GUIDE.md) | 8 tools for creating custom footprints and symbols          |
