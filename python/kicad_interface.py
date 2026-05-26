@@ -1166,42 +1166,9 @@ class KiCADInterface:
         return _project.handle_create_project(self, params)
 
     def _handle_place_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Place a component on the PCB, with project-local fp-lib-table support.
-        If boardPath is given and differs from the currently loaded board, the
-        board is reloaded from boardPath before placing — prevents silent failures
-        when Claude provides a boardPath that was not yet loaded.
-        """
-        from pathlib import Path
-
-        board_path = params.get("boardPath")
-        if board_path:
-            board_path_norm = str(Path(board_path).resolve())
-            current_board_file = str(Path(self.board.GetFileName()).resolve()) if self.board else ""
-            if board_path_norm != current_board_file:
-                logger.info(f"boardPath differs from current board — reloading: {board_path}")
-                reloaded = self._safe_load_board(board_path)
-                if reloaded is None:
-                    return {
-                        "success": False,
-                        "message": f"Could not load board from boardPath: {board_path}",
-                        "errorDetails": (
-                            "pcbnew.LoadBoard failed or returned a dehydrated "
-                            "SWIG proxy that could not be recovered"
-                        ),
-                    }
-                self.board = reloaded
-                self._update_command_handlers()
-                logger.info("Board reloaded from boardPath")
-
-            project_path = Path(board_path).parent
-            if project_path != getattr(self, "_current_project_path", None):
-                self._current_project_path = project_path
-                local_lib = FootprintLibraryManager(project_path=project_path)
-                self.component_commands = ComponentCommands(self.board, local_lib)
-                logger.info(f"Reloaded FootprintLibraryManager with project_path={project_path}")
-
-        return self.component_commands.place_component(params)
-
+        from handlers import board as _b
+    
+        return _b.handle_place_component(self, params)
     def _handle_add_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
     
@@ -1550,94 +1517,9 @@ class KiCADInterface:
     
         return _sq.handle_get_schematic_pin_locations(self, params)
     def _handle_get_schematic_view(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get a rasterised image of the schematic (SVG export → optional PNG conversion)"""
-        logger.info("Getting schematic view")
-        import base64
-        import subprocess
-        import tempfile
-
-        try:
-            schematic_path = params.get("schematicPath")
-            if not schematic_path or not os.path.exists(schematic_path):
-                return {
-                    "success": False,
-                    "message": f"Schematic not found: {schematic_path}",
-                }
-
-            fmt = params.get("format", "png")
-            width = params.get("width", 1200)
-            height = params.get("height", 900)
-
-            # Step 1: Export schematic to SVG via kicad-cli
-            with tempfile.TemporaryDirectory() as tmpdir:
-                svg_path = os.path.join(tmpdir, "schematic.svg")
-                cmd = [
-                    "kicad-cli",
-                    "sch",
-                    "export",
-                    "svg",
-                    "--output",
-                    tmpdir,
-                    "--no-background-color",
-                    schematic_path,
-                ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-                if result.returncode != 0:
-                    return {
-                        "success": False,
-                        "message": f"kicad-cli SVG export failed: {result.stderr}",
-                    }
-
-                # kicad-cli may name the file after the schematic, find it
-                import glob
-
-                svg_files = glob.glob(os.path.join(tmpdir, "*.svg"))
-                if not svg_files:
-                    return {
-                        "success": False,
-                        "message": "No SVG file produced by kicad-cli",
-                    }
-                svg_path = svg_files[0]
-
-                if fmt == "svg":
-                    with open(svg_path, "r", encoding="utf-8") as f:
-                        svg_data = f.read()
-                    return {"success": True, "imageData": svg_data, "format": "svg"}
-
-                # Step 2: Convert SVG to PNG using cairosvg
-                try:
-                    from cairosvg import svg2png
-                except ImportError:
-                    # Fallback: return SVG data with a note
-                    with open(svg_path, "r", encoding="utf-8") as f:
-                        svg_data = f.read()
-                    return {
-                        "success": True,
-                        "imageData": svg_data,
-                        "format": "svg",
-                        "message": "cairosvg not installed — returning SVG instead of PNG. Install with: pip install cairosvg",
-                    }
-
-                png_data = svg2png(url=svg_path, output_width=width, output_height=height)
-
-                return {
-                    "success": True,
-                    "imageData": base64.b64encode(png_data).decode("utf-8"),
-                    "format": "png",
-                    "width": width,
-                    "height": height,
-                }
-
-        except FileNotFoundError:
-            return {"success": False, "message": "kicad-cli not found in PATH"}
-        except Exception as e:
-            logger.error(f"Error getting schematic view: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_get_schematic_view(self, params)
     def _handle_list_schematic_components(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
     
@@ -2061,335 +1943,37 @@ class KiCADInterface:
     # ===================================================================
 
     def _handle_get_schematic_view_region(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Export a cropped region of the schematic as an image"""
-        logger.info("Exporting schematic view region")
-        import base64
-        import os
-        import subprocess
-        import tempfile
-
-        try:
-            schematic_path = params.get("schematicPath")
-            if not schematic_path or not os.path.exists(schematic_path):
-                return {"success": False, "message": "Schematic file not found"}
-
-            x1 = float(params.get("x1", 0))
-            y1 = float(params.get("y1", 0))
-            x2 = float(params.get("x2", 297))
-            y2 = float(params.get("y2", 210))
-            x1, x2 = min(x1, x2), max(x1, x2)
-            y1, y2 = min(y1, y2), max(y1, y2)
-            out_format = params.get("format", "png")
-            width = int(params.get("width", 800))
-            height = int(params.get("height", 600))
-
-            kicad_cli = self.design_rule_commands._find_kicad_cli()
-            if not kicad_cli:
-                return {"success": False, "message": "kicad-cli not found"}
-
-            tmp_dir = tempfile.mkdtemp()
-            svg_output = None
-
-            try:
-                cmd = [
-                    kicad_cli,
-                    "sch",
-                    "export",
-                    "svg",
-                    "--output",
-                    tmp_dir,
-                    schematic_path,
-                ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-                if result.returncode != 0:
-                    return {
-                        "success": False,
-                        "message": f"SVG export failed: {result.stderr}",
-                    }
-
-                # kicad-cli names the file after the schematic
-                svg_files = [f for f in os.listdir(tmp_dir) if f.endswith(".svg")]
-                if not svg_files:
-                    return {
-                        "success": False,
-                        "message": "kicad-cli produced no SVG output",
-                    }
-                svg_output = os.path.join(tmp_dir, svg_files[0])
-
-                import xml.etree.ElementTree as ET
-
-                tree = ET.parse(svg_output)
-                root = tree.getroot()
-
-                # KiCad schematic SVGs use mm as viewBox units directly
-                vb = root.get("viewBox", "")
-                if vb:
-                    parts = vb.split()
-                    if len(parts) == 4:
-                        orig_vb_x = float(parts[0])
-                        orig_vb_y = float(parts[1])
-
-                        new_x = orig_vb_x + x1
-                        new_y = orig_vb_y + y1
-                        new_w = x2 - x1
-                        new_h = y2 - y1
-
-                        root.set("viewBox", f"{new_x} {new_y} {new_w} {new_h}")
-                        root.set("width", str(width))
-                        root.set("height", str(height))
-
-                # Write modified SVG
-                cropped_svg_path = os.path.join(tmp_dir, "cropped.svg")
-                tree.write(cropped_svg_path, xml_declaration=True, encoding="utf-8")
-
-                if out_format == "svg":
-                    with open(cropped_svg_path, "r", encoding="utf-8") as f:
-                        svg_data = f.read()
-                    return {"success": True, "imageData": svg_data, "format": "svg"}
-                else:
-                    try:
-                        from cairosvg import svg2png
-                    except ImportError:
-                        return {
-                            "success": False,
-                            "message": "PNG export requires the 'cairosvg' package. Install it with: pip install cairosvg",
-                        }
-                    png_data = svg2png(
-                        url=cropped_svg_path, output_width=width, output_height=height
-                    )
-                    return {
-                        "success": True,
-                        "imageData": base64.b64encode(png_data).decode("utf-8"),
-                        "format": "png",
-                    }
-            finally:
-                import shutil
-
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        except Exception as e:
-            logger.error(f"Error in get_schematic_view_region: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_get_schematic_view_region(self, params)
     def _handle_find_overlapping_elements(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Detect spatially overlapping symbols, wires, and labels"""
-        logger.info("Finding overlapping elements in schematic")
-        try:
-            from pathlib import Path
-
-            from commands.schematic_analysis import find_overlapping_elements
-
-            schematic_path = params.get("schematicPath")
-            if not schematic_path:
-                return {"success": False, "message": "schematicPath is required"}
-
-            tolerance = float(params.get("tolerance", 0.5))
-            result = find_overlapping_elements(Path(schematic_path), tolerance)
-            return {
-                "success": True,
-                **result,
-                "message": f"Found {result['totalOverlaps']} overlap(s)",
-            }
-        except Exception as e:
-            logger.error(f"Error finding overlapping elements: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_find_overlapping_elements(self, params)
     def _handle_get_elements_in_region(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List all wires, labels, and symbols within a rectangular region"""
-        logger.info("Getting elements in schematic region")
-        try:
-            from pathlib import Path
-
-            from commands.schematic_analysis import get_elements_in_region
-
-            schematic_path = params.get("schematicPath")
-            if not schematic_path:
-                return {"success": False, "message": "schematicPath is required"}
-
-            x1 = float(params.get("x1", 0))
-            y1 = float(params.get("y1", 0))
-            x2 = float(params.get("x2", 0))
-            y2 = float(params.get("y2", 0))
-
-            result = get_elements_in_region(Path(schematic_path), x1, y1, x2, y2)
-            return {
-                "success": True,
-                **result,
-                "message": f"Found {result['counts']['symbols']} symbols, {result['counts']['wires']} wires, {result['counts']['labels']} labels in region",
-            }
-        except Exception as e:
-            logger.error(f"Error getting elements in region: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_get_elements_in_region(self, params)
     def _handle_find_wires_crossing_symbols(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Find wires that cross over component symbol bodies"""
-        logger.info("Finding wires crossing symbols in schematic")
-        try:
-            from pathlib import Path
-
-            from commands.schematic_analysis import find_wires_crossing_symbols
-
-            schematic_path = params.get("schematicPath")
-            if not schematic_path:
-                return {"success": False, "message": "schematicPath is required"}
-
-            result = find_wires_crossing_symbols(Path(schematic_path))
-            return {
-                "success": True,
-                "collisions": result,
-                "count": len(result),
-                "message": f"Found {len(result)} wire(s) crossing symbols",
-            }
-        except Exception as e:
-            logger.error(f"Error checking wire collisions: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_find_wires_crossing_symbols(self, params)
     def _handle_find_orphaned_wires(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Find wire segments with at least one dangling (unconnected) endpoint"""
-        logger.info("Finding orphaned wires in schematic")
-        try:
-            from pathlib import Path
-
-            from commands.schematic_analysis import find_orphaned_wires
-
-            schematic_path = params.get("schematicPath")
-            if not schematic_path:
-                return {"success": False, "message": "schematicPath is required"}
-
-            result = find_orphaned_wires(Path(schematic_path))
-            return {
-                "success": True,
-                **result,
-                "message": f"Found {result['count']} orphaned wire(s)",
-            }
-        except Exception as e:
-            logger.error(f"Error finding orphaned wires: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_find_orphaned_wires(self, params)
     def _handle_list_floating_labels(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List net labels that are not connected to any component pin"""
-        logger.info("Listing floating net labels in schematic")
-        try:
-            from commands.wire_connectivity import list_floating_labels
-
-            schematic_path = params.get("schematicPath")
-            if not schematic_path:
-                return {"success": False, "message": "schematicPath is required"}
-
-            schematic = SchematicManager.load_schematic(schematic_path)
-            if not schematic:
-                return {"success": False, "message": "Failed to load schematic"}
-
-            labels = list_floating_labels(schematic, schematic_path)
-            return {
-                "success": True,
-                "floating_labels": labels,
-                "count": len(labels),
-                "message": f"Found {len(labels)} floating label(s)",
-            }
-        except Exception as e:
-            logger.error(f"Error listing floating labels: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_list_floating_labels(self, params)
     def _handle_snap_to_grid(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Snap schematic element coordinates to the nearest grid point"""
-        logger.info("Snapping schematic elements to grid")
-        try:
-            from pathlib import Path
-
-            from commands.schematic_snap import snap_to_grid
-
-            schematic_path = params.get("schematicPath")
-            if not schematic_path:
-                return {"success": False, "message": "schematicPath is required"}
-
-            grid_size = float(params.get("gridSize", 1.27))
-            elements = params.get("elements")  # None → defaults inside snap_to_grid
-
-            result = snap_to_grid(Path(schematic_path), grid_size=grid_size, elements=elements)
-            total = result["snapped"] + result["already_on_grid"]
-            return {
-                "success": True,
-                **result,
-                "message": (
-                    f"Snapped {result['snapped']} element(s) to {grid_size} mm grid "
-                    f"({result['already_on_grid']} of {total} were already on grid)"
-                ),
-            }
-        except Exception as e:
-            logger.error(f"Error snapping to grid: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import schematic_view as _sv
+    
+        return _sv.handle_snap_to_grid(self, params)
     def _handle_import_svg_logo(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Import an SVG file as PCB graphic polygons on the silkscreen"""
-        logger.info("Importing SVG logo into PCB")
-        try:
-            from commands.svg_import import import_svg_to_pcb
-
-            pcb_path = params.get("pcbPath")
-            svg_path = params.get("svgPath")
-            x = float(params.get("x", 0))
-            y = float(params.get("y", 0))
-            width = float(params.get("width", 10))
-            layer = params.get("layer", "F.SilkS")
-            stroke_width = float(params.get("strokeWidth", 0))
-            filled = bool(params.get("filled", True))
-
-            if not pcb_path or not svg_path:
-                return {
-                    "success": False,
-                    "message": "Missing required parameters: pcbPath, svgPath",
-                }
-
-            result = import_svg_to_pcb(pcb_path, svg_path, x, y, width, layer, stroke_width, filled)
-
-            # import_svg_to_pcb writes gr_poly entries directly to the .kicad_pcb file,
-            # bypassing the pcbnew in-memory board object.  Any subsequent board.Save()
-            # call would overwrite the file with the stale in-memory state, erasing the
-            # logo.  Reload the board from disk so pcbnew's memory matches the file.
-            if result.get("success") and self.board:
-                reloaded = self._safe_load_board(pcb_path)
-                if reloaded is not None:
-                    self.board = reloaded
-                    self._update_command_handlers()
-                    logger.info("Reloaded board into pcbnew after SVG logo import")
-                else:
-                    logger.warning(
-                        "Board reload after SVG import failed (non-fatal); "
-                        "next mutation may operate on stale in-memory state"
-                    )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error importing SVG logo: {str(e)}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return {"success": False, "message": str(e)}
-
+        from handlers import board as _b
+    
+        return _b.handle_import_svg_logo(self, params)
     def _handle_snapshot_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import project as _project
 
