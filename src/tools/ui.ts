@@ -7,38 +7,42 @@ import { z } from "zod";
 import { logger } from "../logger.js";
 
 export function registerUITools(server: McpServer, callKicadScript: Function) {
+  // Helper that wraps callKicadScript with the standard MCP text-content
+  // response shape.  Cuts ~10 lines of boilerplate per tool below.
+  const passthrough =
+    (command: string) =>
+    async (args: Record<string, unknown> = {}) => {
+      const result = await callKicadScript(command, args);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    };
+
   // Get MCP/KiCAD backend and loaded file state
   server.tool(
     "get_backend_state",
     "Return the active backend, realtime status, loaded project/board paths, and dirty state.",
     {},
-    async () => {
-      logger.info("Getting KiCAD backend state");
-      const result = await callKicadScript("get_backend_state", {});
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    },
+    passthrough("get_backend_state"),
+  );
+
+  // Backend info (version, capabilities) — complements get_backend_state which
+  // focuses on the loaded file.  Was a Python handler with no MCP wrapper
+  // until the protocol-level smoke test caught the gap.
+  server.tool(
+    "get_backend_info",
+    "Return the active backend identifier, version, and a human-readable mode description.",
+    {},
+    passthrough("get_backend_info"),
   );
 
   // Check if KiCAD UI is running
-  server.tool("check_kicad_ui", "Check if KiCAD UI is currently running", {}, async () => {
-    logger.info("Checking KiCAD UI status");
-    const result = await callKicadScript("check_kicad_ui", {});
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
-  });
+  server.tool(
+    "check_kicad_ui",
+    "Check if KiCAD UI is currently running",
+    {},
+    passthrough("check_kicad_ui"),
+  );
 
   // Launch KiCAD UI
   server.tool(
@@ -67,5 +71,81 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
     },
   );
 
-  logger.info("UI management tools registered");
+  // -----------------------------------------------------------------
+  // IPC-realtime command tools.  These map 1:1 to the `_ipc_*` Python
+  // handlers — they run only when KiCAD is open with the IPC API server
+  // enabled, and the change is reflected in the UI immediately.  Use the
+  // regular tools (route_trace, add_via, …) for the universal path; reach
+  // for these when you specifically need to inspect IPC state or force
+  // the IPC code path for debugging.
+  // -----------------------------------------------------------------
+  server.tool(
+    "ipc_list_components",
+    "List all footprints on the board via the IPC backend (real-time, no SWIG reload).",
+    {},
+    passthrough("ipc_list_components"),
+  );
+  server.tool(
+    "ipc_get_tracks",
+    "List all PCB tracks via the IPC backend (real-time).",
+    {},
+    passthrough("ipc_get_tracks"),
+  );
+  server.tool(
+    "ipc_get_vias",
+    "List all vias via the IPC backend (real-time).",
+    {},
+    passthrough("ipc_get_vias"),
+  );
+  server.tool(
+    "ipc_save_board",
+    "Save the open board via the IPC backend (real-time; equivalent to Ctrl+S in KiCAD UI).",
+    {},
+    passthrough("ipc_save_board"),
+  );
+  server.tool(
+    "ipc_add_track",
+    "Add a track via the IPC backend (real-time).  Most callers should use route_trace instead; this tool exposes the raw IPC path for debugging.",
+    {
+      startX: z.number().describe("Start X (mm)"),
+      startY: z.number().describe("Start Y (mm)"),
+      endX: z.number().describe("End X (mm)"),
+      endY: z.number().describe("End Y (mm)"),
+      width: z.number().optional().describe("Track width in mm (default 0.25)"),
+      layer: z.string().optional().describe("Layer name (default F.Cu)"),
+      net: z.string().optional().describe("Net name to bind the track to"),
+    },
+    passthrough("ipc_add_track"),
+  );
+  server.tool(
+    "ipc_add_via",
+    "Add a via via the IPC backend (real-time).  Most callers should use add_via instead.",
+    {
+      x: z.number().describe("X (mm)"),
+      y: z.number().describe("Y (mm)"),
+      diameter: z.number().optional().describe("Via outer diameter in mm (default 0.8)"),
+      drill: z.number().optional().describe("Drill diameter in mm (default 0.4)"),
+      net: z.string().optional().describe("Net name"),
+      type: z
+        .enum(["through", "blind", "micro"])
+        .optional()
+        .describe("Via type (default through)"),
+    },
+    passthrough("ipc_add_via"),
+  );
+  server.tool(
+    "ipc_add_text",
+    "Add a text annotation via the IPC backend (real-time).  Most callers should use add_text instead.",
+    {
+      text: z.string().describe("Text to add"),
+      x: z.number().describe("X (mm)"),
+      y: z.number().describe("Y (mm)"),
+      layer: z.string().optional().describe("Layer name (default F.SilkS)"),
+      size: z.number().optional().describe("Text size in mm (default 1.0)"),
+      rotation: z.number().optional().describe("Rotation in degrees (default 0)"),
+    },
+    passthrough("ipc_add_text"),
+  );
+
+  logger.info("UI + IPC management tools registered");
 }

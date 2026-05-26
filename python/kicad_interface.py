@@ -966,9 +966,17 @@ class KiCADInterface:
                 return os.path.abspath(path)
 
         # IPC path — only meaningful when use_ipc is True and a board API
-        # is connected.  IPCBoardAPI wraps a kipy Board; reach through to
-        # its `.document.board_filename` for the live filename.  Fall back
-        # gracefully if the attribute shape changes across kipy versions.
+        # is connected.  IPCBoardAPI wraps a kipy Board; we want the full
+        # absolute path, but kipy returns it in two parts:
+        #
+        #   document.board_filename   "mcp_smoke_test.kicad_pcb"     ← bare name
+        #   document.project.path     "/home/.../mcp-pcb-test"        ← directory
+        #
+        # Stitch them together.  Falling back to os.path.abspath(filename)
+        # would resolve against the MCP server's cwd, which is the kicad-mcp
+        # checkout, not the user's project directory — that bug surfaced
+        # during end-to-end MCP testing and was the reason get_backend_state
+        # reported a project under the kicad-mcp repo instead of ~/Desktop/...
         ipc_api = getattr(self, "ipc_board_api", None)
         if ipc_api is not None:
             try:
@@ -976,6 +984,10 @@ class KiCADInterface:
                 doc = getattr(board, "document", None)
                 filename = getattr(doc, "board_filename", None) if doc is not None else None
                 if filename:
+                    project = getattr(doc, "project", None) if doc is not None else None
+                    project_dir = getattr(project, "path", None) if project is not None else None
+                    if project_dir and not os.path.isabs(filename):
+                        return os.path.abspath(os.path.join(project_dir, filename))
                     return os.path.abspath(filename)
             except Exception:
                 pass

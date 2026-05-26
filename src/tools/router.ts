@@ -20,7 +20,7 @@ type CommandFunction = (command: string, params: Record<string, unknown>) => Pro
 /**
  * Register all router tools with the MCP server
  */
-export function registerRouterTools(server: McpServer, _callKicadScript: CommandFunction): void {
+export function registerRouterTools(server: McpServer, callKicadScript: CommandFunction): void {
   logger.info("Registering router tools");
 
   // ============================================================================
@@ -149,6 +149,33 @@ export function registerRouterTools(server: McpServer, _callKicadScript: Command
             text: JSON.stringify(result, null, 2),
           },
         ],
+      };
+    },
+  );
+
+  // ============================================================================
+  // execute_tool — referenced by every router response ("Use execute_tool …")
+  // but was never actually registered as an MCP tool until end-to-end MCP
+  // protocol testing caught the gap.  Routed tools are also registered as
+  // direct MCP tools, so they CAN be called by name; execute_tool is the
+  // canonical entry point that lets a client run any tool by name without
+  // first knowing whether it's direct or routed.
+  // ============================================================================
+  server.tool(
+    "execute_tool",
+    "Execute any KiCAD MCP tool by name with the given parameters. Equivalent to calling the tool directly; useful when discovering tools via list_tool_categories / search_tools.",
+    {
+      tool_name: z.string().describe("Tool name from list_tool_categories / search_tools"),
+      params: z
+        .record(z.string(), z.any())
+        .optional()
+        .describe("Tool parameters (default: empty object)"),
+    },
+    async ({ tool_name, params }) => {
+      logger.debug(`execute_tool: ${tool_name}`);
+      const result = await callKicadScript(tool_name, params ?? {});
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     },
   );
