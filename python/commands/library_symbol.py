@@ -193,22 +193,32 @@ class SymbolLibraryManager:
         logger.info(f"Loaded {len(self.libraries)} symbol libraries")
 
     def _get_global_sym_lib_table(self) -> Optional[Path]:
-        """Get path to global sym-lib-table file"""
-        # Try different possible locations (same as fp-lib-table but for symbols)
-        kicad_config_paths = [
-            Path.home() / ".config" / "kicad" / "10.0" / "sym-lib-table",
-            Path.home() / ".config" / "kicad" / "9.0" / "sym-lib-table",
-            Path.home() / ".config" / "kicad" / "8.0" / "sym-lib-table",
-            Path.home() / ".config" / "kicad" / "sym-lib-table",
-            # Windows paths
-            Path.home() / "AppData" / "Roaming" / "kicad" / "10.0" / "sym-lib-table",
-            Path.home() / "AppData" / "Roaming" / "kicad" / "9.0" / "sym-lib-table",
-            Path.home() / "AppData" / "Roaming" / "kicad" / "8.0" / "sym-lib-table",
-            # macOS paths
-            Path.home() / "Library" / "Preferences" / "kicad" / "10.0" / "sym-lib-table",
-            Path.home() / "Library" / "Preferences" / "kicad" / "9.0" / "sym-lib-table",
-            Path.home() / "Library" / "Preferences" / "kicad" / "8.0" / "sym-lib-table",
+        """Get path to global sym-lib-table file."""
+        # Match fp-lib-table's lookup so a Flatpak/sandbox install finds
+        # both tables.  See library.py:_get_global_fp_lib_table for the
+        # canonical comment about the .var/app sandbox path.
+        linux_bases = [
+            Path.home() / ".config" / "kicad",
+            Path.home() / ".var" / "app" / "org.kicad.KiCad" / "config" / "kicad",
         ]
+        windows_bases = [Path.home() / "AppData" / "Roaming" / "kicad"]
+        macos_bases = [
+            Path.home() / "Library" / "Preferences" / "kicad",
+            Path.home()
+            / "Library"
+            / "Containers"
+            / "org.kicad.KiCad"
+            / "Data"
+            / "Library"
+            / "Preferences"
+            / "kicad",
+        ]
+
+        kicad_config_paths: List[Path] = []
+        for base in linux_bases + windows_bases + macos_bases:
+            for version in ("10.0", "9.0", "8.0"):
+                kicad_config_paths.append(base / version / "sym-lib-table")
+            kicad_config_paths.append(base / "sym-lib-table")
 
         for path in kicad_config_paths:
             if path.exists():
@@ -309,20 +319,33 @@ class SymbolLibraryManager:
             return None
 
     def _find_kicad_symbol_dir(self) -> Optional[str]:
-        """Find KiCAD symbol directory"""
+        """Find KiCAD symbol directory."""
         possible_paths = [
             "/usr/share/kicad/symbols",
             "/usr/local/share/kicad/symbols",
+            "C:/Program Files/KiCad/10.0/share/kicad/symbols",
             "C:/Program Files/KiCad/9.0/share/kicad/symbols",
             "C:/Program Files/KiCad/8.0/share/kicad/symbols",
             "/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols",
         ]
 
-        # Check environment variable
-        if "KICAD9_SYMBOL_DIR" in os.environ:
-            possible_paths.insert(0, os.environ["KICAD9_SYMBOL_DIR"])
-        if "KICAD8_SYMBOL_DIR" in os.environ:
-            possible_paths.insert(0, os.environ["KICAD8_SYMBOL_DIR"])
+        # Environment variable takes precedence.
+        for var in ("KICAD10_SYMBOL_DIR", "KICAD9_SYMBOL_DIR", "KICAD8_SYMBOL_DIR"):
+            if var in os.environ:
+                possible_paths.insert(0, os.environ[var])
+
+        # Flatpak: symbols ship as a separate Library.Symbols runtime extension.
+        # See library.py:_find_kicad_footprint_dir for the same pattern.
+        try:
+            flatpak_glob = sorted(
+                Path("/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Symbols").glob(
+                    "*/stable/*/files/symbols"
+                )
+            )
+            if flatpak_glob:
+                possible_paths.append(str(flatpak_glob[-1]))
+        except OSError:
+            pass
 
         for path in possible_paths:
             if os.path.isdir(path):

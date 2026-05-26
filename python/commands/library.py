@@ -55,22 +55,32 @@ class LibraryManager:
         logger.info(f"Loaded {len(self.libraries)} footprint libraries")
 
     def _get_global_fp_lib_table(self) -> Optional[Path]:
-        """Get path to global fp-lib-table file"""
-        # Try different possible locations
-        kicad_config_paths = [
-            Path.home() / ".config" / "kicad" / "10.0" / "fp-lib-table",
-            Path.home() / ".config" / "kicad" / "9.0" / "fp-lib-table",
-            Path.home() / ".config" / "kicad" / "8.0" / "fp-lib-table",
-            Path.home() / ".config" / "kicad" / "fp-lib-table",
-            # Windows paths
-            Path.home() / "AppData" / "Roaming" / "kicad" / "10.0" / "fp-lib-table",
-            Path.home() / "AppData" / "Roaming" / "kicad" / "9.0" / "fp-lib-table",
-            Path.home() / "AppData" / "Roaming" / "kicad" / "8.0" / "fp-lib-table",
-            # macOS paths
-            Path.home() / "Library" / "Preferences" / "kicad" / "10.0" / "fp-lib-table",
-            Path.home() / "Library" / "Preferences" / "kicad" / "9.0" / "fp-lib-table",
-            Path.home() / "Library" / "Preferences" / "kicad" / "8.0" / "fp-lib-table",
+        """Get path to global fp-lib-table file."""
+        # Linux native + Flatpak (Flathub sandboxes the config under .var/app)
+        linux_bases = [
+            Path.home() / ".config" / "kicad",
+            Path.home() / ".var" / "app" / "org.kicad.KiCad" / "config" / "kicad",
         ]
+        # Windows
+        windows_bases = [Path.home() / "AppData" / "Roaming" / "kicad"]
+        # macOS native + sandboxed (App Store / Mac App)
+        macos_bases = [
+            Path.home() / "Library" / "Preferences" / "kicad",
+            Path.home()
+            / "Library"
+            / "Containers"
+            / "org.kicad.KiCad"
+            / "Data"
+            / "Library"
+            / "Preferences"
+            / "kicad",
+        ]
+
+        kicad_config_paths: List[Path] = []
+        for base in linux_bases + windows_bases + macos_bases:
+            for version in ("10.0", "9.0", "8.0"):
+                kicad_config_paths.append(base / version / "fp-lib-table")
+            kicad_config_paths.append(base / "fp-lib-table")
 
         for path in kicad_config_paths:
             if path.exists():
@@ -172,21 +182,38 @@ class LibraryManager:
             return None
 
     def _find_kicad_footprint_dir(self) -> Optional[str]:
-        """Find KiCAD footprint directory"""
-        # Try common locations
+        """Find KiCAD footprint directory."""
         possible_paths = [
             "/usr/share/kicad/footprints",
             "/usr/local/share/kicad/footprints",
+            "C:/Program Files/KiCad/10.0/share/kicad/footprints",
             "C:/Program Files/KiCad/9.0/share/kicad/footprints",
             "C:/Program Files/KiCad/8.0/share/kicad/footprints",
             "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints",
         ]
 
-        # Also check environment variable
-        if "KICAD9_FOOTPRINT_DIR" in os.environ:
-            possible_paths.insert(0, os.environ["KICAD9_FOOTPRINT_DIR"])
-        if "KICAD8_FOOTPRINT_DIR" in os.environ:
-            possible_paths.insert(0, os.environ["KICAD8_FOOTPRINT_DIR"])
+        # Environment variable takes precedence (most reliable on non-standard installs).
+        for var in (
+            "KICAD10_FOOTPRINT_DIR",
+            "KICAD9_FOOTPRINT_DIR",
+            "KICAD8_FOOTPRINT_DIR",
+        ):
+            if var in os.environ:
+                possible_paths.insert(0, os.environ[var])
+
+        # Flatpak: the Library.Footprints runtime extension ships under
+        # /var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints/.../files/footprints
+        # The hash in the path changes per release, so glob the newest.
+        try:
+            flatpak_glob = sorted(
+                Path("/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints").glob(
+                    "*/stable/*/files/footprints"
+                )
+            )
+            if flatpak_glob:
+                possible_paths.append(str(flatpak_glob[-1]))
+        except OSError:
+            pass
 
         for path in possible_paths:
             if os.path.isdir(path):
