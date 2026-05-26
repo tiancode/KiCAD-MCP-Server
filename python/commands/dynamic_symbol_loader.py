@@ -34,10 +34,16 @@ class DynamicSymbolLoader:
         self.project_path = project_path  # Project directory for project-specific libraries
 
     def find_kicad_symbol_libraries(self) -> List[Path]:
-        """Find all KiCad symbol library directories"""
+        """Find all KiCad symbol library directories.
+
+        Covers native installs, Flatpak (Linux), macOS app bundles + sandboxed
+        installs, Windows Program Files, and the per-user PCM 3rd-party
+        directory.  Env vars (`KICAD10_SYMBOL_DIR` etc.) override.
+        """
         possible_paths = [
             Path("/usr/share/kicad/symbols"),
             Path("/usr/local/share/kicad/symbols"),
+            Path("C:/Program Files/KiCad/10.0/share/kicad/symbols"),
             Path("C:/Program Files/KiCad/9.0/share/kicad/symbols"),
             Path("C:/Program Files/KiCad/8.0/share/kicad/symbols"),
             Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols"),
@@ -54,6 +60,19 @@ class DynamicSymbolLoader:
         ]:
             if env_var in os.environ:
                 possible_paths.insert(0, Path(os.environ[env_var]))
+
+        # Flatpak runtime extension: ships under
+        # /var/lib/flatpak/runtime/org.kicad.KiCad.Library.Symbols/.../files/symbols
+        # The hash in the path changes per release, so glob the newest.
+        try:
+            for sym_dir in sorted(
+                Path("/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Symbols").glob(
+                    "*/stable/*/files/symbols"
+                )
+            ):
+                possible_paths.append(sym_dir)
+        except OSError:
+            pass
 
         return [p for p in possible_paths if p.exists() and p.is_dir()]
 
@@ -98,15 +117,34 @@ class DynamicSymbolLoader:
         return None
 
     def _global_sym_lib_table_paths(self) -> list:
-        """Candidate paths for the user-global sym-lib-table, newest version first."""
+        """Candidate paths for the user-global sym-lib-table, newest version first.
+
+        Mirrors `library_symbol._get_global_sym_lib_table` so Flatpak /
+        macOS-sandboxed installs are recognised here too.
+        """
         home = Path.home()
         versions = ["10.0", "9.0", "8.0"]
         bases = []
         if os.name == "nt":
             bases.append(home / "AppData" / "Roaming" / "kicad")
         else:
+            # Native Linux
             bases.append(home / ".config" / "kicad")
-            bases.append(home / "Library" / "Preferences" / "kicad")  # macOS
+            # Linux Flatpak (Flathub sandboxes the config under .var/app)
+            bases.append(home / ".var" / "app" / "org.kicad.KiCad" / "config" / "kicad")
+            # macOS native
+            bases.append(home / "Library" / "Preferences" / "kicad")
+            # macOS sandboxed (App Store / Mac App)
+            bases.append(
+                home
+                / "Library"
+                / "Containers"
+                / "org.kicad.KiCad"
+                / "Data"
+                / "Library"
+                / "Preferences"
+                / "kicad"
+            )
         candidates = []
         for base in bases:
             for v in versions:
