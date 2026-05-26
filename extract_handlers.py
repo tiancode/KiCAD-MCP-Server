@@ -35,7 +35,13 @@ See python/handlers/__init__.py for the calling convention.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
+
+import sexpdata
+
+from commands.schematic import SchematicManager
+from commands.wire_manager import WireManager
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
