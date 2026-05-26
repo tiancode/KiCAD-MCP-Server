@@ -78,8 +78,27 @@ class IPCBackend(KiCADBackend):
                     # XDG runtime directory (requires getuid, Unix only)
                     if hasattr(os, "getuid"):
                         socket_paths_to_try.append(f"ipc:///run/user/{os.getuid()}/kicad/api.sock")
+                    # Flatpak sandbox cache dir — KiCAD installed via Flathub
+                    # puts the socket under ~/.var/app/org.kicad.KiCad/cache/...
+                    # because the sandbox can't write to /tmp/kicad.  Same trick
+                    # works for other XDG_CACHE_HOME values too.
+                    flatpak_cache = os.path.expanduser(
+                        "~/.var/app/org.kicad.KiCad/cache/tmp/kicad/api.sock"
+                    )
+                    socket_paths_to_try.append(f"ipc://{flatpak_cache}")
+                    # Generic XDG_CACHE_HOME location (Linux convention)
+                    xdg_cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+                    socket_paths_to_try.append(f"ipc://{xdg_cache}/kicad/api.sock")
 
-                # Auto-detect for all platforms (Windows uses named pipes, Unix uses sockets)
+                # macOS: KiCAD.app cache directory (sandboxed Mac installs put
+                # the socket here, similar to Flatpak on Linux).
+                if platform.system() == "Darwin":
+                    socket_paths_to_try.append(
+                        f"ipc://{os.path.expanduser('~/Library/Caches/kicad/api.sock')}"
+                    )
+
+                # Final fall-through: ask kipy to auto-detect (uses
+                # KICAD_API_SOCKET env var, or its own default discovery).
                 socket_paths_to_try.append(None)
 
             last_error = None
@@ -124,13 +143,39 @@ class IPCBackend(KiCADBackend):
             raise ConnectionError(f"IPC connection failed: {e}") from e
 
     def _get_kicad_version(self) -> str:
-        """Get KiCAD version string."""
+        """Get KiCAD version string.
+
+        Tries multiple call patterns because the kipy public API has
+        changed across releases:
+
+          - kipy ≥ 10.x   : ``KiCad.get_version() -> KicadVersion`` with
+                            ``.full_version`` attribute (e.g. "10.0.3").
+          - kipy 9.x      : ``check_version()`` + ``get_api_version()``.
+
+        ``check_version()`` raises ``FutureVersionError`` when the
+        connected KiCAD is newer than the kipy library — that's expected
+        (it just means kipy hasn't released a matching version yet), not
+        an error condition we should surface as "unknown".  We still
+        prefer ``get_version()`` so the user sees the *real* KiCAD
+        version they're talking to.
+        """
+        # Preferred: modern get_version() returns a structured object.
+        try:
+            version_obj = self._kicad.get_version()
+            full = getattr(version_obj, "full_version", None)
+            if full:
+                return str(full)
+        except Exception as e:
+            logger.debug(f"kipy get_version() unavailable: {e}")
+
+        # Older API surface.
         try:
             if self._kicad.check_version():
                 return self._kicad.get_api_version()
-            return "9.0+ (version mismatch)"
-        except Exception:
-            return "unknown"
+        except Exception as e:
+            logger.debug(f"kipy check_version()/get_api_version() failed: {e}")
+
+        return "unknown"
 
     def disconnect(self) -> None:
         """Disconnect from KiCAD."""
