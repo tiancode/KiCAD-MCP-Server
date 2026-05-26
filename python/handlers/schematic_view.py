@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 def handle_snap_to_grid(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Snap schematic element coordinates to the nearest grid point"""
     logger.info("Snapping schematic elements to grid")
@@ -114,7 +113,9 @@ def handle_find_orphaned_wires(iface: "KiCADInterface", params: Dict[str, Any]) 
         return {"success": False, "message": str(e)}
 
 
-def handle_find_wires_crossing_symbols(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_find_wires_crossing_symbols(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Find wires that cross over component symbol bodies"""
     logger.info("Finding wires crossing symbols in schematic")
     try:
@@ -141,7 +142,9 @@ def handle_find_wires_crossing_symbols(iface: "KiCADInterface", params: Dict[str
         return {"success": False, "message": str(e)}
 
 
-def handle_get_elements_in_region(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_get_elements_in_region(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """List all wires, labels, and symbols within a rectangular region"""
     logger.info("Getting elements in schematic region")
     try:
@@ -172,7 +175,9 @@ def handle_get_elements_in_region(iface: "KiCADInterface", params: Dict[str, Any
         return {"success": False, "message": str(e)}
 
 
-def handle_find_overlapping_elements(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_find_overlapping_elements(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Detect spatially overlapping symbols, wires, and labels"""
     logger.info("Finding overlapping elements in schematic")
     try:
@@ -199,7 +204,9 @@ def handle_find_overlapping_elements(iface: "KiCADInterface", params: Dict[str, 
         return {"success": False, "message": str(e)}
 
 
-def handle_get_schematic_view_region(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_get_schematic_view_region(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Export a cropped region of the schematic as an image"""
     logger.info("Exporting schematic view region")
     import base64
@@ -294,9 +301,7 @@ def handle_get_schematic_view_region(iface: "KiCADInterface", params: Dict[str, 
                         "success": False,
                         "message": "PNG export requires the 'cairosvg' package. Install it with: pip install cairosvg",
                     }
-                png_data = svg2png(
-                    url=cropped_svg_path, output_width=width, output_height=height
-                )
+                png_data = svg2png(url=cropped_svg_path, output_width=width, output_height=height)
                 return {
                     "success": True,
                     "imageData": base64.b64encode(png_data).decode("utf-8"),
@@ -403,4 +408,3 @@ def handle_get_schematic_view(iface: "KiCADInterface", params: Dict[str, Any]) -
 
         logger.error(traceback.format_exc())
         return {"success": False, "message": str(e)}
-

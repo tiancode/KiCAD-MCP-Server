@@ -95,9 +95,7 @@ def handle_ipc_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
         return {"success": False, "message": str(e)}
 
 
-def handle_ipc_list_components(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_ipc_list_components(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """List components using IPC backend."""
     if not iface.use_ipc or not iface.ipc_board_api:
         return _ipc_unavailable()

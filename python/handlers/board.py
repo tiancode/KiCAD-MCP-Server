@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 def handle_import_svg_logo(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Import an SVG file as PCB graphic polygons on the silkscreen"""
     logger.info("Importing SVG logo into PCB")
@@ -111,4 +110,3 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             logger.info(f"Reloaded FootprintLibraryManager with project_path={project_path}")
 
     return iface.component_commands.place_component(params)
-

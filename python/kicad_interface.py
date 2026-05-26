@@ -1125,12 +1125,14 @@ class KiCADInterface:
     # Schematic command handlers
     def _handle_create_schematic(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_create_schematic(self, params)
+
     def _handle_load_schematic(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_load_schematic(self, params)
+
     def _project_path_from_filename(self, filename: Optional[str]) -> Optional[Path]:
         """Resolve a project directory from a filename param.
 
@@ -1170,16 +1172,19 @@ class KiCADInterface:
 
     def _handle_place_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import board as _b
-    
+
         return _b.handle_place_component(self, params)
+
     def _handle_add_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_add_schematic_component(self, params)
+
     def _handle_delete_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_delete_schematic_component(self, params)
+
     # Built-in property names that have dedicated parameters and cannot be removed
     # via the generic removeProperties path. They are also written by KiCad on every
     # save, so deleting them produces an invalid schematic.
@@ -1381,36 +1386,44 @@ class KiCADInterface:
 
     def _handle_edit_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_edit_schematic_component(self, params)
+
     def _handle_set_schematic_component_property(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_set_schematic_component_property(self, params)
+
     def _handle_remove_schematic_component_property(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_remove_schematic_component_property(self, params)
+
     def _handle_get_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_get_schematic_component(self, params)
+
     def _handle_add_schematic_wire(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_add_schematic_wire(self, params)
+
     def _handle_list_schematic_libraries(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_list_schematic_libraries(self, params)
+
     def _handle_find_unconnected_pins(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_find_unconnected_pins(self, params)
+
     def _handle_check_wire_collisions(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_check_wire_collisions(self, params)
+
     # Footprint + symbol-creator handlers live in handlers/footprint.py and
     # handlers/symbol_creator.py.
 
@@ -1456,24 +1469,29 @@ class KiCADInterface:
 
     def _handle_export_schematic_pdf(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_export_schematic_pdf(self, params)
+
     def _handle_add_schematic_net_label(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_add_schematic_net_label(self, params)
+
     def _handle_add_no_connect(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_add_no_connect(self, params)
+
     def _handle_connect_to_net(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_connect_to_net(self, params)
+
     def _handle_connect_passthrough(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_connect_passthrough(self, params)
+
     def _assign_net_to_pad(self, component_ref: str, pin_name: str, net_name: str) -> bool:
         """Assign a net to a specific pad on the PCB board.
 
@@ -1517,88 +1535,109 @@ class KiCADInterface:
 
     def _handle_get_schematic_pin_locations(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_get_schematic_pin_locations(self, params)
+
     def _handle_get_schematic_view(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_get_schematic_view(self, params)
+
     def _handle_list_schematic_components(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_list_schematic_components(self, params)
+
     def _handle_list_schematic_nets(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_list_schematic_nets(self, params)
+
     def _handle_list_schematic_wires(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_list_schematic_wires(self, params)
+
     def _handle_list_schematic_labels(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_list_schematic_labels(self, params)
+
     def _handle_move_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_move_schematic_component(self, params)
+
     def _handle_rotate_schematic_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_rotate_schematic_component(self, params)
+
     def _handle_annotate_schematic(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_component as _sc
-    
+
         return _sc.handle_annotate_schematic(self, params)
+
     def _handle_delete_schematic_wire(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_delete_schematic_wire(self, params)
+
     def _handle_delete_schematic_net_label(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_delete_schematic_net_label(self, params)
+
     def _handle_move_schematic_net_label(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_move_schematic_net_label(self, params)
+
     def _handle_export_schematic_svg(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_export_schematic_svg(self, params)
+
     def _handle_get_net_connections(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_get_net_connections(self, params)
+
     def _handle_get_wire_connections(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_get_wire_connections(self, params)
+
     def _handle_get_net_at_point(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_get_net_at_point(self, params)
+
     def _handle_list_schematic_texts(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_list_schematic_texts(self, params)
+
     def _handle_add_schematic_text(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_query as _sq
-    
+
         return _sq.handle_add_schematic_text(self, params)
+
     def _handle_add_schematic_hierarchical_label(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_add_schematic_hierarchical_label(self, params)
+
     def _handle_add_sheet_pin(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_wire as _sw
-    
+
         return _sw.handle_add_sheet_pin(self, params)
+
     def _handle_run_erc(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_run_erc(self, params)
+
     # ------------------------------------------------------------------
     # kicad-cli helper shared by netlist handlers
     # ------------------------------------------------------------------
@@ -1640,12 +1679,14 @@ class KiCADInterface:
 
     def _handle_export_netlist(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_export_netlist(self, params)
+
     def _handle_generate_netlist(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_generate_netlist(self, params)
+
     def _build_hierarchical_pad_net_map(self, project_sch_path: str):
         """Walk all .kicad_sch files in the project and build a {(ref, pin_num): net_name} map.
 
@@ -1790,8 +1831,9 @@ class KiCADInterface:
 
     def _handle_sync_schematic_to_board(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_io as _si
-    
+
         return _si.handle_sync_schematic_to_board(self, params)
+
     def _extract_components_from_schematic(self, schematic_path: str) -> List[Dict[str, str]]:
         """Run kicad-cli netlist export and return the flat list of components.
 
@@ -1947,36 +1989,44 @@ class KiCADInterface:
 
     def _handle_get_schematic_view_region(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_get_schematic_view_region(self, params)
+
     def _handle_find_overlapping_elements(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_find_overlapping_elements(self, params)
+
     def _handle_get_elements_in_region(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_get_elements_in_region(self, params)
+
     def _handle_find_wires_crossing_symbols(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_find_wires_crossing_symbols(self, params)
+
     def _handle_find_orphaned_wires(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_find_orphaned_wires(self, params)
+
     def _handle_list_floating_labels(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_list_floating_labels(self, params)
+
     def _handle_snap_to_grid(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import schematic_view as _sv
-    
+
         return _sv.handle_snap_to_grid(self, params)
+
     def _handle_import_svg_logo(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import board as _b
-    
+
         return _b.handle_import_svg_logo(self, params)
+
     def _handle_snapshot_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from handlers import project as _project
 

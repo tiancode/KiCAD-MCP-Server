@@ -558,9 +558,7 @@ class SymbolLibraryCommands:
             if value:
                 start = Path(value).expanduser().parent
                 for ancestor in [start, *start.parents]:
-                    if (ancestor / "sym-lib-table").exists() or list(
-                        ancestor.glob("*.kicad_pro")
-                    ):
+                    if (ancestor / "sym-lib-table").exists() or list(ancestor.glob("*.kicad_pro")):
                         return ancestor
                 return start
 

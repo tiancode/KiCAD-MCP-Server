@@ -54,16 +54,14 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
 
         zone_count = iface.board.GetAreaCount() if hasattr(iface.board, "GetAreaCount") else 0
 
-        script = textwrap.dedent(
-            f"""
+        script = textwrap.dedent(f"""
             import pcbnew, sys
             board = pcbnew.LoadBoard({board_path!r})
             filler = pcbnew.ZONE_FILLER(board)
             filler.Fill(board.Zones())
             board.Save({board_path!r})
             print("ok")
-            """
-        )
+            """)
         try:
             result = subprocess.run(
                 [sys.executable, "-c", script],

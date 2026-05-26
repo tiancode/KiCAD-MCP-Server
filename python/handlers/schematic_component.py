@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate unannotated components in schematic (R? -> R1, R2, ...)"""
     logger.info("Annotating schematic")
@@ -100,7 +99,9 @@ def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -
         return {"success": False, "message": str(e)}
 
 
-def handle_rotate_schematic_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_rotate_schematic_component(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Rotate and/or mirror a schematic component, dragging connected wires."""
     logger.info("Rotating schematic component")
     try:
@@ -184,7 +185,9 @@ def handle_rotate_schematic_component(iface: "KiCADInterface", params: Dict[str,
         return {"success": False, "message": str(e)}
 
 
-def handle_move_schematic_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_move_schematic_component(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Move a schematic component to a new position, dragging connected wires."""
     logger.info("Moving schematic component")
     try:
@@ -270,7 +273,9 @@ def handle_move_schematic_component(iface: "KiCADInterface", params: Dict[str, A
         return {"success": False, "message": str(e)}
 
 
-def handle_get_schematic_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_get_schematic_component(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Return full component info: position and all field values with their (at x y angle) positions."""
     logger.info("Getting schematic component info")
     try:
@@ -404,7 +409,9 @@ def handle_get_schematic_component(iface: "KiCADInterface", params: Dict[str, An
         return {"success": False, "message": str(e)}
 
 
-def handle_remove_schematic_component_property(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_remove_schematic_component_property(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Remove a single custom property from a placed schematic symbol.
 
     Built-in fields (Reference, Value, Footprint, Datasheet) cannot be
@@ -414,16 +421,19 @@ def handle_remove_schematic_component_property(iface: "KiCADInterface", params: 
     name = params.get("name")
     if not isinstance(name, str) or not name:
         return {"success": False, "message": "name is required"}
-    return iface._handle_edit_schematic_component(
+    return handle_edit_schematic_component(
+        iface,
         {
             "schematicPath": params.get("schematicPath"),
             "reference": params.get("reference"),
             "removeProperties": [name],
-        }
+        },
     )
 
 
-def handle_set_schematic_component_property(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_set_schematic_component_property(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Add or update a single property on a placed schematic symbol.
 
     Convenience wrapper around `edit_schematic_component` for the very common
@@ -443,16 +453,19 @@ def handle_set_schematic_component_property(iface: "KiCADInterface", params: Dic
         if params.get(key) is not None:
             spec[key] = params[key]
 
-    return iface._handle_edit_schematic_component(
+    return handle_edit_schematic_component(
+        iface,
         {
             "schematicPath": params.get("schematicPath"),
             "reference": params.get("reference"),
             "properties": {name: spec},
-        }
+        },
     )
 
 
-def handle_edit_schematic_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_edit_schematic_component(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Update properties of a placed symbol in a schematic.
 
     Supports updating the standard fields (footprint / value / reference rename),
@@ -526,9 +539,7 @@ def handle_edit_schematic_component(iface: "KiCADInterface", params: Dict[str, A
 
         # Skip lib_symbols section
         lib_sym_pos = content.find("(lib_symbols")
-        lib_sym_end = (
-            iface._find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
-        )
+        lib_sym_end = iface._find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
 
         # Find placed symbol blocks that match the reference. KiCAD may
         # serialise the children of (symbol ...) in different orders —
@@ -714,7 +725,9 @@ def handle_edit_schematic_component(iface: "KiCADInterface", params: Dict[str, A
         return {"success": False, "message": str(e)}
 
 
-def handle_delete_schematic_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_delete_schematic_component(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Remove a placed symbol from a schematic using text-based manipulation (no skip writes)"""
     logger.info("Deleting schematic component")
     try:
@@ -829,7 +842,9 @@ def handle_delete_schematic_component(iface: "KiCADInterface", params: Dict[str,
         return {"success": False, "message": str(e)}
 
 
-def handle_add_schematic_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_add_schematic_component(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Add a component to a schematic using text-based injection (no sexpdata)"""
     logger.info("Adding component to schematic")
     try:
@@ -891,4 +906,3 @@ def handle_add_schematic_component(iface: "KiCADInterface", params: Dict[str, An
 
         logger.error(traceback.format_exc())
         return {"success": False, "message": str(e)}
-

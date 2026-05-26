@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 def handle_add_schematic_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add a free-form text annotation (SCH_TEXT) to a schematic."""
     logger.info("Adding text annotation to schematic")
@@ -315,9 +314,7 @@ def handle_list_schematic_labels(iface: "KiCADInterface", params: Dict[str, Any]
                     continue
                 if not ref.startswith("#PWR"):
                     continue
-                value = (
-                    symbol.property.Value.value if hasattr(symbol.property, "Value") else ref
-                )
+                value = symbol.property.Value.value if hasattr(symbol.property, "Value") else ref
                 pos = symbol.at.value if hasattr(symbol, "at") else [0, 0, 0]
                 labels.append(
                     {
@@ -483,7 +480,9 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
         return {"success": False, "message": str(e)}
 
 
-def handle_list_schematic_components(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_list_schematic_components(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """List all components in a schematic"""
     logger.info("Listing schematic components")
     try:
@@ -577,7 +576,9 @@ def handle_list_schematic_components(iface: "KiCADInterface", params: Dict[str, 
         return {"success": False, "message": str(e)}
 
 
-def handle_get_schematic_pin_locations(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_get_schematic_pin_locations(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Return exact pin endpoint coordinates for a schematic component"""
     logger.info("Getting schematic pin locations")
     try:
@@ -675,7 +676,9 @@ def handle_find_unconnected_pins(iface: "KiCADInterface", params: Dict[str, Any]
         return {"success": False, "message": str(e)}
 
 
-def handle_list_schematic_libraries(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_list_schematic_libraries(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """List available symbol libraries"""
     logger.info("Listing schematic libraries")
     try:
@@ -686,4 +689,3 @@ def handle_list_schematic_libraries(iface: "KiCADInterface", params: Dict[str, A
     except Exception as e:
         logger.error(f"Error listing schematic libraries: {str(e)}")
         return {"success": False, "message": str(e)}
-

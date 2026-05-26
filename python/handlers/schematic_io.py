@@ -25,8 +25,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
-def handle_sync_schematic_to_board(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_sync_schematic_to_board(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Sync schematic netlist to PCB board (equivalent to KiCAD F8 'Update PCB from Schematic').
     Reads net connections from the schematic and assigns them to the matching pads in the PCB.
     """
@@ -600,4 +601,3 @@ def handle_create_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     except Exception as e:
         logger.error(f"Error creating schematic: {str(e)}")
         return {"success": False, "message": str(e)}
-

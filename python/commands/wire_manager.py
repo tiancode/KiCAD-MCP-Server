@@ -203,18 +203,13 @@ class WireManager:
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-
             # API boundary on file IO + sexpdata.dumps / S-expression
-
 
             # walking.  logger.exception captures the traceback the
 
-
             # previous `import traceback; logger.error(traceback.format_exc())`
 
-
             # pattern reached for, but in one call.
-
 
             logger.exception(f"Error adding wire: {e}")
             return False
@@ -294,18 +289,13 @@ class WireManager:
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-
             # API boundary on file IO + sexpdata.dumps / S-expression
-
 
             # walking.  logger.exception captures the traceback the
 
-
             # previous `import traceback; logger.error(traceback.format_exc())`
 
-
             # pattern reached for, but in one call.
-
 
             logger.exception(f"Error adding polyline wire: {e}")
             return False
@@ -372,18 +362,13 @@ class WireManager:
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-
             # API boundary on file IO + sexpdata.dumps / S-expression
-
 
             # walking.  logger.exception captures the traceback the
 
-
             # previous `import traceback; logger.error(traceback.format_exc())`
 
-
             # pattern reached for, but in one call.
-
 
             logger.exception(f"Error adding label: {e}")
             return False
@@ -801,18 +786,13 @@ class WireManager:
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-
             # API boundary on file IO + sexpdata.dumps / S-expression
-
 
             # walking.  logger.exception captures the traceback the
 
-
             # previous `import traceback; logger.error(traceback.format_exc())`
 
-
             # pattern reached for, but in one call.
-
 
             logger.exception(f"Error adding no-connect: {e}")
             return False
@@ -896,18 +876,13 @@ class WireManager:
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-
             # API boundary on file IO + sexpdata.dumps / S-expression
-
 
             # walking.  logger.exception captures the traceback the
 
-
             # previous `import traceback; logger.error(traceback.format_exc())`
 
-
             # pattern reached for, but in one call.
-
 
             logger.exception(f"Error deleting wire: {e}")
             return False
@@ -975,18 +950,13 @@ class WireManager:
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-
             # API boundary on file IO + sexpdata.dumps / S-expression
-
 
             # walking.  logger.exception captures the traceback the
 
-
             # previous `import traceback; logger.error(traceback.format_exc())`
 
-
             # pattern reached for, but in one call.
-
 
             logger.exception(f"Error deleting label: {e}")
             return False

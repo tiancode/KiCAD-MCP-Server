@@ -176,7 +176,7 @@ def _build_freerouting_cmd(
 # SES across attempts.
 # ---------------------------------------------------------------------------
 
-_SES_NET_RE = re.compile(r'\(net\s+(\S+)\s*\n\s*\(wire')
+_SES_NET_RE = re.compile(r"\(net\s+(\S+)\s*\n\s*\(wire")
 
 
 def _score_ses(ses_text: str, target_nets: Iterable[str]) -> Dict[str, Any]:
@@ -195,8 +195,8 @@ def _score_ses(ses_text: str, target_nets: Iterable[str]) -> Dict[str, Any]:
     nets = set(_SES_NET_RE.findall(ses_text))
     # Strip wrapping quotes if Freerouting emits them.
     clean_nets = {n.strip('"') for n in nets}
-    segments = len(re.findall(r'\(wire', ses_text))
-    vias = len(re.findall(r'\(via ', ses_text))
+    segments = len(re.findall(r"\(wire", ses_text))
+    vias = len(re.findall(r"\(via ", ses_text))
 
     targets = set(target_nets) if target_nets else set()
     found = sorted(targets & clean_nets)
@@ -414,7 +414,11 @@ class FreeroutingCommands:
                 single_thread = True
 
             cmd = _build_freerouting_cmd(
-                jar_path, dsn_path, ses_path, attempt_passes, use_docker,
+                jar_path,
+                dsn_path,
+                ses_path,
+                attempt_passes,
+                use_docker,
                 single_thread=single_thread,
             )
             logger.info(
@@ -454,14 +458,16 @@ class FreeroutingCommands:
             if proc.returncode != 0:
                 # Don't abort the whole best-of-N just because one attempt
                 # exits nonzero — record it and move on.
-                attempt_results.append({
-                    "attempt": idx + 1,
-                    "max_passes": attempt_passes,
-                    "elapsed_seconds": attempt_elapsed,
-                    "ok": False,
-                    "exit_code": proc.returncode,
-                    "stderr": (proc.stderr or "")[:200],
-                })
+                attempt_results.append(
+                    {
+                        "attempt": idx + 1,
+                        "max_passes": attempt_passes,
+                        "elapsed_seconds": attempt_elapsed,
+                        "ok": False,
+                        "exit_code": proc.returncode,
+                        "stderr": (proc.stderr or "")[:200],
+                    }
+                )
                 if attempts == 1:
                     return {
                         "success": False,
@@ -473,20 +479,20 @@ class FreeroutingCommands:
                 continue
 
             if not os.path.isfile(ses_path):
-                attempt_results.append({
-                    "attempt": idx + 1,
-                    "max_passes": attempt_passes,
-                    "elapsed_seconds": attempt_elapsed,
-                    "ok": False,
-                    "error": "no SES produced",
-                })
+                attempt_results.append(
+                    {
+                        "attempt": idx + 1,
+                        "max_passes": attempt_passes,
+                        "elapsed_seconds": attempt_elapsed,
+                        "ok": False,
+                        "error": "no SES produced",
+                    }
+                )
                 if attempts == 1:
                     return {
                         "success": False,
                         "message": "Freerouting did not produce SES output",
-                        "errorDetails": (
-                            f"Expected at: {ses_path}. Stdout: {proc.stdout[:500]}"
-                        ),
+                        "errorDetails": (f"Expected at: {ses_path}. Stdout: {proc.stdout[:500]}"),
                         "elapsed_seconds": attempt_elapsed,
                     }
                 continue
@@ -496,13 +502,15 @@ class FreeroutingCommands:
                 ses_text = fh.read()
             score_info = _score_ses(ses_text, target_nets)
             score = score_info["score"]
-            attempt_results.append({
-                "attempt": idx + 1,
-                "max_passes": attempt_passes,
-                "elapsed_seconds": attempt_elapsed,
-                "ok": True,
-                **score_info,
-            })
+            attempt_results.append(
+                {
+                    "attempt": idx + 1,
+                    "max_passes": attempt_passes,
+                    "elapsed_seconds": attempt_elapsed,
+                    "ok": True,
+                    **score_info,
+                }
+            )
             logger.info(
                 f"  attempt {idx + 1}: score={score} "
                 f"({score_info['nets']} nets, {score_info['segments']} segs, "

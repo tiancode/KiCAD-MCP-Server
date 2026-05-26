@@ -55,7 +55,9 @@ class LibraryManager:
             )
             return {}
         except (OSError, ValueError) as e:
-            logger.exception(f"Error getting symbol details for {symbol_name} in {library_path}: {e}")
+            logger.exception(
+                f"Error getting symbol details for {symbol_name} in {library_path}: {e}"
+            )
             return {}
 
     @staticmethod

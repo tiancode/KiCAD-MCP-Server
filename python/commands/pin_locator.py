@@ -325,8 +325,7 @@ class PinLocator:
             # failure (ValueError).  Log so this isn't silent — the original
             # `except Exception: return None` masked real bugs in PRs.
             logger.debug(
-                f"get_pin_angle({symbol_reference}/{pin_number}): "
-                f"{type(e).__name__}: {e}"
+                f"get_pin_angle({symbol_reference}/{pin_number}): " f"{type(e).__name__}: {e}"
             )
             return None
 

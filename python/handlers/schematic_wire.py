@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 def handle_add_sheet_pin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add a sheet pin to a sheet block on the parent schematic."""
     logger.info("Adding sheet pin to schematic")
@@ -79,9 +78,7 @@ def handle_add_sheet_pin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
 
         return {
             "success": True,
-            "message": (
-                f"Added sheet pin '{pin_name}' ({pin_type}) " f"to sheet '{sheet_name}'"
-            ),
+            "message": (f"Added sheet pin '{pin_name}' ({pin_type}) " f"to sheet '{sheet_name}'"),
         }
 
     except Exception as e:
@@ -92,7 +89,9 @@ def handle_add_sheet_pin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
         return {"success": False, "message": str(e)}
 
 
-def handle_add_schematic_hierarchical_label(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_add_schematic_hierarchical_label(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Add a hierarchical label to a sub-sheet schematic."""
     logger.info("Adding hierarchical label to schematic")
     try:
@@ -130,9 +129,7 @@ def handle_add_schematic_hierarchical_label(iface: "KiCADInterface", params: Dic
         if success:
             return {
                 "success": True,
-                "message": (
-                    f"Added hierarchical_label '{text}' " f"at {position} shape={shape}"
-                ),
+                "message": (f"Added hierarchical_label '{text}' " f"at {position} shape={shape}"),
             }
         return {"success": False, "message": "Failed to add hierarchical label"}
 
@@ -144,7 +141,9 @@ def handle_add_schematic_hierarchical_label(iface: "KiCADInterface", params: Dic
         return {"success": False, "message": str(e)}
 
 
-def handle_move_schematic_net_label(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_move_schematic_net_label(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Move a net label to a new position in the schematic."""
     logger.info("Moving schematic net label")
     try:
@@ -173,9 +172,7 @@ def handle_move_schematic_net_label(iface: "KiCADInterface", params: Dict[str, A
 
         _SYM_AT = Symbol("at")
         target_syms = (
-            {Symbol(label_type)}
-            if label_type is not None
-            else {Symbol(t) for t in _valid_types}
+            {Symbol(label_type)} if label_type is not None else {Symbol(t) for t in _valid_types}
         )
 
         TOLERANCE = 0.5
@@ -231,7 +228,9 @@ def handle_move_schematic_net_label(iface: "KiCADInterface", params: Dict[str, A
         return {"success": False, "message": str(e)}
 
 
-def handle_delete_schematic_net_label(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_delete_schematic_net_label(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Delete a net label from the schematic"""
     logger.info("Deleting schematic net label")
     try:
@@ -440,9 +439,7 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         snapped_to_pin = None
         if component_ref and pin_number is not None:
             locator = PinLocator()
-            pin_loc = locator.get_pin_location(
-                Path(schematic_path), component_ref, str(pin_number)
-            )
+            pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
             if pin_loc is None:
                 return {
                     "success": False,
@@ -480,7 +477,9 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         }
 
 
-def handle_add_schematic_net_label(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+def handle_add_schematic_net_label(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Add a net label to schematic using WireManager.
 
     When componentRef and pinNumber are supplied the label is placed at the
@@ -515,9 +514,7 @@ def handle_add_schematic_net_label(iface: "KiCADInterface", params: Dict[str, An
             from commands.pin_locator import PinLocator
 
             locator = PinLocator()
-            pin_loc = locator.get_pin_location(
-                Path(schematic_path), component_ref, str(pin_number)
-            )
+            pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
             if pin_loc is None:
                 return {
                     "success": False,
@@ -673,9 +670,7 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
             match = find_nearest_pin(points[0], snap_tolerance)
             if match:
                 ref, pin_num, coords = match
-                logger.info(
-                    f"Snapped start point {points[0]} -> {coords} (pin {ref}/{pin_num})"
-                )
+                logger.info(f"Snapped start point {points[0]} -> {coords} (pin {ref}/{pin_num})")
                 snapped_info.append(
                     f"start snapped to {ref}/{pin_num} at [{coords[0]}, {coords[1]}]"
                 )
@@ -686,9 +681,7 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
             if match:
                 ref, pin_num, coords = match
                 logger.info(f"Snapped end point {points[-1]} -> {coords} (pin {ref}/{pin_num})")
-                snapped_info.append(
-                    f"end snapped to {ref}/{pin_num} at [{coords[0]}, {coords[1]}]"
-                )
+                snapped_info.append(f"end snapped to {ref}/{pin_num} at [{coords[0]}, {coords[1]}]")
                 points[-1] = list(coords)
 
         # Extract wire properties
@@ -729,4 +722,3 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
             "message": str(e),
             "errorDetails": traceback.format_exc(),
         }
-
