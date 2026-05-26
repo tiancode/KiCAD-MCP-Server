@@ -118,8 +118,8 @@ class LibraryManager:
                 else:
                     logger.warning(f"  Could not resolve URI for library {nickname}: {uri}")
 
-        except Exception as e:
-            logger.error(f"Error parsing fp-lib-table at {table_path}: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error parsing fp-lib-table at {table_path}: {e}")
 
     def _resolve_uri(self, uri: str) -> Optional[str]:
         """
@@ -304,8 +304,8 @@ class LibraryManager:
 
             return footprints
 
-        except Exception as e:
-            logger.error(f"Error listing footprints in {library_nickname}: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error listing footprints in {library_nickname}: {e}")
             return []
 
     def find_footprint(self, footprint_spec: str) -> Optional[Tuple[str, str]]:
@@ -431,8 +431,8 @@ class LibraryCommands:
         try:
             libraries = self.library_manager.list_libraries()
             return {"success": True, "libraries": libraries, "count": len(libraries)}
-        except Exception as e:
-            logger.error(f"Error listing libraries: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error listing libraries: {e}")
             return {
                 "success": False,
                 "message": "Failed to list libraries",
@@ -464,8 +464,8 @@ class LibraryCommands:
                 "count": len(results),
                 "pattern": pattern,
             }
-        except Exception as e:
-            logger.error(f"Error searching footprints: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error searching footprints: {e}")
             return {
                 "success": False,
                 "message": "Failed to search footprints",
@@ -487,8 +487,8 @@ class LibraryCommands:
                 "footprints": footprints,
                 "count": len(footprints),
             }
-        except Exception as e:
-            logger.error(f"Error listing library footprints: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error listing library footprints: {e}")
             return {
                 "success": False,
                 "message": "Failed to list library footprints",
@@ -548,8 +548,8 @@ class LibraryCommands:
 
             return {"success": True, "info": info}
 
-        except Exception as e:
-            logger.error(f"Error getting footprint info: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error getting footprint info: {e}")
             return {
                 "success": False,
                 "message": "Failed to get footprint info",

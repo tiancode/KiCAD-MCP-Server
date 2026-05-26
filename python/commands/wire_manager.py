@@ -201,11 +201,22 @@ class WireManager:
             logger.info(f"Successfully added wire to {schematic_path.name}")
             return True
 
-        except Exception as e:
-            logger.error(f"Error adding wire: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+
+            # walking.  logger.exception captures the traceback the
+
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+
+            # pattern reached for, but in one call.
+
+
+            logger.exception(f"Error adding wire: {e}")
             return False
 
     @staticmethod
@@ -281,11 +292,22 @@ class WireManager:
             logger.info(f"Successfully added polyline wire to {schematic_path.name}")
             return True
 
-        except Exception as e:
-            logger.error(f"Error adding polyline wire: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+
+            # walking.  logger.exception captures the traceback the
+
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+
+            # pattern reached for, but in one call.
+
+
+            logger.exception(f"Error adding polyline wire: {e}")
             return False
 
     @staticmethod
@@ -348,11 +370,22 @@ class WireManager:
             logger.info(f"Successfully added label '{text}' to {schematic_path.name}")
             return True
 
-        except Exception as e:
-            logger.error(f"Error adding label: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+
+            # walking.  logger.exception captures the traceback the
+
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+
+            # pattern reached for, but in one call.
+
+
+            logger.exception(f"Error adding label: {e}")
             return False
 
     @staticmethod
@@ -766,11 +799,22 @@ class WireManager:
             logger.info(f"Successfully added no-connect to {schematic_path.name}")
             return True
 
-        except Exception as e:
-            logger.error(f"Error adding no-connect: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+
+            # walking.  logger.exception captures the traceback the
+
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+
+            # pattern reached for, but in one call.
+
+
+            logger.exception(f"Error adding no-connect: {e}")
             return False
 
     @staticmethod
@@ -850,11 +894,22 @@ class WireManager:
             logger.warning(f"No matching wire found for {start_point} to {end_point}")
             return False
 
-        except Exception as e:
-            logger.error(f"Error deleting wire: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+
+            # walking.  logger.exception captures the traceback the
+
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+
+            # pattern reached for, but in one call.
+
+
+            logger.exception(f"Error deleting wire: {e}")
             return False
 
     @staticmethod
@@ -918,11 +973,22 @@ class WireManager:
             logger.warning(f"No matching label found for '{net_name}'")
             return False
 
-        except Exception as e:
-            logger.error(f"Error deleting label: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+
+            # walking.  logger.exception captures the traceback the
+
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+
+            # pattern reached for, but in one call.
+
+
+            logger.exception(f"Error deleting label: {e}")
             return False
 
     @staticmethod
@@ -1029,11 +1095,17 @@ class WireManager:
                     }
                 )
             return results
-        except Exception as e:
-            logger.error(f"Error listing texts: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+            # walking.  logger.exception captures the traceback the
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+            # pattern reached for, but in one call.
+
+            logger.exception(f"Error listing texts: {e}")
             return None
 
     @staticmethod
@@ -1079,11 +1151,17 @@ class WireManager:
             _text_insert(schematic_path, text_sexp)
             logger.info(f"Added text '{text}' at {position}")
             return True
-        except Exception as e:
-            logger.error(f"Error adding text: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+            # walking.  logger.exception captures the traceback the
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+            # pattern reached for, but in one call.
+
+            logger.exception(f"Error adding text: {e}")
             return False
 
     @staticmethod
@@ -1100,11 +1178,17 @@ class WireManager:
             _text_insert(schematic_path, label_text)
             logger.info(f"Added hierarchical_label '{text}' at {position} shape={shape}")
             return True
-        except Exception as e:
-            logger.error(f"Error adding hierarchical label: {e}")
-            import traceback
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
-            logger.error(traceback.format_exc())
+            # API boundary on file IO + sexpdata.dumps / S-expression
+
+            # walking.  logger.exception captures the traceback the
+
+            # previous `import traceback; logger.error(traceback.format_exc())`
+
+            # pattern reached for, but in one call.
+
+            logger.exception(f"Error adding hierarchical label: {e}")
             return False
 
     @staticmethod

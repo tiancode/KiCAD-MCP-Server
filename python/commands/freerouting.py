@@ -67,7 +67,9 @@ def _docker_available() -> bool:
             timeout=10,
         )
         return proc.returncode == 0
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
+        # Daemon not running (OSError on connect refusal), or hung past 10s
+        # (TimeoutExpired).  Either way Docker is "not available" for our use.
         return False
 
 
@@ -88,6 +90,11 @@ def _java_version_ok(java_exe: str) -> bool:
                 major = int(ver.split(".")[0])
                 return major >= 21
     except Exception:
+        # Probe function: any failure (missing binary, timeout, garbage
+        # version string, …) means "we can't confirm Java 21+".  Caller
+        # falls back to Docker.  Broad catch is intentional here — the
+        # test suite explicitly exercises a generic-Exception side_effect
+        # to assert this guard never throws.
         pass
     return False
 
@@ -364,6 +371,11 @@ class FreeroutingCommands:
                     "errorDetails": (f"ExportSpecctraDSN returned: {result}"),
                 }
         except Exception as e:
+            # API boundary — pcbnew can raise C-level exceptions surfaced
+            # as RuntimeError or generic Exception, plus OSError on the
+            # file-write path.  Returning {success: False, ...} is the
+            # caller-friendly shape; log the traceback so it's debuggable.
+            logger.exception(f"ExportSpecctraDSN crashed: {e}")
             return {
                 "success": False,
                 "message": "DSN export failed",
@@ -427,7 +439,11 @@ class FreeroutingCommands:
                     "errorDetails": "Increase timeout or reduce board complexity",
                     "attempts_completed": idx,
                 }
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError) as e:
+                # OSError: java/docker binary missing or unexecutable.
+                # SubprocessError: other subprocess.run failures aside from
+                # TimeoutExpired (which is handled above).
+                logger.exception(f"Freerouting subprocess failed: {e}")
                 return {
                     "success": False,
                     "message": "Failed to run Freerouting",
@@ -535,6 +551,8 @@ class FreeroutingCommands:
                     "attempts": attempt_results,
                 }
         except Exception as e:
+            # API boundary — same shape as the ExportSpecctraDSN catch above.
+            logger.exception(f"ImportSpecctraSES crashed: {e}")
             return {
                 "success": False,
                 "message": "SES import failed",
@@ -546,7 +564,10 @@ class FreeroutingCommands:
         # Step 4: Save board
         try:
             self.board.Save(board_path)
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
+            # OSError on filesystem failure, RuntimeError from pcbnew on
+            # board-state issues.  Non-fatal — autoroute is already done and
+            # the SES has been imported; user can save manually.
             logger.warning(f"Board save after autoroute failed: {e}")
 
         # Collect stats
@@ -619,6 +640,7 @@ class FreeroutingCommands:
                     "errorDetails": (f"ExportSpecctraDSN returned: {result}"),
                 }
         except Exception as e:
+            logger.exception(f"ExportSpecctraDSN crashed: {e}")
             return {
                 "success": False,
                 "message": "DSN export failed",
@@ -675,6 +697,7 @@ class FreeroutingCommands:
                     "errorDetails": (f"ImportSpecctraSES returned: {result}"),
                 }
         except Exception as e:
+            logger.exception(f"ImportSpecctraSES crashed: {e}")
             return {
                 "success": False,
                 "message": "SES import failed",
@@ -685,7 +708,7 @@ class FreeroutingCommands:
         if board_path:
             try:
                 self.board.Save(board_path)
-            except Exception as e:
+            except (OSError, RuntimeError) as e:
                 logger.warning(f"Board save after SES import failed: {e}")
 
         tracks = self.board.GetTracks()
@@ -719,7 +742,10 @@ class FreeroutingCommands:
                 )
                 java_version = (proc.stderr or proc.stdout).strip().split("\n")[0]
                 java_21_ok = _java_version_ok(java_exe)
-            except Exception:
+            except (subprocess.TimeoutExpired, OSError):
+                # best-effort: probe failure leaves java_version=None /
+                # java_21_ok=False, which the caller surfaces in the
+                # diagnostic payload.
                 pass
 
         # Check Docker/Podman

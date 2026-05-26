@@ -52,8 +52,8 @@ class ConnectionManager:
             label = schematic.label.append(text=net_name, at={"x": position[0], "y": position[1]})
             logger.info(f"Added net label '{net_name}' at {position}")
             return label
-        except Exception as e:
-            logger.error(f"Error adding net label: {e}")
+        except Exception as e:  # API boundary; bucket: catch + return
+            logger.exception(f"Error adding net label: {e}")
             return None
 
     @staticmethod
@@ -136,8 +136,8 @@ class ConnectionManager:
                 "wire_stub": [pin_loc, stub_end],
             }
 
-        except Exception as e:
-            logger.error(f"Error connecting to net: {e}")
+        except Exception as e:  # API boundary; bucket: catch + return
+            logger.exception(f"Error connecting to net: {e}")
             import traceback
 
             logger.error(traceback.format_exc())
@@ -381,8 +381,8 @@ class ConnectionManager:
             logger.info(f"Found {len(connections)} connections for net '{net_name}'")
             return connections
 
-        except Exception as e:
-            logger.error(f"Error getting net connections: {e}")
+        except Exception as e:  # API boundary; bucket: catch + return
+            logger.exception(f"Error getting net connections: {e}")
             import traceback
 
             logger.error(traceback.format_exc())
@@ -459,6 +459,6 @@ class ConnectionManager:
             )
             return netlist
 
-        except Exception as e:
-            logger.error(f"Error generating netlist: {e}")
+        except Exception as e:  # API boundary; bucket: catch + return
+            logger.exception(f"Error generating netlist: {e}")
             return {"nets": [], "components": []}

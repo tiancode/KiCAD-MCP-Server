@@ -34,8 +34,8 @@ class LibraryManager:
                 # Use glob to find all matching files
                 matching_libs = glob.glob(path_pattern, recursive=True)
                 libraries.extend(matching_libs)
-            except Exception as e:
-                logger.error(f"Error searching for libraries at {path_pattern}: {e}")
+            except (OSError, ValueError) as e:
+                logger.exception(f"Error searching for libraries at {path_pattern}: {e}")
 
         # Extract library names from paths
         library_names = [os.path.splitext(os.path.basename(lib))[0] for lib in libraries]
@@ -54,8 +54,8 @@ class LibraryManager:
                 f"Attempted to get details for symbol {symbol_name} in library {library_path}. This requires advanced implementation."
             )
             return {}
-        except Exception as e:
-            logger.error(f"Error getting symbol details for {symbol_name} in {library_path}: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error getting symbol details for {symbol_name} in {library_path}: {e}")
             return {}
 
     @staticmethod
@@ -75,8 +75,8 @@ class LibraryManager:
                 f"Searched for symbols matching '{query}'. This requires advanced implementation."
             )
             return results
-        except Exception as e:
-            logger.error(f"Error searching for symbols matching '{query}': {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error searching for symbols matching '{query}': {e}")
             return []
 
     @staticmethod

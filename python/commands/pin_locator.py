@@ -179,11 +179,11 @@ class PinLocator:
             logger.warning(f"Symbol {lib_id} not found in lib_symbols")
             return {}
 
-        except Exception as e:
-            logger.error(f"Error getting symbol pins: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
+        except (OSError, AttributeError, KeyError, ValueError, TypeError) as e:
+            # API boundary — surface the failure as an empty pin dict with a
+            # full traceback in the log.  Tightened from `except Exception`;
+            # the wrapped code only does file IO + sexpdata attribute access.
+            logger.exception(f"Error getting symbol pins: {e}")
             return {}
 
     @staticmethod
@@ -225,8 +225,12 @@ class PinLocator:
             for symbol in sch.symbol:
                 if symbol.property.Reference.value.rstrip("_") == symbol_reference:
                     return symbol.lib_id.value if hasattr(symbol, "lib_id") else None
-        except Exception:
-            pass
+        except (OSError, AttributeError) as e:
+            # best-effort: missing schematic file (OSError) or unexpected
+            # symbol shape (AttributeError on .property/.Reference/.value).
+            # Caller handles the None return and falls back to other lookup
+            # paths; logging the cause at debug level is enough.
+            logger.debug(f"_get_lib_id({symbol_reference}): {type(e).__name__}: {e}")
         return None
 
     def _get_symbol_transform(
@@ -247,7 +251,9 @@ class PinLocator:
             if sch_key not in self._sexp_cache:
                 with open(schematic_path, "r", encoding="utf-8") as f:
                     self._sexp_cache[sch_key] = _sexpdata.loads(f.read())
-        except Exception as e:
+        except (OSError, ValueError) as e:
+            # OSError covers missing/unreadable file; ValueError covers
+            # sexpdata parse failures (it raises ValueError on bad syntax).
             logger.error(f"_get_symbol_transform: failed to parse {schematic_path}: {e}")
             return None
 
@@ -313,7 +319,15 @@ class PinLocator:
             absolute_angle = (pin_def_angle - symbol_rotation) % 360
             return absolute_angle
 
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            # Pin missing from the symbol definition (KeyError), unexpected
+            # transform shape (AttributeError/TypeError), or numeric coercion
+            # failure (ValueError).  Log so this isn't silent — the original
+            # `except Exception: return None` masked real bugs in PRs.
+            logger.debug(
+                f"get_pin_angle({symbol_reference}/{pin_number}): "
+                f"{type(e).__name__}: {e}"
+            )
             return None
 
     def get_pin_location(
@@ -409,11 +423,10 @@ class PinLocator:
             logger.info(f"Pin {symbol_reference}/{pin_number} located at ({abs_x}, {abs_y})")
             return [abs_x, abs_y]
 
-        except Exception as e:
-            logger.error(f"Error getting pin location: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
+        except (OSError, AttributeError, KeyError, ValueError, TypeError) as e:
+            # API boundary catch — same set of types as get_symbol_pins.
+            # Logged with full traceback via logger.exception.
+            logger.exception(f"Error getting pin location: {e}")
             return None
 
     def get_all_symbol_pins(
@@ -468,8 +481,11 @@ class PinLocator:
             logger.info(f"Located {len(result)} pins on {symbol_reference}")
             return result
 
-        except Exception as e:
-            logger.error(f"Error getting all symbol pins: {e}")
+        except (OSError, AttributeError, KeyError, ValueError, TypeError) as e:
+            # API boundary catch.  Was `except Exception` without a traceback —
+            # several past fix PRs were debugging issues whose stacks ended at
+            # this swallow.  Use logger.exception so the trace reaches the log.
+            logger.exception(f"Error getting all symbol pins for {symbol_reference}: {e}")
             return {}
 
 

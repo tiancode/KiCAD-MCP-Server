@@ -451,8 +451,11 @@ class ComponentCommands:
                             "unit": "mm",
                         }
                         break
-            except Exception:
-                pass  # Courtyard may not exist or API may differ
+            except (AttributeError, RuntimeError):
+                # best-effort: courtyard may not exist on this footprint, or
+                # the SWIG API may differ across KiCAD versions.  The caller
+                # already returns the rest of the data with courtyard_data=None.
+                pass
 
             return {
                 "success": True,
@@ -1475,7 +1478,9 @@ class ComponentCommands:
                 self._nm_to_mm(bb.GetRight()),
                 self._nm_to_mm(bb.GetBottom()),
             )
-        except Exception:
+        except (AttributeError, RuntimeError):
+            # Board has no edges defined, or SWIG proxy dehydrated.  Returning
+            # None lets the caller fall back to per-component bounding boxes.
             return None
 
     def _footprint_courtyard_bbox(self, fp, override_pos):
@@ -1498,13 +1503,17 @@ class ComponentCommands:
                     box = ct.BBox()
                     bbox_nm = (box.GetLeft(), box.GetTop(), box.GetRight(), box.GetBottom())
                     break
-            except Exception:
+            except (AttributeError, RuntimeError):
+                # Courtyard layer not defined for this footprint, or SWIG
+                # method-dispatch failure — try the other layer.
                 continue
         if bbox_nm is None:
             try:
                 box = fp.GetBoundingBox()
                 bbox_nm = (box.GetLeft(), box.GetTop(), box.GetRight(), box.GetBottom())
-            except Exception:
+            except (AttributeError, RuntimeError):
+                # Footprint has no geometry at all — caller can't compute
+                # a courtyard bbox.  Return None to let it skip cleanly.
                 return None
 
         x1, y1, x2, y2 = (self._nm_to_mm(v) for v in bbox_nm)

@@ -68,8 +68,12 @@ class SymbolLibraryManager:
         for nickname in list(self.libraries.keys()):
             try:
                 self.list_symbols(nickname)
-            except Exception:
-                logger.debug("Skipping unparseable library: %s", nickname)
+            except (OSError, ValueError, KeyError) as e:
+                # best-effort prewarm — unreadable/missing/bad-syntax library
+                # files are skipped silently.  Was `except Exception` which
+                # also swallowed programmer bugs; tightened to file-IO and
+                # parse failures only.
+                logger.debug("Skipping unparseable library %s: %s", nickname, e)
 
     def _load_libraries(self) -> None:
         """Load libraries from sym-lib-table files"""
@@ -154,8 +158,8 @@ class SymbolLibraryManager:
                 else:
                     logger.debug(f"  Could not resolve URI for library {nickname}: {uri}")
 
-        except Exception as e:
-            logger.error(f"Error parsing sym-lib-table at {table_path}: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error parsing sym-lib-table at {table_path}: {e}")
 
     def _resolve_uri(self, uri: str) -> Optional[str]:
         """
@@ -335,8 +339,8 @@ class SymbolLibraryManager:
 
             logger.debug(f"Parsed {len(symbols)} symbols from {library_name}")
 
-        except Exception as e:
-            logger.error(f"Error parsing symbol library {library_path}: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error parsing symbol library {library_path}: {e}")
 
         return symbols
 
@@ -586,8 +590,8 @@ class SymbolLibraryCommands:
             self._ensure_manager_for(params)
             libraries = self.library_manager.list_libraries()
             return {"success": True, "libraries": libraries, "count": len(libraries)}
-        except Exception as e:
-            logger.error(f"Error listing symbol libraries: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error listing symbol libraries: {e}")
             return {
                 "success": False,
                 "message": "Failed to list symbol libraries",
@@ -614,8 +618,8 @@ class SymbolLibraryCommands:
                 "count": len(results),
                 "query": query,
             }
-        except Exception as e:
-            logger.error(f"Error searching symbols: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error searching symbols: {e}")
             return {"success": False, "message": "Failed to search symbols", "errorDetails": str(e)}
 
     def list_library_symbols(self, params: Dict) -> Dict:
@@ -648,8 +652,8 @@ class SymbolLibraryCommands:
                 "symbols": [asdict(s) for s in symbols],
                 "count": len(symbols),
             }
-        except Exception as e:
-            logger.error(f"Error listing library symbols: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error listing library symbols: {e}")
             return {
                 "success": False,
                 "message": "Failed to list library symbols",
@@ -672,8 +676,8 @@ class SymbolLibraryCommands:
             else:
                 return {"success": False, "message": f"Symbol not found: {symbol_spec}"}
 
-        except Exception as e:
-            logger.error(f"Error getting symbol info: {e}")
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error getting symbol info: {e}")
             return {
                 "success": False,
                 "message": "Failed to get symbol info",
