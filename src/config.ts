@@ -17,12 +17,15 @@ const __dirname = dirname(__filename);
 const DEFAULT_CONFIG_PATH = join(dirname(__dirname), "config", "default-config.json");
 
 /**
- * Server configuration schema
+ * Server configuration schema.
+ *
+ * The MCP server's name, version, and description are read directly from
+ * package.json at runtime (see src/server.ts), so they're intentionally
+ * not modelled here.  Unknown keys in a user-supplied config are stripped
+ * by Zod's default object behaviour, so older configs that still carry
+ * those fields will continue to parse without error.
  */
 const ConfigSchema = z.object({
-  name: z.string().default("kicad-mcp-server"),
-  version: z.string().default("1.0.0"),
-  description: z.string().default("MCP server for KiCAD PCB design operations"),
   pythonPath: z.string().optional(),
   kicadPath: z.string().optional(),
   logLevel: z.enum(["error", "warn", "info", "debug"]).default("info"),

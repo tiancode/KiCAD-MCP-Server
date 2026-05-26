@@ -4,11 +4,35 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import express from "express";
 import { spawn, exec, execSync, ChildProcess } from "child_process";
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { logger } from "./logger.js";
+
+// Read package metadata once at module load so the MCP server reports the
+// real release version instead of a hardcoded "1.0.0" to every client.
+// dist/server.js → ../package.json points at the repo root.
+const PACKAGE_INFO: { name: string; version: string; description: string } = (() => {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+    const raw = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return {
+      name: typeof raw.name === "string" ? raw.name : "kicad-mcp-server",
+      version: typeof raw.version === "string" ? raw.version : "0.0.0",
+      description:
+        typeof raw.description === "string"
+          ? raw.description
+          : "MCP server for KiCAD PCB design operations",
+    };
+  } catch {
+    return {
+      name: "kicad-mcp-server",
+      version: "0.0.0",
+      description: "MCP server for KiCAD PCB design operations",
+    };
+  }
+})();
 
 // Import tool registration functions
 import { registerProjectTools } from "./tools/project.js";
@@ -234,11 +258,12 @@ export class KiCADMcpServer {
       throw new Error(`KiCAD interface script not found: ${this.kicadScriptPath}`);
     }
 
-    // Initialize the MCP server
+    // Initialize the MCP server using metadata from package.json so the
+    // version reported to clients always matches the release.
     this.server = new McpServer({
-      name: "kicad-mcp-server",
-      version: "1.0.0",
-      description: "MCP server for KiCAD PCB design operations",
+      name: PACKAGE_INFO.name,
+      version: PACKAGE_INFO.version,
+      description: PACKAGE_INFO.description,
     });
     // Create the ready promise (resolved when Python sends {"type":"ready"})
     this.readyPromise = new Promise((resolve, reject) => {
@@ -475,13 +500,13 @@ export class KiCADMcpServer {
       if (!isValid) {
         throw new Error("Prerequisites validation failed. See logs above for details.");
       }
+      // Inherit the caller's environment unmodified.  PYTHONPATH detection is
+      // owned by python/utils/platform_helper.py at the child's import time —
+      // hard-coding a Windows fallback here leaked an invalid path into the
+      // subprocess on Linux/macOS.
       this.pythonProcess = spawn(pythonExe, [this.kicadScriptPath], {
         stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          PYTHONPATH:
-            process.env.PYTHONPATH || "C:/Program Files/KiCad/9.0/lib/python3/dist-packages",
-        },
+        env: process.env,
       });
 
       // Listen for process exit
