@@ -5032,97 +5032,9 @@ class KiCADInterface:
         return _ui.handle_launch_kicad_ui(self, params)
 
     def _handle_refill_zones(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Refill all copper pour zones on the board.
+        from handlers import routing as _routing
 
-        pcbnew.ZONE_FILLER.Fill() can cause a C++ access violation (0xC0000005)
-        that crashes the entire Python process when called from SWIG outside KiCAD UI.
-        To avoid killing the main process we run the fill in an isolated subprocess.
-        If the subprocess crashes or times out, we return a non-fatal warning so the
-        caller can continue — KiCAD Pcbnew will refill zones automatically when the
-        board is opened (press B).
-        """
-        logger.info("Refilling zones (subprocess isolation)")
-        try:
-            if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
-
-            # First save the board so the subprocess can load it fresh
-            board_path = self.board.GetFileName()
-            if not board_path:
-                return {
-                    "success": False,
-                    "message": "Board has no file path — save first",
-                }
-            self.board.Save(board_path)
-
-            zone_count = self.board.GetAreaCount() if hasattr(self.board, "GetAreaCount") else 0
-
-            # Run pcbnew zone fill in an isolated subprocess to prevent crashes
-            import subprocess
-            import sys
-            import textwrap
-
-            script = textwrap.dedent(f"""
-import pcbnew, sys
-board = pcbnew.LoadBoard({repr(board_path)})
-filler = pcbnew.ZONE_FILLER(board)
-filler.Fill(board.Zones())
-board.Save({repr(board_path)})
-print("ok")
-""")
-            try:
-                result = subprocess.run(
-                    [sys.executable, "-c", script],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                if result.returncode == 0 and "ok" in result.stdout:
-                    # Reload board after subprocess modified it
-                    reloaded = self._safe_load_board(board_path)
-                    if reloaded is None:
-                        return {
-                            "success": False,
-                            "message": (
-                                "Zone fill subprocess succeeded but the board "
-                                "could not be reloaded into pcbnew (SWIG state "
-                                "is corrupt — restart the MCP server)"
-                            ),
-                            "zoneCount": zone_count,
-                        }
-                    self.board = reloaded
-                    self._update_command_handlers()
-                    logger.info("Zone fill subprocess succeeded")
-                    return {
-                        "success": True,
-                        "message": f"Zones refilled successfully ({zone_count} zones)",
-                        "zoneCount": zone_count,
-                    }
-                else:
-                    logger.warning(
-                        f"Zone fill subprocess failed: rc={result.returncode} stderr={result.stderr[:200]}"
-                    )
-                    return {
-                        "success": False,
-                        "message": "Zone fill failed in subprocess — zones are defined and will fill when opened in KiCAD (press B). Continuing is safe.",
-                        "zoneCount": zone_count,
-                        "details": (result.stderr[:300] if result.stderr else result.stdout[:300]),
-                    }
-            except subprocess.TimeoutExpired:
-                logger.warning("Zone fill subprocess timed out after 60s")
-                return {
-                    "success": False,
-                    "message": "Zone fill timed out — zones are defined and will fill when opened in KiCAD (press B). Continuing is safe.",
-                    "zoneCount": zone_count,
-                }
-
-        except Exception as e:
-            logger.error(f"Error refilling zones: {str(e)}")
-            return {"success": False, "message": str(e)}
+        return _routing.handle_refill_zones(self, params)
 
     # =========================================================================
     # IPC Backend handlers - these provide real-time UI synchronization
