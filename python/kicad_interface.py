@@ -5210,58 +5210,18 @@ class KiCADInterface:
             logger.error(f"snapshot_project error: {e}")
             return {"success": False, "message": str(e)}
 
+    # UI / backend-state handlers live in handlers/ui.py.  Thin trampolines
+    # below preserve the `iface._handle_*` call surface that older tests
+    # use; the actual implementation is in handlers.ui.
     def _handle_check_kicad_ui(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Check if KiCAD UI is running.
+        from handlers import ui as _ui
 
-        `processes` is the single source of truth — `running` is derived from
-        its length so the two fields cannot disagree. Previously they came
-        from separate detection methods (pgrep regex vs. ps-aux substring) and
-        could race or use different filters, producing the confusing
-        `running=True, processes=[]` state users hit after quitting KiCAD.
-        """
-        logger.info("Checking if KiCAD UI is running")
-        try:
-            manager = KiCADProcessManager()
-            # `processes` is the single source of truth (from #173) so
-            # `running` can't disagree with it; and if KiCAD is up, opportunistically
-            # (re)connect the IPC backend (#140) so a session that started before
-            # KiCAD launched can fall up from SWIG to IPC.
-            processes = manager.get_process_info()
-            is_running = len(processes) > 0
-            if is_running:
-                self._try_enable_ipc_backend()
-
-            return {
-                "success": True,
-                "running": is_running,
-                "processes": processes,
-                "message": "KiCAD is running" if is_running else "KiCAD is not running",
-                **self._backend_status(),
-            }
-        except Exception as e:
-            logger.error(f"Error checking KiCAD UI status: {str(e)}")
-            return {"success": False, "message": str(e)}
+        return _ui.handle_check_kicad_ui(self, params)
 
     def _handle_launch_kicad_ui(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Launch KiCAD UI"""
-        logger.info("Launching KiCAD UI")
-        try:
-            project_path = params.get("projectPath")
-            auto_launch = params.get("autoLaunch", AUTO_LAUNCH_KICAD)
+        from handlers import ui as _ui
 
-            # Convert project path to Path object if provided
-            from pathlib import Path
-
-            path_obj = Path(project_path) if project_path else None
-
-            result = check_and_launch_kicad(path_obj, auto_launch)
-            if result.get("running"):
-                self._try_enable_ipc_backend(force=True)
-
-            return {"success": True, **result, **self._backend_status()}
-        except Exception as e:
-            logger.error(f"Error launching KiCAD UI: {str(e)}")
-            return {"success": False, "message": str(e)}
+        return _ui.handle_launch_kicad_ui(self, params)
 
     def _handle_refill_zones(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Refill all copper pour zones on the board.
@@ -6098,54 +6058,16 @@ print("ok")
 
     # =========================================================================
 
+    # Backend-info / backend-state handlers live in handlers/ui.py.
     def _handle_get_backend_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get information about the current backend"""
-        if KiCADProcessManager.is_running():
-            self._try_enable_ipc_backend()
-        status = self._backend_status()
-        ipc_backend = getattr(self, "ipc_backend", None)
-        return {
-            "success": True,
-            **status,
-            "version": ipc_backend.get_version() if ipc_backend else "N/A",
-            "message": (
-                "Using IPC backend with real-time UI sync"
-                if status["backend"] == "ipc"
-                else "Using SWIG backend (requires manual reload)"
-            ),
-        }
+        from handlers import ui as _ui
+
+        return _ui.handle_get_backend_info(self, params)
 
     def _handle_get_backend_state(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Return the MCP/KiCad backend state and currently loaded file state."""
-        if KiCADProcessManager.is_running():
-            self._try_enable_ipc_backend()
+        from handlers import ui as _ui
 
-        status = self._backend_status()
-        board_path = self._current_board_path()
-        project_path = self._current_project_file_path(board_path)
-        dirty_state = self._dirty_state(board_path)
-        loaded_board = board_path is not None
-        loaded_project = project_path is not None
-
-        return {
-            "success": True,
-            "backend": status["backend"],
-            "realtime": status["realtime_sync"],
-            "realtime_sync": status["realtime_sync"],
-            "ipcConnected": status["ipc_connected"],
-            "ipc_connected": status["ipc_connected"],
-            "loadedProject": loaded_project,
-            "loadedBoard": loaded_board,
-            "projectPath": project_path,
-            "boardPath": board_path,
-            "dirty": dirty_state["dirty"],
-            "dirtyReason": dirty_state["dirtyReason"],
-            "diskChangedExternally": dirty_state["diskChangedExternally"],
-            "message": (
-                f"{status['backend']} backend; "
-                f"{'board loaded' if loaded_board else 'no board loaded'}"
-            ),
-        }
+        return _ui.handle_get_backend_state(self, params)
 
     def _handle_ipc_add_track(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Add a track using IPC backend (real-time)"""
