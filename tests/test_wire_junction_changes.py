@@ -132,20 +132,22 @@ class TestHandlerDispatch:
     def test_add_schematic_wire_registered(self) -> None:
         from kicad_interface import KiCADInterface
 
-        # Just verify the class has the handler method
-        assert hasattr(KiCADInterface, "_handle_add_schematic_wire")
+        # The class no longer stores per-tool methods; _HANDLER_MAP is the
+        # single source of truth.  Instances synthesize _handle_<command>
+        # shims via __getattr__ (see kicad_interface.py).
+        assert "add_schematic_wire" in KiCADInterface._HANDLER_MAP
 
     def test_add_schematic_junction_handler_removed(self) -> None:
         from kicad_interface import KiCADInterface
 
-        assert not hasattr(KiCADInterface, "_handle_add_schematic_junction")
+        assert "add_schematic_junction" not in KiCADInterface._HANDLER_MAP
 
     def test_add_schematic_connection_not_present(self) -> None:
         from kicad_interface import KiCADInterface
 
-        assert not hasattr(
-            KiCADInterface, "_handle_add_schematic_connection"
-        ), "_handle_add_schematic_connection should be removed"
+        assert (
+            "add_schematic_connection" not in KiCADInterface._HANDLER_MAP
+        ), "add_schematic_connection should be removed"
 
 
 # ---------------------------------------------------------------------------
