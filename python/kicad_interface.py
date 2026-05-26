@@ -944,15 +944,43 @@ class KiCADInterface:
         self._board_disk_signature = self._disk_signature(path) if path else None
 
     def _current_board_path(self) -> Optional[str]:
-        """Return the current board file path, if a healthy board is loaded."""
+        """Return the current board file path, if a healthy board is loaded.
+
+        Two backends, two ways to ask the question:
+
+          - SWIG mode: ``self.board.GetFileName()``.
+          - IPC mode: ``self.ipc_board_api`` wraps a kipy Board whose
+            ``document.board_filename`` carries the path of whatever the
+            user has open in the KiCAD UI.  Without this branch
+            ``get_backend_state`` would report ``loadedBoard: false`` even
+            while a board is plainly open and reachable over IPC.
+        """
+        # SWIG path
         board = getattr(self, "board", None)
-        if not board or not self._is_board_healthy(board):
-            return None
-        try:
-            path = board.GetFileName()
-        except Exception:
-            return None
-        return os.path.abspath(path) if path else None
+        if board and self._is_board_healthy(board):
+            try:
+                path = board.GetFileName()
+            except Exception:
+                path = None
+            if path:
+                return os.path.abspath(path)
+
+        # IPC path — only meaningful when use_ipc is True and a board API
+        # is connected.  IPCBoardAPI wraps a kipy Board; reach through to
+        # its `.document.board_filename` for the live filename.  Fall back
+        # gracefully if the attribute shape changes across kipy versions.
+        ipc_api = getattr(self, "ipc_board_api", None)
+        if ipc_api is not None:
+            try:
+                board = ipc_api._get_board()  # noqa: SLF001 — private accessor on our own wrapper
+                doc = getattr(board, "document", None)
+                filename = getattr(doc, "board_filename", None) if doc is not None else None
+                if filename:
+                    return os.path.abspath(filename)
+            except Exception:
+                pass
+
+        return None
 
     def _current_project_file_path(self, board_path: Optional[str]) -> Optional[str]:
         """Best-effort project file path for the currently loaded board."""
