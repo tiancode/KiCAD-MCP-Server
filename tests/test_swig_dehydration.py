@@ -285,7 +285,9 @@ def test_auto_save_recovers_when_save_leaves_board_dehydrated():
 
 def test_check_kicad_ui_running_false_when_no_processes():
     iface = _make_iface()
-    with patch("kicad_interface.KiCADProcessManager") as MockMgr:
+    # The handler lives in handlers/ui.py after the kicad_interface split;
+    # patch the binding in that module rather than kicad_interface's.
+    with patch("handlers.ui.KiCADProcessManager") as MockMgr:
         MockMgr.return_value.get_process_info.return_value = []
         result = iface._handle_check_kicad_ui({})
     assert result["success"] is True
@@ -295,7 +297,9 @@ def test_check_kicad_ui_running_false_when_no_processes():
 
 def test_check_kicad_ui_running_true_when_processes_present():
     iface = _make_iface()
-    with patch("kicad_interface.KiCADProcessManager") as MockMgr:
+    # The handler lives in handlers/ui.py after the kicad_interface split;
+    # patch the binding in that module rather than kicad_interface's.
+    with patch("handlers.ui.KiCADProcessManager") as MockMgr:
         MockMgr.return_value.get_process_info.return_value = [
             {"pid": "1234", "name": "kicad", "command": "/Applications/KiCad/.../kicad"}
         ]
@@ -310,7 +314,9 @@ def test_check_kicad_ui_running_and_processes_never_disagree():
     processes=[] because is_running() and get_process_info() used different
     detection methods."""
     iface = _make_iface()
-    with patch("kicad_interface.KiCADProcessManager") as MockMgr:
+    # The handler lives in handlers/ui.py after the kicad_interface split;
+    # patch the binding in that module rather than kicad_interface's.
+    with patch("handlers.ui.KiCADProcessManager") as MockMgr:
         # Even if some hypothetical separate is_running() returned True,
         # only get_process_info matters now.
         MockMgr.return_value.is_running.return_value = True

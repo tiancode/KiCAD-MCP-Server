@@ -2251,145 +2251,48 @@ class KiCADInterface:
             logger.error(f"Error checking wire collisions: {e}")
             return {"success": False, "message": str(e)}
 
-    # ------------------------------------------------------------------ #
-    #  Footprint handlers                                                  #
-    # ------------------------------------------------------------------ #
+    # Footprint + symbol-creator handlers live in handlers/footprint.py and
+    # handlers/symbol_creator.py.
 
     def _handle_create_footprint(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new .kicad_mod footprint file in a .pretty library."""
-        logger.info(f"create_footprint: {params.get('name')} in {params.get('libraryPath')}")
-        try:
-            creator = FootprintCreator()
-            return creator.create_footprint(
-                library_path=params.get("libraryPath", ""),
-                name=params.get("name", ""),
-                description=params.get("description", ""),
-                tags=params.get("tags", ""),
-                pads=params.get("pads", []),
-                courtyard=params.get("courtyard"),
-                silkscreen=params.get("silkscreen"),
-                fab_layer=params.get("fabLayer"),
-                ref_position=params.get("refPosition"),
-                value_position=params.get("valuePosition"),
-                overwrite=params.get("overwrite", False),
-            )
-        except Exception as e:
-            logger.error(f"create_footprint error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import footprint as _fp
+
+        return _fp.handle_create_footprint(self, params)
 
     def _handle_edit_footprint_pad(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Edit an existing pad in a .kicad_mod file."""
-        logger.info(
-            f"edit_footprint_pad: pad {params.get('padNumber')} in {params.get('footprintPath')}"
-        )
-        try:
-            creator = FootprintCreator()
-            return creator.edit_footprint_pad(
-                footprint_path=params.get("footprintPath", ""),
-                pad_number=str(params.get("padNumber", "1")),
-                size=params.get("size"),
-                at=params.get("at"),
-                drill=params.get("drill"),
-                shape=params.get("shape"),
-            )
-        except Exception as e:
-            logger.error(f"edit_footprint_pad error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import footprint as _fp
+
+        return _fp.handle_edit_footprint_pad(self, params)
 
     def _handle_list_footprint_libraries(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List .pretty footprint libraries and their contents."""
-        logger.info("list_footprint_libraries")
-        try:
-            creator = FootprintCreator()
-            return creator.list_footprint_libraries(search_paths=params.get("searchPaths"))
-        except Exception as e:
-            logger.error(f"list_footprint_libraries error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import footprint as _fp
+
+        return _fp.handle_list_footprint_libraries(self, params)
 
     def _handle_register_footprint_library(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Register a .pretty library in KiCAD's fp-lib-table."""
-        logger.info(f"register_footprint_library: {params.get('libraryPath')}")
-        try:
-            creator = FootprintCreator()
-            return creator.register_footprint_library(
-                library_path=params.get("libraryPath", ""),
-                library_name=params.get("libraryName"),
-                description=params.get("description", ""),
-                scope=params.get("scope", "project"),
-                project_path=params.get("projectPath"),
-            )
-        except Exception as e:
-            logger.error(f"register_footprint_library error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import footprint as _fp
 
-    # ------------------------------------------------------------------ #
-    #  Symbol creator handlers                                             #
-    # ------------------------------------------------------------------ #
+        return _fp.handle_register_footprint_library(self, params)
 
     def _handle_create_symbol(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new symbol in a .kicad_sym library."""
-        logger.info(f"create_symbol: {params.get('name')} in {params.get('libraryPath')}")
-        try:
-            creator = SymbolCreator()
-            return creator.create_symbol(
-                library_path=params.get("libraryPath", ""),
-                name=params.get("name", ""),
-                reference_prefix=params.get("referencePrefix", "U"),
-                description=params.get("description", ""),
-                keywords=params.get("keywords", ""),
-                datasheet=params.get("datasheet", "~"),
-                footprint=params.get("footprint", ""),
-                in_bom=params.get("inBom", True),
-                on_board=params.get("onBoard", True),
-                pins=params.get("pins", []),
-                rectangles=params.get("rectangles", []),
-                polylines=params.get("polylines", []),
-                overwrite=params.get("overwrite", False),
-            )
-        except Exception as e:
-            logger.error(f"create_symbol error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import symbol_creator as _sc
+
+        return _sc.handle_create_symbol(self, params)
 
     def _handle_delete_symbol(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Delete a symbol from a .kicad_sym library."""
-        logger.info(f"delete_symbol: {params.get('name')} from {params.get('libraryPath')}")
-        try:
-            creator = SymbolCreator()
-            return creator.delete_symbol(
-                library_path=params.get("libraryPath", ""),
-                name=params.get("name", ""),
-            )
-        except Exception as e:
-            logger.error(f"delete_symbol error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import symbol_creator as _sc
+
+        return _sc.handle_delete_symbol(self, params)
 
     def _handle_list_symbols_in_library(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List all symbols in a .kicad_sym file."""
-        logger.info(f"list_symbols_in_library: {params.get('libraryPath')}")
-        try:
-            creator = SymbolCreator()
-            return creator.list_symbols(
-                library_path=params.get("libraryPath", ""),
-            )
-        except Exception as e:
-            logger.error(f"list_symbols_in_library error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import symbol_creator as _sc
+
+        return _sc.handle_list_symbols_in_library(self, params)
 
     def _handle_register_symbol_library(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Register a .kicad_sym library in KiCAD's sym-lib-table."""
-        logger.info(f"register_symbol_library: {params.get('libraryPath')}")
-        try:
-            creator = SymbolCreator()
-            return creator.register_symbol_library(
-                library_path=params.get("libraryPath", ""),
-                library_name=params.get("libraryName"),
-                description=params.get("description", ""),
-                scope=params.get("scope", "project"),
-                project_path=params.get("projectPath"),
-            )
-        except Exception as e:
-            logger.error(f"register_symbol_library error: {e}")
-            return {"success": False, "error": str(e)}
+        from handlers import symbol_creator as _sc
+
+        return _sc.handle_register_symbol_library(self, params)
 
     def _handle_export_schematic_pdf(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export schematic to PDF"""
