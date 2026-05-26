@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Dict
 
 import sexpdata
 
+from commands.component import ComponentCommands
+from commands.library import LibraryManager as FootprintLibraryManager
 from commands.schematic import SchematicManager
 from commands.wire_manager import WireManager
 
@@ -103,7 +105,7 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             logger.info("Board reloaded from boardPath")
 
         project_path = Path(board_path).parent
-        if project_path != getattr(self, "_current_project_path", None):
+        if project_path != getattr(iface, "_current_project_path", None):
             iface._current_project_path = project_path
             local_lib = FootprintLibraryManager(project_path=project_path)
             iface.component_commands = ComponentCommands(iface.board, local_lib)

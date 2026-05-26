@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
+import pcbnew  # type: ignore[import-not-found]
 import sexpdata
 
 from commands.schematic import SchematicManager
