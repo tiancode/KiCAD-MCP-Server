@@ -34,7 +34,11 @@ See python/handlers/__init__.py for the calling convention.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
