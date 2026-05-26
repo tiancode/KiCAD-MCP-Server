@@ -755,8 +755,7 @@ COMPONENT_TOOLS = [
                 "refs": {
                     "type": "array",
                     "description": (
-                        "Limit the check to these refs (default: every "
-                        "footprint on the board)."
+                        "Limit the check to these refs (default: every " "footprint on the board)."
                     ),
                     "items": {"type": "string"},
                 },
@@ -772,8 +771,7 @@ COMPONENT_TOOLS = [
                 "include_boundary": {
                     "type": "boolean",
                     "description": (
-                        "Also flag courtyards that extend past the board outline "
-                        "(default true)."
+                        "Also flag courtyards that extend past the board outline " "(default true)."
                     ),
                     "default": True,
                 },
@@ -1080,8 +1078,7 @@ ROUTING_TOOLS = [
                 "viaDrill": {
                     "type": "number",
                     "description": (
-                        "Via drill diameter in mm (default 0.3). "
-                        "Must be smaller than viaSize."
+                        "Via drill diameter in mm (default 0.3). " "Must be smaller than viaSize."
                     ),
                     "default": 0.3,
                 },
@@ -1120,9 +1117,7 @@ ROUTING_TOOLS = [
                 },
                 "edgeMargin": {
                     "type": "number",
-                    "description": (
-                        "Keep-out from the board edge in mm. Default 0.5."
-                    ),
+                    "description": ("Keep-out from the board edge in mm. Default 0.5."),
                     "default": 0.5,
                 },
                 "maxVias": {
