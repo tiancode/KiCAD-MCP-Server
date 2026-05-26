@@ -308,7 +308,7 @@ BOARD_TOOLS = [
                         "y": {"type": "number", "description": "Y coordinate"},
                         "unit": {
                             "type": "string",
-                            "enum": ["mm", "inch"],
+                            "enum": ["mm", "mil", "inch"],
                             "default": "mm",
                             "description": "Unit for x/y (default mm)",
                         },
@@ -790,7 +790,7 @@ COMPONENT_TOOLS = [
                         "y2": {"type": "number"},
                         "unit": {
                             "type": "string",
-                            "enum": ["mm", "inch"],
+                            "enum": ["mm", "mil", "inch"],
                             "default": "mm",
                         },
                     },
@@ -1019,7 +1019,7 @@ ROUTING_TOOLS = [
                         "y2": {"type": "number", "description": "Bottom Y coordinate"},
                         "unit": {
                             "type": "string",
-                            "enum": ["mm", "inch"],
+                            "enum": ["mm", "mil", "inch"],
                             "default": "mm",
                         },
                     },

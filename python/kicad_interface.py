@@ -175,19 +175,33 @@ if KICAD_BACKEND in ("auto", "ipc"):
         logger.info(f"IPC backend connection failed: {e}")
         ipc_backend = None
 
+# Always make pcbnew available at module scope.
+#
+# The original logic imported pcbnew only when the SWIG backend was selected,
+# which left ``kicad_interface.pcbnew`` undefined whenever the IPC backend
+# succeeded.  Under unittest.mock that meant ``patch("kicad_interface.pcbnew")``
+# in any subsequent test raised AttributeError — which is what produces the 18
+# "pre-existing" pollution failures the audit surfaced.
+#
+# Importing pcbnew is cheap by itself; the wxApp init cost only triggers on
+# ``pcbnew.GetBuildVersion()``, which still lives in the warm-up handler.
+try:
+    import pcbnew  # type: ignore
+except ImportError:
+    pcbnew = None  # type: ignore[assignment]
+
 # Fall back to SWIG backend if IPC not available
 if not USE_IPC_BACKEND and KICAD_BACKEND != "ipc":
-    # Import KiCAD's Python API (SWIG)
-    try:
-        logger.info("Attempting to import pcbnew module (SWIG backend)...")
-        import pcbnew  # type: ignore
-
+    # SWIG backend selected.  pcbnew was already imported above (or set to None).
+    # If the import failed, this is fatal — emit the same diagnostic the
+    # original sys.exit(1) path produced, then exit.
+    if pcbnew is not None:
         logger.info(f"Successfully imported pcbnew module from: {pcbnew.__file__}")
         # Deferred — GetBuildVersion() triggers 55-65 s wxApp init on macOS.
         # The _warmup handler pays this cost during startup (not on first tool call).
         logger.warning("Using SWIG backend - changes require manual reload in KiCAD UI")
-    except ImportError as e:
-        logger.error(f"Failed to import pcbnew module: {e}")
+    else:
+        logger.error("Failed to import pcbnew module")
         logger.error(f"Current sys.path: {sys.path}")
 
         # Platform-specific help message
@@ -222,21 +236,10 @@ Linux Troubleshooting:
         error_response = {
             "success": False,
             "message": "Failed to import pcbnew module - KiCAD Python API not found",
-            "errorDetails": f"Error: {str(e)}\n\n{help_message}\n\nPython sys.path:\n{chr(10).join(sys.path)}",
+            "errorDetails": f"pcbnew module not on PYTHONPATH\n\n{help_message}\n\nPython sys.path:\n{chr(10).join(sys.path)}",
         }
         print(json.dumps(error_response))
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"Unexpected error importing pcbnew: {e}")
-        logger.error(traceback.format_exc())
-        error_response = {
-            "success": False,
-            "message": "Error importing pcbnew module",
-            "errorDetails": str(e),
-        }
-        print(json.dumps(error_response))
-        sys.exit(1)
-
 # If IPC-only mode requested but not available, exit with error
 elif KICAD_BACKEND == "ipc" and not USE_IPC_BACKEND:
     error_response = {
