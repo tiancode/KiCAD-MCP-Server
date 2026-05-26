@@ -30,7 +30,7 @@ CACHE_DIR = DATA_DIR / "jlcparts_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_URL = "https://yaqwsx.github.io/jlcparts/data"
-MAX_PARTS = 30  # probe up to this many split volumes
+MAX_PARTS = 60  # probe up to this many split volumes
 
 TARGET_DB = DATA_DIR / "jlcpcb_parts.db"
 
