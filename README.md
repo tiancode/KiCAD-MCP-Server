@@ -508,7 +508,10 @@ The script will:
 - Run diagnostics
 
 **Manual Setup:**
-See [Windows Installation Guide](docs/WINDOWS_SETUP.md) for detailed instructions.
+Run `.\setup-windows.ps1` from PowerShell — the script auto-detects your
+KiCAD install, configures Python paths, builds the project, and writes
+your Claude Desktop MCP config. See [Windows Troubleshooting](docs/WINDOWS_TROUBLESHOOTING.md)
+if it fails.
 
 ### macOS
 

@@ -43,23 +43,36 @@ from schemas.tool_schemas import TOOL_SCHEMAS
 
 _annotation_loader = AnnotationLoader()
 
-# Configure logging
-# Try to set up a file handler in ~/.kicad-mcp/logs. If that directory isn't
-# writable (e.g. sandboxed test environments, restricted CI runners), fall
-# back to console-only logging so importing this module never crashes.
+# Configure logging.
+#
+# LOG_LEVEL env var (shared with the TypeScript side via src/server.ts /
+# src/config.ts) drives both layers — defaults to INFO.  Previously this
+# was hardcoded to DEBUG, flooding ~/.kicad-mcp/logs/kicad_interface.log
+# every session and, on the no-write fallback path, dumping DEBUG noise
+# onto stderr where the TS parent re-logs it all as ERROR.
+#
+# Try to set up a file handler in ~/.kicad-mcp/logs. If that directory
+# isn't writable (e.g. sandboxed test environments, restricted CI
+# runners), fall back to stderr-only logging so importing this module
+# never crashes.
+_log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
+_log_format = "%(asctime)s [%(levelname)s] %(message)s"
 try:
     log_dir = os.path.join(os.path.expanduser("~"), ".kicad-mcp", "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, "kicad_interface.log")
     logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        level=_log_level,
+        format=_log_format,
         handlers=[logging.FileHandler(log_file)],
+        force=True,  # override any prior basicConfig (e.g. by upstream imports)
     )
 except (OSError, PermissionError):
     logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        level=_log_level,
+        format=_log_format,
+        force=True,
     )
 logger = logging.getLogger("kicad_interface")
 

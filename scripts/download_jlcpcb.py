@@ -19,7 +19,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "python"))
+# Anchored at the repo root: scripts/.. → /python
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from utils.platform_helper import PlatformHelper  # noqa: E402
 
 DATA_DIR = PlatformHelper.get_data_dir()

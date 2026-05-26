@@ -137,22 +137,24 @@ kicad-mcp-server/
 ├── config/               # Configuration examples
 │   ├── linux-config.example.json
 │   ├── windows-config.example.json
-│   └── macos-config.example.json
+│   ├── macos-config.example.json
+│   └── default-config.json
 ├── docs/                 # Documentation
 ├── python/               # Python interface layer
-│   ├── commands/         # KiCAD command handlers
-│   ├── integrations/     # External API integrations (JLCPCB, Digikey)
-│   ├── utils/            # Utility modules
+│   ├── commands/         # KiCAD command handlers (board, schematic, …)
+│   ├── kicad_api/        # Backend abstraction (SWIG, IPC)
+│   ├── parsers/          # KiCAD file format parsers
+│   ├── schemas/          # JSON Schema definitions
+│   ├── utils/            # Utility modules (platform_helper, kicad_process)
 │   └── kicad_interface.py  # Main Python entry point
 ├── src/                  # TypeScript MCP server
 │   ├── tools/            # MCP tool implementations
 │   ├── resources/        # MCP resource implementations
 │   ├── prompts/          # MCP prompt implementations
 │   └── server.ts         # Main server
-├── tests/                # Test suite
-│   ├── unit/
-│   ├── integration/
-│   └── fixtures/
+├── tests/                # Test suite (flat — pytest discovers test_*.py)
+│   └── fixtures/         # Test fixtures (.kicad_sym, etc.)
+├── scripts/              # One-off maintenance / install helpers
 ├── dist/                 # Compiled JavaScript (generated)
 ├── node_modules/         # Node dependencies (generated)
 ├── package.json          # Node.js configuration
@@ -170,13 +172,14 @@ The KiCAD MCP Server is organized into several key components:
 
 - **TypeScript MCP Server** (`src/`) - Handles MCP protocol communication and tool routing
 - **Python KiCAD Interface** (`python/`) - Interfaces with KiCAD's Python API (pcbnew)
-- **Tool Router** - Organizes 122+ tools into 8 discoverable categories
+- **Tool Router** - Organizes 122 tools into 16 discoverable categories
 - **Resource System** - Provides dynamic project/board state information
 - **Prompt System** - Offers context-aware design prompts
 
-**Current Tool Count:** 122+ tools across 8 categories (direct + routed)
-
-For detailed architecture information, see `docs/ROUTER_ARCHITECTURE.md`.
+**Current Tool Count:** 122 tools across 16 categories (direct + routed).
+See [docs/TOOL_INVENTORY.md](docs/TOOL_INVENTORY.md) for the authoritative
+breakdown and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system
+layering.
 
 ---
 
@@ -405,16 +408,8 @@ We track work using GitHub Projects and Issues:
 - **GitHub Issues** - Specific bugs and features
 - **GitHub Discussions** - Design discussions and proposals
 
-### Current Priorities (Week 1-4)
-
-1. ✅ Linux compatibility fixes
-2. ✅ Platform-agnostic path handling
-3. ✅ CI/CD pipeline setup
-4. 🔄 Migrate to KiCAD IPC API
-5. ⏳ Add JLCPCB integration
-6. ⏳ Add Digikey integration
-
-See [docs/REBUILD_PLAN.md](docs/REBUILD_PLAN.md) for the complete 12-week roadmap.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the current roadmap and
+[CHANGELOG.md](CHANGELOG.md) for what shipped in each release.
 
 ---
 

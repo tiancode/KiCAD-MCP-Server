@@ -7,6 +7,10 @@
 # Schematic manipulation
 kicad-skip>=0.1.0
 
+# S-expression parsing — used by wire_manager, pin_locator, wire_dragger
+# (imported directly even though kicad-skip pulls it transitively)
+sexpdata>=0.0.3
+
 # Image processing for board rendering
 Pillow>=9.0.0
 

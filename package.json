@@ -12,7 +12,7 @@
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
     "test": "npm run test:ts && npm run test:py",
-    "test:ts": "echo 'TypeScript tests not yet configured'",
+    "test:ts": "tsc --noEmit",
     "test:py": "pytest tests/ -v",
     "test:coverage": "pytest tests/ --cov=python --cov-report=html --cov-report=term",
     "lint": "npm run lint:ts && npm run lint:py",

@@ -1,6 +1,6 @@
 /**
- * Quick test of router tool registry
- * Run with: node test-router.js
+ * Quick test of router tool registry.
+ * Run from the repo root: `npm run build && node scripts/test-router.js`
  */
 
 import {
@@ -8,7 +8,7 @@ import {
   searchTools,
   getRegistryStats,
   isDirectTool,
-} from "./dist/tools/registry.js";
+} from "../dist/tools/registry.js";
 
 console.log("=".repeat(70));
 console.log("KICAD MCP ROUTER - TEST");

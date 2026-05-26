@@ -4,7 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { spawn, exec, execSync, ChildProcess } from "child_process";
+import { spawn, execFile, execSync, ChildProcess } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -348,15 +348,18 @@ export class KiCADMcpServer {
         }
       }
     } else {
-      // Command name: verify it's executable via --version test
+      // Command name: verify it's executable via --version test.
+      // Use execFile (no shell) so paths with spaces/$/quotes are passed
+      // verbatim to the OS instead of being parsed by a shell.
       logger.info(`Validating command-based Python executable: ${pythonExe}`);
       try {
         const { stdout } = await new Promise<{
           stdout: string;
           stderr: string;
         }>((resolve, reject) => {
-          exec(
-            `"${pythonExe}" --version`,
+          execFile(
+            pythonExe,
+            ["--version"],
             {
               timeout: 3000,
               env: { ...process.env },
@@ -399,19 +402,20 @@ export class KiCADMcpServer {
       errors.push("Project not built. Run: npm run build");
     }
 
-    // Try to test pcbnew import (quick validation)
+    // Try to test pcbnew import (quick validation).
+    // Use execFile so the Python path and the `-c` snippet are passed as
+    // discrete argv entries — no shell quoting involved.
     if (pythonExecutableAvailable && existsSync(this.kicadScriptPath)) {
       logger.info("Validating pcbnew module access...");
-
-      const testCommand = `"${pythonExe}" -c "import pcbnew; print('OK')"`;
 
       try {
         const { stdout, stderr } = await new Promise<{
           stdout: string;
           stderr: string;
         }>((resolve, reject) => {
-          exec(
-            testCommand,
+          execFile(
+            pythonExe,
+            ["-c", "import pcbnew; print('OK')"],
             {
               timeout: 5000,
               env: { ...process.env },

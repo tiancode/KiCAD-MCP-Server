@@ -7,7 +7,7 @@ on:
     branches: [main, develop]
 
 jobs:
-  # TypeScript/Node.js tests
+  # TypeScript/Node.js build, lint, type-check
   typescript-tests:
     name: TypeScript Build & Test
     runs-on: ${{ matrix.os }}
@@ -32,11 +32,11 @@ jobs:
       - name: Run TypeScript compiler
         run: npm run build
 
-      - name: Run linter
-        run: npm run lint || echo "Linter not configured yet"
+      - name: Run TypeScript linter
+        run: npm run lint:ts
 
-      - name: Run tests
-        run: npm test || echo "Tests not configured yet"
+      - name: Type-check TypeScript tests
+        run: npm run test:ts
 
   # Python tests
   python-tests:
@@ -60,21 +60,21 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov black mypy pylint
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install -r requirements-dev.txt
+          # pcbnew/kipy are KiCAD-bundled and mocked in tests/conftest.py;
+          # requirements-dev.txt covers the rest (incl. kicad-skip, sexpdata).
 
       - name: Run Black formatter check
-        run: black --check python/ || echo "Black not configured yet"
+        run: black --check python/
+
+      - name: Run flake8
+        run: flake8 python/
 
       - name: Run MyPy type checker
-        run: mypy python/ || echo "MyPy not configured yet"
-
-      - name: Run Pylint
-        run: pylint python/ || echo "Pylint not configured yet"
+        run: mypy python/
 
       - name: Run pytest
-        run: pytest python/ --cov=python --cov-report=xml || echo "Tests not configured yet"
+        run: pytest tests/ --cov=python --cov-report=xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -84,69 +84,7 @@ jobs:
           name: python-${{ matrix.python-version }}
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-24.04'
 
-  # Integration tests (requires KiCAD)
-  integration-tests:
-    name: Integration Tests (Linux + KiCAD)
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20.x"
-          cache: "npm"
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Add KiCAD PPA and Install KiCAD 9.0
-        run: |
-          sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
-          sudo apt-get update
-          sudo apt-get install -y kicad kicad-libraries
-
-      - name: Verify KiCAD installation
-        run: |
-          kicad-cli version || echo "kicad-cli not found"
-          python3 -c "import pcbnew; print(f'pcbnew version: {pcbnew.GetBuildVersion()}')" || echo "pcbnew module not found"
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          pip install -r requirements.txt
-
-      - name: Build TypeScript
-        run: npm run build
-
-      - name: Run integration tests
-        run: |
-          echo "Integration tests not yet configured"
-          # pytest tests/integration/
-
-  # Docker build test
-  docker-build:
-    name: Docker Build Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: |
-          echo "Docker build not yet configured"
-          # docker build -t kicad-mcp-server:test .
-
-  # Code quality checks
+  # Code quality checks (lint + format + audit)
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
@@ -164,13 +102,13 @@ jobs:
         run: npm ci
 
       - name: Run ESLint
-        run: npx eslint src/ || echo "ESLint not configured yet"
+        run: npx eslint src/
 
       - name: Run Prettier check
-        run: npx prettier --check "src/**/*.ts" || echo "Prettier not configured yet"
+        run: npx prettier --check "src/**/*.ts"
 
-      - name: Check for security vulnerabilities
-        run: npm audit --audit-level=moderate || echo "No critical vulnerabilities"
+      - name: Check for high-severity vulnerabilities
+        run: npm audit --audit-level=high
 
   # Documentation check
   docs-check:
@@ -184,11 +122,10 @@ jobs:
       - name: Check README exists
         run: test -f README.md
 
-      - name: Check for broken links in docs
-        run: |
-          sudo apt-get install -y linkchecker || true
-          # linkchecker docs/ || echo "Link checker not configured"
-
       - name: Validate JSON files
         run: |
-          find . -name "*.json" -not -path "./node_modules/*" -not -path "./dist/*" | xargs -I {} sh -c 'python3 -m json.tool {} > /dev/null && echo "✓ {}" || echo "✗ {}"'
+          set -e
+          while IFS= read -r f; do
+            python3 -m json.tool "$f" > /dev/null
+            echo "✓ $f"
+          done < <(find . -name "*.json" -not -path "./node_modules/*" -not -path "./dist/*")

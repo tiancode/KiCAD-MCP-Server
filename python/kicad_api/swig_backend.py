@@ -157,9 +157,23 @@ class SWIGBoardAPI(BoardAPI):
             return False
 
     def get_size(self) -> Dict[str, Any]:
-        """Get board size"""
-        # TODO: Implement using existing SWIG code
-        raise NotImplementedError("get_size not yet wrapped")
+        """Get current board size by delegating to BoardCommands.get_board_info,
+        which derives width/height from the board's edge cut bounding box.
+        Returns a {"width", "height", "unit"} dict (mm) or zeros on error."""
+        from commands.board import BoardCommands
+
+        try:
+            info = BoardCommands(board=self._board).get_board_info({})
+            size = info.get("size") if isinstance(info, dict) else None
+            if isinstance(size, dict) and "width" in size and "height" in size:
+                return {
+                    "width": size["width"],
+                    "height": size["height"],
+                    "unit": size.get("unit", "mm"),
+                }
+        except Exception as e:  # noqa: BLE001 — surface failure as zeros + log
+            logger.error(f"get_size failed: {e}")
+        return {"width": 0.0, "height": 0.0, "unit": "mm"}
 
     def add_layer(self, layer_name: str, layer_type: str) -> bool:
         """Add layer using existing implementation"""
@@ -214,5 +228,7 @@ class SWIGBoardAPI(BoardAPI):
             return False
 
 
-# This backend serves as a wrapper during the migration period.
-# Once IPC backend is fully implemented, this can be deprecated.
+# SWIG-only wrapper retained for backwards compatibility during the IPC
+# migration.  See the module docstring above — this is already deprecated;
+# the file will be removed once the IPC backend covers every operation
+# currently dispatched through SWIG.
