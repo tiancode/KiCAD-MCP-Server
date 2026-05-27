@@ -309,6 +309,10 @@ export class KiCADMcpServer {
   private startupBuffer: string = "";
   /** True after READY marker detected; persistent handler takes over. */
   private readyDetected: boolean = false;
+  /** Cached so respawn doesn't re-run the (expensive) discovery + checks. */
+  private pythonExe: string | null = null;
+  /** Shared promise for concurrent respawn requests — see ensurePythonProcess. */
+  private spawnInFlight: Promise<void> | null = null;
 
   /**
    * Constructor for the KiCAD MCP Server
@@ -562,88 +566,13 @@ export class KiCADMcpServer {
     try {
       logger.info("Starting KiCAD MCP server...");
 
-      // Start the Python process for KiCAD scripting
-      logger.info(`Starting Python process with script: ${this.kicadScriptPath}`);
-      const pythonExe = findPythonExecutable(this.kicadScriptPath);
-
-      logger.info(`Using Python executable: ${pythonExe}`);
-
-      // Validate prerequisites
-      const isValid = await this.validatePrerequisites(pythonExe);
-      if (!isValid) {
-        throw new Error("Prerequisites validation failed. See logs above for details.");
-      }
-      // Inherit the caller's environment unmodified.  PYTHONPATH detection is
-      // owned by python/utils/platform_helper.py at the child's import time —
-      // hard-coding a Windows fallback here leaked an invalid path into the
-      // subprocess on Linux/macOS.
-      this.pythonProcess = spawn(pythonExe, [this.kicadScriptPath], {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: process.env,
-      });
-
-      // Listen for process exit
-      this.pythonProcess.on("exit", (code, signal) => {
-        logger.warn(`Python process exited with code ${code} and signal ${signal}`);
-        this.pythonProcess = null;
-      });
-
-      // Listen for process errors
-      this.pythonProcess.on("error", (err) => {
-        logger.error(`Python process error: ${err.message}`);
-      });
-
-      // Set up error logging for stderr
-      if (this.pythonProcess.stderr) {
-        this.pythonProcess.stderr.on("data", (data: Buffer) => {
-          logger.error(`Python stderr: ${data.toString()}`);
-        });
-      }
-
-      // ——— Phase 1: stdout handler that detects the READY marker ———
-      // Before Python reaches main() it may spend 55-65 s on wxApp init.
-      // The stdin loop is only live after main() prints {"type":"ready"}.
-      // Until then we buffer everything and scan for that exact JSON line.
-      if (this.pythonProcess.stdout) {
-        this.pythonProcess.stdout.on("data", (data: Buffer) => {
-          if (this.readyDetected) {
-            // Persistent handler (post-warm-up)
-            this.handlePythonResponse(data);
-          } else {
-            this.startupBuffer += data.toString();
-            const lines = this.startupBuffer.split("\n");
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i].trim();
-              if (!line) continue;
-              try {
-                const obj = JSON.parse(line);
-                if (obj.type === "ready") {
-                  logger.info("Python process READY — stdin loop is live");
-                  this.readyDetected = true;
-                  // Replay any remaining buffered lines through the persistent handler
-                  const remaining = lines.slice(i + 1).join("\n");
-                  if (remaining.trim()) {
-                    this.handlePythonResponse(Buffer.from(remaining));
-                  }
-                  this.resolveReady();
-                  return;
-                }
-              } catch {
-                // Not valid JSON yet; keep buffering
-              }
-            }
-          }
-        });
-      }
-
-      // ——— Phase 2: wait for Python READY, then send warm-up ———
-      logger.info("Waiting for Python process to be ready...");
-      await this.waitForReady(120_000);
-      logger.info("Python process is ready. Sending warm-up command...");
-      await this.runWarmup(120_000);
-      logger.info("Warm-up complete — pcbnew/wxApp initialised");
+      await this.ensurePythonProcess();
 
       // ——— Phase 3: only now connect to MCP transport ———
+      // Transport binding is one-shot (the MCP SDK doesn't support re-connect
+      // and we don't need to — respawning Python doesn't drop the TS-side
+      // server).  This step lives in start() and intentionally NOT in
+      // ensurePythonProcess() so subsequent respawns don't try to re-bind.
       logger.info("Connecting MCP server to STDIO transport...");
       try {
         await this.server.connect(this.stdioTransport);
@@ -661,6 +590,163 @@ export class KiCADMcpServer {
       logger.error(`Failed to start KiCAD MCP server: ${error}`);
       throw error;
     }
+  }
+
+  /**
+   * Idempotent Python-subprocess lifecycle:
+   *   - alive → return immediately.
+   *   - a respawn is already in flight → join that promise.
+   *   - dead/never-started → spawn, wait for READY, run warm-up.
+   *
+   * Called from start() at server boot AND from callKicadScript() before
+   * every request.  The second path is the recovery hook the user asked
+   * for: when KiCad gets pkill'd and the Python child dies with it (their
+   * cmdline often matches `pkill -f kicad`), the next tool call lifts a
+   * fresh Python process instead of returning "Python process for KiCAD
+   * scripting is not running" forever.
+   */
+  private async ensurePythonProcess(): Promise<void> {
+    if (this.pythonProcess) return;
+    if (this.spawnInFlight) return this.spawnInFlight;
+    this.spawnInFlight = this.spawnPythonProcess().finally(() => {
+      this.spawnInFlight = null;
+    });
+    return this.spawnInFlight;
+  }
+
+  /** Spawn + warm-up.  Always invoked through ensurePythonProcess. */
+  private async spawnPythonProcess(): Promise<void> {
+    // Fail any pending work attached to the previous (now-dead) Python so
+    // the caller hears about it fast instead of timing out at 30 s / 10 min.
+    this.drainQueueForRespawn(new Error("Python process exited; respawning"));
+
+    // Reset per-spawn state so the new process starts from a clean slate.
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
+    });
+    this.startupBuffer = "";
+    this.readyDetected = false;
+    this.responseBuffer = "";
+
+    logger.info(`Starting Python process with script: ${this.kicadScriptPath}`);
+    if (!this.pythonExe) {
+      this.pythonExe = findPythonExecutable(this.kicadScriptPath);
+      logger.info(`Using Python executable: ${this.pythonExe}`);
+      const isValid = await this.validatePrerequisites(this.pythonExe);
+      if (!isValid) {
+        throw new Error("Prerequisites validation failed. See logs above for details.");
+      }
+    } else {
+      // Respawn — skip the discovery + prerequisites probe (the file paths
+      // and bundled pcbnew haven't moved since boot).  Saves ~150-300 ms.
+      logger.info(`Respawning Python with cached executable: ${this.pythonExe}`);
+    }
+
+    // Inherit the caller's environment unmodified.  PYTHONPATH detection is
+    // owned by python/utils/platform_helper.py at the child's import time —
+    // hard-coding a Windows fallback here leaked an invalid path into the
+    // subprocess on Linux/macOS.
+    this.pythonProcess = spawn(this.pythonExe, [this.kicadScriptPath], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
+
+    // Listen for process exit
+    this.pythonProcess.on("exit", (code, signal) => {
+      logger.warn(`Python process exited with code ${code} and signal ${signal}`);
+      this.pythonProcess = null;
+      // Fail in-flight + queued requests immediately rather than waiting
+      // for the per-command timeout.  The next callKicadScript will then
+      // respawn the process via ensurePythonProcess.
+      this.drainQueueForRespawn(
+        new Error(
+          `Python process exited (code=${code}, signal=${signal}). ` +
+            "The next MCP tool call will respawn it automatically.",
+        ),
+      );
+    });
+
+    // Listen for process errors
+    this.pythonProcess.on("error", (err) => {
+      logger.error(`Python process error: ${err.message}`);
+    });
+
+    // Set up error logging for stderr
+    if (this.pythonProcess.stderr) {
+      this.pythonProcess.stderr.on("data", (data: Buffer) => {
+        logger.error(`Python stderr: ${data.toString()}`);
+      });
+    }
+
+    // ——— Phase 1: stdout handler that detects the READY marker ———
+    // Before Python reaches main() it may spend 55-65 s on wxApp init.
+    // The stdin loop is only live after main() prints {"type":"ready"}.
+    // Until then we buffer everything and scan for that exact JSON line.
+    if (this.pythonProcess.stdout) {
+      this.pythonProcess.stdout.on("data", (data: Buffer) => {
+        if (this.readyDetected) {
+          // Persistent handler (post-warm-up)
+          this.handlePythonResponse(data);
+        } else {
+          this.startupBuffer += data.toString();
+          const lines = this.startupBuffer.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            try {
+              const obj = JSON.parse(line);
+              if (obj.type === "ready") {
+                logger.info("Python process READY — stdin loop is live");
+                this.readyDetected = true;
+                // Replay any remaining buffered lines through the persistent handler
+                const remaining = lines.slice(i + 1).join("\n");
+                if (remaining.trim()) {
+                  this.handlePythonResponse(Buffer.from(remaining));
+                }
+                this.resolveReady();
+                return;
+              }
+            } catch {
+              // Not valid JSON yet; keep buffering
+            }
+          }
+        }
+      });
+    }
+
+    // ——— Phase 2: wait for Python READY, then send warm-up ———
+    logger.info("Waiting for Python process to be ready...");
+    await this.waitForReady(120_000);
+    logger.info("Python process is ready. Sending warm-up command...");
+    await this.runWarmup(120_000);
+    logger.info("Warm-up complete — pcbnew/wxApp initialised");
+  }
+
+  /**
+   * Fail every pending request (in-flight + queued) with ``err``.
+   *
+   * Called when the Python process dies so callers don't wait for the
+   * per-command timeout.  Also called at the head of spawnPythonProcess
+   * defensively — a clean queue going into the new Python means no
+   * stale state leaks across the death boundary.
+   */
+  private drainQueueForRespawn(err: Error): void {
+    if (this.currentRequestHandler) {
+      try {
+        clearTimeout(this.currentRequestHandler.timeoutHandle);
+      } catch {
+        // Already cleared / not a real handle — best-effort cleanup.
+      }
+      this.currentRequestHandler.reject(err);
+      this.currentRequestHandler = null;
+    }
+    while (this.requestQueue.length > 0) {
+      const item = this.requestQueue.shift();
+      if (item) item.reject(err);
+    }
+    this.processingRequest = false;
+    this.responseBuffer = "";
   }
 
   /**
@@ -765,10 +851,28 @@ export class KiCADMcpServer {
    * @returns The result of the command execution
    */
   private async callKicadScript(command: string, params: any): Promise<any> {
+    // If Python died (KiCad pkill'd, host OOM, manual kill...), bring it
+    // back up before queuing.  Awaited outside the queue Promise so a
+    // respawn failure surfaces as a clean rejection instead of a hung
+    // promise inside the queue handler.
+    if (!this.pythonProcess) {
+      logger.info(
+        `Python process is not running — respawning before dispatching '${command}'`,
+      );
+      try {
+        await this.ensurePythonProcess();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Failed to respawn Python process: ${msg}`);
+        throw new Error(
+          `Python process for KiCAD scripting could not be respawned: ${msg}`,
+        );
+      }
+    }
+
     return new Promise((resolve, reject) => {
-      // Check if Python process is running
+      // Race condition guard: respawn could have raced with another exit.
       if (!this.pythonProcess) {
-        logger.error("Python process is not running");
         reject(new Error("Python process for KiCAD scripting is not running"));
         return;
       }
