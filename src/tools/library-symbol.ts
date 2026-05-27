@@ -50,13 +50,28 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: F
 Searches by: symbol name, LCSC ID, description, manufacturer, MPN, category.
 Use this to find components already in your local libraries (e.g., JLCPCB-KiCad-Library).
 
+Two query forms:
+  - "Name"           — fuzzy match across all libraries (e.g. "LED", "ESP32", "C8734").
+  - "Library:Name"   — restrict to libraries whose nickname contains 'Library'
+                        (e.g. "Device:LED", "Device:R", "JLCPCB:STM32F103").
+
+Exact-name matches always rank above description-substring matches, so
+"LED" returns Device:LED first, not the 60-odd parts whose description
+contains "led" as a substring of "settled" / "controlled".
+
 Returns symbol references that can be used directly in schematics.`,
     {
-      query: z.string().describe("Search query (e.g., 'ESP32', 'STM32F103', 'C8734' for LCSC ID)"),
+      query: z
+        .string()
+        .describe(
+          "Search query. Plain ('ESP32', 'C8734') or library-qualified ('Device:LED', 'Device:R').",
+        ),
       library: z
         .string()
         .optional()
-        .describe("Optional: filter to specific library name pattern (e.g., 'JLCPCB')"),
+        .describe(
+          "Optional: filter to a specific library name pattern (e.g. 'JLCPCB'). Takes precedence over an inline 'Library:' prefix in the query.",
+        ),
       limit: z.number().optional().default(20).describe("Maximum number of results to return"),
       projectPath: z
         .string()
@@ -68,12 +83,17 @@ Returns symbol references that can be used directly in schematics.`,
     async (args: { query: string; library?: string; limit?: number; projectPath?: string }) => {
       const result = await callKicadScript("search_symbols", args);
       if (result.success && result.symbols) {
+        const interp = result.interpretation
+          ? `(parsed as library=${result.interpretation.library!}, name=${result.interpretation.name!})\n`
+          : "";
+        const warning = result.warning ? `\n⚠ ${result.warning}` : "";
+
         if (result.symbols.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: `No symbols found matching "${args.query}"${args.library ? ` in libraries matching "${args.library}"` : ""}`,
+                text: `No symbols found matching "${args.query}"${args.library ? ` in libraries matching "${args.library}"` : ""}\n${interp}${warning}`.trimEnd(),
               },
             ],
           };
@@ -93,7 +113,7 @@ Returns symbol references that can be used directly in schematics.`,
           content: [
             {
               type: "text",
-              text: `Found ${result.count} symbols matching "${args.query}":\n\n${symbolList}`,
+              text: `Found ${result.count} symbols matching "${args.query}":\n${interp}\n${symbolList}${warning}`,
             },
           ],
         };

@@ -12,7 +12,7 @@ import pickle
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("kicad_interface")
 
@@ -623,46 +623,90 @@ class SymbolLibraryManager:
         self._cache_dirty = True
         return symbols
 
+    def split_library_qualifier(self, query: str) -> Tuple[str, Optional[str]]:
+        """Split a ``"Library:Name"`` query into ``(name_part, library_prefix)``.
+
+        Returns the library prefix only when it actually matches at least
+        one library nickname (case-insensitive substring) — otherwise the
+        colon is treated as part of the literal query so unrelated inputs
+        like ``"LM358:DR"`` keep their old behavior.
+
+        Returns ``(query, None)`` when there's no colon, when either side
+        is empty, or when the left side doesn't match any known library.
+        """
+        if ":" not in query:
+            return query, None
+        left, _, right = query.partition(":")
+        left = left.strip()
+        right = right.strip()
+        if not left or not right:
+            return query, None
+        left_lower = left.lower()
+        if not any(left_lower in nickname.lower() for nickname in self.libraries):
+            return query, None
+        return right, left
+
     def search_symbols(
         self, query: str, limit: int = 20, library_filter: Optional[str] = None
     ) -> List[SymbolInfo]:
+        """Search for symbols matching a query.
+
+        Supports two query forms:
+
+          - ``"Name"`` — fuzzy match `Name` against symbol name / value /
+            description / LCSC ID / MPN in every library (subject to
+            ``library_filter``).
+          - ``"Library:Name"`` — same fuzzy match against `Name`,
+            restricted to libraries whose nickname contains `Library`
+            (case-insensitive).  This is the path the agent uses when it
+            already knows the library; without parsing the colon the
+            query never matches anything because no field contains a
+            literal ``:``.
+
+        ``library_filter`` (an explicit argument) takes precedence over
+        an inline ``Library:`` prefix.
+
+        Scoring keeps exact-name matches at score 500, far above the
+        score-50 description-substring band, so ``query="LED"`` finds
+        ``Device:LED`` rather than 60 ``74LSxxx`` parts whose description
+        happens to contain "led" as a substring of "controlled" /
+        "settled" / "compiled".  The previous early-break (``if
+        len(results) >= limit * 3: break``) short-circuited on the first
+        library that accumulated that many fuzzy hits, so the high-score
+        exact-name match in a later library was never reached.  In-memory
+        cache makes the full scan fast.
         """
-        Search for symbols matching a query
-
-        Args:
-            query: Search query (matches name, LCSC ID, description, category, manufacturer)
-            limit: Maximum number of results to return
-            library_filter: Optional library name pattern to filter by
-
-        Returns:
-            List of SymbolInfo objects sorted by relevance
-        """
-        results = []
-        query_lower = query.lower()
-
-        # Determine which libraries to search
-        libraries_to_search: list[str] = list(self.libraries.keys())
         if library_filter:
-            filter_lower = library_filter.lower()
-            libraries_to_search = [
-                lib for lib in libraries_to_search if filter_lower in lib.lower()
-            ]
+            name_query: str = query
+            prefix_library: Optional[str] = None
+        else:
+            name_query, prefix_library = self.split_library_qualifier(query)
+        effective_library = library_filter or prefix_library
 
+        query_lower = name_query.lower()
+        if not query_lower:
+            return []
+
+        libraries_to_search: list[str] = list(self.libraries.keys())
+        if effective_library:
+            filter_lower = effective_library.lower()
+            # Prefer an exact nickname match when one exists — otherwise
+            # "Device" would also pull in "Device_2" / "Device_Extras",
+            # silently widening the result set.
+            exact = [lib for lib in libraries_to_search if lib.lower() == filter_lower]
+            libraries_to_search = (
+                exact
+                if exact
+                else [lib for lib in libraries_to_search if filter_lower in lib.lower()]
+            )
+
+        results: List[Tuple[int, SymbolInfo]] = []
         for library_nickname in libraries_to_search:
-            symbols = self.list_symbols(library_nickname)
-
-            for symbol in symbols:
+            for symbol in self.list_symbols(library_nickname):
                 score = self._score_match(query_lower, symbol)
                 if score > 0:
                     results.append((score, symbol))
 
-                    if len(results) >= limit * 3:  # Get extra for sorting
-                        break
-
-            if len(results) >= limit * 3:
-                break
-
-        # Sort by score (descending) and return top results
         results.sort(key=lambda x: x[0], reverse=True)
         return [symbol for _, symbol in results[:limit]]
 
@@ -833,9 +877,7 @@ class SymbolLibraryCommands:
         if project is not None:
             self.use_project(project)
         if self._table_changed():
-            logger.info(
-                "sym-lib-table mtime changed; rebuilding SymbolLibraryManager"
-            )
+            logger.info("sym-lib-table mtime changed; rebuilding SymbolLibraryManager")
             self.library_manager = SymbolLibraryManager(
                 project_path=self.library_manager.project_path
             )
@@ -851,9 +893,7 @@ class SymbolLibraryCommands:
             self.library_manager = SymbolLibraryManager(project_path=project)
             self._last_table_signature = self.library_manager.table_signature()
             libraries = self.library_manager.list_libraries()
-            fallback = sorted(
-                getattr(self.library_manager, "_fallback_library_nicknames", set())
-            )
+            fallback = sorted(getattr(self.library_manager, "_fallback_library_nicknames", set()))
             result: Dict = {
                 "success": True,
                 "message": f"Rebuilt symbol library index ({len(libraries)} libraries)",
@@ -877,9 +917,7 @@ class SymbolLibraryCommands:
         try:
             self._ensure_manager_for(params)
             libraries = self.library_manager.list_libraries()
-            fallback = sorted(
-                getattr(self.library_manager, "_fallback_library_nicknames", set())
-            )
+            fallback = sorted(getattr(self.library_manager, "_fallback_library_nicknames", set()))
             result: Dict = {
                 "success": True,
                 "libraries": libraries,
@@ -918,7 +956,16 @@ class SymbolLibraryCommands:
             }
 
     def search_symbols(self, params: Dict) -> Dict:
-        """Search for symbols by query"""
+        """Search for symbols by query.
+
+        Recognizes both ``"Name"`` and ``"Library:Name"`` query forms; the
+        latter restricts the search to libraries whose nickname contains
+        ``Library`` (case-insensitive).  The response includes an
+        ``interpretation`` field whenever the colon syntax was detected
+        or the library filter narrowed the search, so the agent can
+        confirm the parse matched what it intended without first calling
+        ``list_symbol_libraries``.
+        """
         try:
             query = params.get("query", "")
             if not query:
@@ -929,14 +976,51 @@ class SymbolLibraryCommands:
             limit = params.get("limit", 20)
             library_filter = params.get("library")
 
+            interpreted_name = query
+            interpreted_library: Optional[str] = library_filter
+            if not library_filter:
+                interpreted_name, prefix = self.library_manager.split_library_qualifier(query)
+                if prefix is not None:
+                    interpreted_library = prefix
+
             results = self.library_manager.search_symbols(query, limit, library_filter)
 
-            return {
+            response: Dict = {
                 "success": True,
                 "symbols": [asdict(s) for s in results],
                 "count": len(results),
                 "query": query,
             }
+
+            if interpreted_library and interpreted_library != library_filter:
+                # Colon prefix was parsed — tell the agent so they can
+                # tell whether the parse matched what they meant.
+                response["interpretation"] = {
+                    "parsedAs": "library:name",
+                    "library": interpreted_library,
+                    "name": interpreted_name,
+                }
+            if interpreted_library:
+                filter_lower = interpreted_library.lower()
+                matched_libs = [
+                    lib
+                    for lib in self.library_manager.libraries
+                    if lib.lower() == filter_lower or filter_lower in lib.lower()
+                ]
+                if not matched_libs:
+                    # Loud hint when the filter / prefix excluded
+                    # everything — otherwise an empty result looks like
+                    # "the symbol doesn't exist" when the real cause is
+                    # an unknown library name.
+                    sample = list(self.library_manager.libraries.keys())[:10]
+                    response["warning"] = (
+                        f"No library nickname matches {interpreted_library!r}. "
+                        f"Loaded {len(self.library_manager.libraries)} libraries; "
+                        f"sample: {sample}. "
+                        f"Call list_symbol_libraries to see all names."
+                    )
+
+            return response
         except Exception as e:
             import traceback as _tb
 

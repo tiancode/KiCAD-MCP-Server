@@ -264,3 +264,219 @@ class TestSymbolDiskCache:
 
         assert parse_calls["count"] == 0, "warm disk cache must serve without parsing"
         assert len(symbols) > 0
+
+
+# ---------------------------------------------------------------------------
+# search_symbols: colon-prefix parsing + exact-name-beats-description ranking
+# ---------------------------------------------------------------------------
+
+
+def _make_synthetic_manager(library_contents):
+    """Build a SymbolLibraryManager whose libraries serve canned SymbolInfo
+    lists with no disk I/O.  list_symbols is monkey-patched on the
+    instance so the mtime/cache plumbing is bypassed."""
+    from commands.library_symbol import SymbolInfo, SymbolLibraryManager  # noqa: F401
+
+    manager = SymbolLibraryManager.__new__(SymbolLibraryManager)
+    manager.project_path = None
+    manager.libraries = {nickname: f"/fake/{nickname}.kicad_sym" for nickname in library_contents}
+    manager.symbol_cache = dict(library_contents)
+    manager._cache_mtimes = {}
+    manager._cache_dirty = False
+
+    def _list(nickname):
+        return library_contents.get(nickname, [])
+
+    manager.list_symbols = _list  # type: ignore[method-assign]
+    return manager
+
+
+def _info(name, library, description="", value=""):
+    from commands.library_symbol import SymbolInfo
+
+    return SymbolInfo(
+        name=name,
+        library=library,
+        full_ref=f"{library}:{name}",
+        value=value,
+        description=description,
+    )
+
+
+@pytest.mark.unit
+class TestSearchSymbolsColonSyntax:
+    """Regression for 'search_symbols 关键词匹配严重错乱' — Library:Symbol
+    queries used to silently return 0 because the colon never appears in
+    any scored field, and short queries like 'LED' got buried under
+    description-substring hits."""
+
+    def test_library_colon_name_query_finds_exact_symbol(self):
+        manager = _make_synthetic_manager(
+            {
+                "Device": [_info("LED", "Device", description="Light emitting diode")],
+                "Amplifier_Audio": [
+                    _info("SSM2018", "Amplifier_Audio", description="Audio level controlled amp"),
+                ],
+            }
+        )
+
+        results = manager.search_symbols("Device:LED")
+
+        assert [s.full_ref for s in results] == [
+            "Device:LED"
+        ], "Library:Symbol query must find the exact symbol in the named library"
+
+    def test_library_colon_short_name_query_restricts_search(self):
+        """`Device:R` should return Device:R, not 200 substring matches."""
+        manager = _make_synthetic_manager(
+            {
+                "Device": [
+                    _info("R", "Device", description="Resistor"),
+                    _info("C", "Device", description="Capacitor"),
+                ],
+                "Amplifier_Audio": [
+                    _info("SSM2018", "Amplifier_Audio", description="quaR-something"),
+                    # noise that would substring-match 'r' in description
+                ],
+            }
+        )
+
+        results = manager.search_symbols("Device:R")
+        names = [s.full_ref for s in results]
+        assert "Device:R" in names
+        # Must not include the Amplifier_Audio noise — it's outside the
+        # library filter, regardless of how the score sorts.
+        assert all(s.library == "Device" for s in results)
+
+    def test_split_library_qualifier_falls_back_when_prefix_unknown(self):
+        """`LM358:DR` must NOT be reinterpreted as library=LM358 — there
+        is no such library.  The whole query passes through as a fuzzy
+        name search (which finds nothing here, matching the historical
+        behavior for inputs that happen to contain ':')."""
+        manager = _make_synthetic_manager({"Device": [_info("R", "Device")]})
+
+        name, prefix = manager.split_library_qualifier("LM358:DR")
+
+        assert name == "LM358:DR"
+        assert prefix is None
+
+    def test_exact_name_match_beats_description_substring(self):
+        """`LED` query must return Device:LED first, not the description-
+        substring noise that used to fill the limit*3 budget before the
+        exact match was reached.  This is the early-break regression."""
+        # Inject a library whose name iterates BEFORE 'Device' in dict
+        # order, packed with description-substring hits.  Dict insertion
+        # order is preserved in Python 3.7+, so this faithfully
+        # reproduces the production iteration order.
+        noisy_lib = [
+            _info(f"74LS{i:03d}", "Logic_TTL", description="controlled flip-flop with led pin")
+            for i in range(80)
+        ]
+        manager = _make_synthetic_manager(
+            {
+                "Logic_TTL": noisy_lib,
+                "Device": [_info("LED", "Device", description="Light emitting diode")],
+            }
+        )
+
+        results = manager.search_symbols("LED", limit=20)
+
+        names = [s.full_ref for s in results]
+        assert "Device:LED" in names, (
+            "Exact-name match must be returned; previously the early-break "
+            "consumed the budget on Logic_TTL description-substring hits "
+            "and never reached the Device library."
+        )
+        # The exact match must come first (score 500 vs score 50).
+        assert names[0] == "Device:LED"
+
+    def test_explicit_library_filter_wins_over_inline_prefix(self):
+        """`query='Device:LED' library='Amplifier_Audio'` must search
+        Amplifier_Audio for the literal 'Device:LED' (which never
+        matches), NOT search Device for 'LED'."""
+        manager = _make_synthetic_manager(
+            {
+                "Device": [_info("LED", "Device", description="Light emitting diode")],
+                "Amplifier_Audio": [_info("Device:LED", "Amplifier_Audio")],
+            }
+        )
+
+        results = manager.search_symbols("Device:LED", library_filter="Amplifier_Audio")
+
+        # The explicit filter wins; the colon stays part of the literal query.
+        assert all(s.library == "Amplifier_Audio" for s in results)
+
+    def test_exact_nickname_match_preferred_over_substring(self):
+        """`Device:R` must hit the library named exactly `Device`, not
+        also pull in `Device_Extras` / `Device_2` which would silently
+        widen the result set."""
+        manager = _make_synthetic_manager(
+            {
+                "Device": [_info("R", "Device", description="Resistor")],
+                "Device_Extras": [_info("R_packarray", "Device_Extras")],
+            }
+        )
+
+        results = manager.search_symbols("Device:R")
+
+        assert all(s.library == "Device" for s in results)
+
+
+@pytest.mark.unit
+class TestSearchSymbolsHandlerInterpretation:
+    """The handler must surface the parsed library/name so agents can
+    confirm the colon parse matched what they meant — without that, an
+    unhelpful 0-result response looks like 'symbol doesn't exist' even
+    when the real cause is a typo in the library prefix."""
+
+    def test_response_includes_interpretation_when_colon_parsed(self):
+        from commands.library_symbol import SymbolLibraryCommands
+
+        cmds = SymbolLibraryCommands.__new__(SymbolLibraryCommands)
+        cmds.library_manager = _make_synthetic_manager(
+            {"Device": [_info("LED", "Device", description="Light emitting diode")]}
+        )
+        cmds._ensure_manager_for = lambda params: None  # type: ignore[attr-defined]
+
+        response = cmds.search_symbols({"query": "Device:LED"})
+
+        assert response["success"] is True
+        assert response["count"] == 1
+        assert response["interpretation"] == {
+            "parsedAs": "library:name",
+            "library": "Device",
+            "name": "LED",
+        }
+
+    def test_response_warns_when_library_filter_matches_nothing(self):
+        from commands.library_symbol import SymbolLibraryCommands
+
+        cmds = SymbolLibraryCommands.__new__(SymbolLibraryCommands)
+        cmds.library_manager = _make_synthetic_manager(
+            {"Device": [_info("LED", "Device", description="Light emitting diode")]}
+        )
+        cmds._ensure_manager_for = lambda params: None  # type: ignore[attr-defined]
+
+        response = cmds.search_symbols({"query": "LED", "library": "NoSuchLibrary"})
+
+        assert response["success"] is True
+        assert response["count"] == 0
+        assert "warning" in response
+        assert "NoSuchLibrary" in response["warning"]
+        assert "list_symbol_libraries" in response["warning"]
+
+    def test_response_has_no_interpretation_for_plain_query(self):
+        """Plain 'ESP32'-style queries shouldn't gain noise fields."""
+        from commands.library_symbol import SymbolLibraryCommands
+
+        cmds = SymbolLibraryCommands.__new__(SymbolLibraryCommands)
+        cmds.library_manager = _make_synthetic_manager(
+            {"Device": [_info("LED", "Device", description="Light emitting diode")]}
+        )
+        cmds._ensure_manager_for = lambda params: None  # type: ignore[attr-defined]
+
+        response = cmds.search_symbols({"query": "LED"})
+
+        assert response["success"] is True
+        assert "interpretation" not in response
+        assert "warning" not in response
