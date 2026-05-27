@@ -478,15 +478,57 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         }
 
 
+_LABEL_PIN_CONNECT_TOLERANCE_MM = 0.0001  # KiCad's internal-unit precision (0.1 µm)
+
+
+def _scan_all_pin_positions(schematic_path: Any) -> List[Dict[str, Any]]:
+    """Return every (ref, pin_number, [x_mm, y_mm]) on the schematic."""
+    from pathlib import Path
+
+    from commands.pin_locator import PinLocator
+    from skip import Schematic as SkipSchematic
+
+    sch_path = Path(schematic_path)
+    locator = PinLocator()
+    sch = SkipSchematic(str(sch_path))
+    pins: List[Dict[str, Any]] = []
+    for symbol in getattr(sch, "symbol", []):
+        if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+            continue
+        ref = symbol.property.Reference.value
+        if ref.startswith("_TEMPLATE"):
+            continue
+        try:
+            pin_locs = locator.get_all_symbol_pins(sch_path, ref)
+        except Exception:
+            continue
+        for pin_num, coords in pin_locs.items():
+            pins.append({"ref": ref, "pin": str(pin_num), "coords": list(coords)})
+    return pins
+
+
 def handle_add_schematic_net_label(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Add a net label to schematic using WireManager.
 
-    When componentRef and pinNumber are supplied the label is placed at the
-    exact pin endpoint retrieved via PinLocator, ignoring the provided
-    position.  The response includes the actual coordinates used and
-    whether the label landed on a pin endpoint.
+    Three placement modes:
+
+    * ``componentRef`` + ``pinNumber`` (preferred): snap to the exact pin
+      endpoint via PinLocator.  The response reports ``snapped_to_pin``.
+    * raw ``position``: by default the label is snapped onto the nearest
+      pin within ``snapTolerance`` mm (default 0.05 mm) so caller-side
+      float imprecision doesn't silently break the electrical
+      connection.  When no pin is within tolerance the raw coordinates
+      are used unchanged.
+    * raw ``position`` with ``snapTolerance: 0``: opt-out of pin
+      snapping entirely; useful for labels that intentionally float
+      between pins.
+
+    Either way the response carries ``connected_to_pin`` (the pin the
+    final coordinates actually land on at KiCad's electrical-grid
+    precision, or ``None`` for a free-floating label) so the caller can
+    verify the electrical connection without running ERC.
     """
     logger.info("Adding net label to schematic")
     try:
@@ -501,6 +543,7 @@ def handle_add_schematic_net_label(
         orientation = params.get("orientation", 0)
         component_ref = params.get("componentRef")
         pin_number = params.get("pinNumber")
+        snap_tolerance = float(params.get("snapTolerance", 0.05))
 
         if not all([schematic_path, net_name]):
             return {
@@ -509,6 +552,9 @@ def handle_add_schematic_net_label(
             }
 
         snapped_to_pin: Optional[Dict[str, Any]] = None
+        requested_position: Optional[List[float]] = (
+            list(position) if isinstance(position, (list, tuple)) else None
+        )
 
         if component_ref and pin_number:
             # Snap position to exact pin endpoint using PinLocator
@@ -537,6 +583,40 @@ def handle_add_schematic_net_label(
                     "componentRef + pinNumber to snap to a pin endpoint."
                 ),
             }
+        elif snap_tolerance > 0:
+            # Raw position given; auto-snap to the nearest pin within
+            # snapTolerance mm.  This is the safety net for callers that
+            # compute pin coords with float imprecision — KiCad treats a
+            # 0.01 mm offset as electrically disconnected.
+            try:
+                all_pins = _scan_all_pin_positions(schematic_path)
+            except Exception as e:
+                logger.debug(f"Pin scan for label snap failed: {e}")
+                all_pins = []
+            best = None
+            best_dist = snap_tolerance
+            for entry in all_pins:
+                coords = entry["coords"]
+                dx = float(position[0]) - float(coords[0])
+                dy = float(position[1]) - float(coords[1])
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist <= best_dist:
+                    best_dist = dist
+                    best = entry
+            if best is not None and best_dist > _LABEL_PIN_CONNECT_TOLERANCE_MM:
+                # Near-miss: snap onto the actual pin coords so the
+                # electrical connection forms.  Skip when already on the
+                # endpoint (dist=0 stays unchanged).
+                position = list(best["coords"])
+                snapped_to_pin = {
+                    "component": best["ref"],
+                    "pin": best["pin"],
+                    "snap_distance_mm": best_dist,
+                }
+                logger.info(
+                    f"Auto-snapped label '{net_name}' from {requested_position} to "
+                    f"{best['ref']}/{best['pin']} at {position} (Δ={best_dist:.4f} mm)"
+                )
 
         # Collect existing net names BEFORE adding the new label so we can
         # detect case-mismatch collisions against pre-existing nets only.
@@ -577,16 +657,41 @@ def handle_add_schematic_net_label(
             if existing.lower() == new_name_lower and existing != net_name
         ]
 
+        # Resolve electrical connectivity: which pin (if any) does the
+        # final coordinate actually land on at KiCad's IU-precision?  The
+        # agent gets this on every call so it can verify the label will
+        # connect without having to round-trip through run_erc.
+        connected_to_pin: Optional[Dict[str, str]] = None
+        try:
+            for entry in _scan_all_pin_positions(schematic_path):
+                cx, cy = entry["coords"]
+                if (
+                    abs(float(position[0]) - float(cx)) <= _LABEL_PIN_CONNECT_TOLERANCE_MM
+                    and abs(float(position[1]) - float(cy)) <= _LABEL_PIN_CONNECT_TOLERANCE_MM
+                ):
+                    connected_to_pin = {"ref": entry["ref"], "pin": entry["pin"]}
+                    break
+        except Exception:
+            connected_to_pin = None
+
         response: Dict[str, Any] = {
             "success": True,
             "message": f"Added net label '{net_name}' at {position}",
             "actual_position": position,
+            "connected_to_pin": connected_to_pin,
         }
+        if requested_position is not None and snapped_to_pin and not (
+            component_ref and pin_number
+        ):
+            # Auto-snap path — surface what we moved so the caller knows
+            # the recorded position differs from what they asked for.
+            response["requested_position"] = requested_position
         if snapped_to_pin:
             response["snapped_to_pin"] = snapped_to_pin
             response["message"] = (
-                f"Added net label '{net_name}' at exact pin endpoint "
-                f"{component_ref}/{pin_number} ({position[0]}, {position[1]})"
+                f"Added net label '{net_name}' at pin endpoint "
+                f"{snapped_to_pin['component']}/{snapped_to_pin['pin']} "
+                f"({position[0]}, {position[1]})"
             )
         if case_warnings:
             response["case_warnings"] = case_warnings

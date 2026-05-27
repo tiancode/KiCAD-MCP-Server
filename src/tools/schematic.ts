@@ -539,13 +539,13 @@ edit_schematic_component and set its value to an empty string.`,
   // Add net label
   server.tool(
     "add_schematic_net_label",
-    "Add a net label to the schematic. " +
-      "PREFERRED: supply componentRef + pinNumber to snap the label to the exact pin endpoint — " +
-      "this guarantees an electrical connection. " +
-      "Alternatively supply position [x, y], but the coordinates must match the pin endpoint exactly " +
-      "(even a 0.01 mm offset breaks the connection). " +
-      "The response includes actual_position (coordinates actually used) and snapped_to_pin " +
-      "(present when a pin reference was resolved).",
+    "Add a net label to the schematic.  " +
+      "Electrical connectivity rule: KiCad treats a label as connected to a pin ONLY when the label's coordinates match the pin endpoint within KiCad's IU precision (≈0.1 µm).  A 0.01 mm offset is enough to break the connection — there is no wire stub or proximity heuristic in KiCad itself.  " +
+      "Three placement modes:  " +
+      "(1) PREFERRED — componentRef + pinNumber: snap the label onto the exact pin endpoint via PinLocator.  Guaranteed connection.  " +
+      "(2) Raw position [x, y] WITH default snapTolerance: the handler auto-snaps onto any pin within snapTolerance mm (default 0.05 mm).  Protects against float-imprecision near-misses — the most common silent failure when callers compute pin coords manually.  " +
+      "(3) Raw position WITH snapTolerance: 0: opt out of snapping entirely; for labels that intentionally float between pins.  " +
+      "Response always includes connected_to_pin = {ref, pin} | null, the pin (if any) the final coordinates actually land on at KiCad's IU precision.  Use it to verify the electrical connection without running ERC.  When auto-snap fired, snapped_to_pin carries the {component, pin, snap_distance_mm} delta and requested_position records what was asked for.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
@@ -571,6 +571,12 @@ edit_schematic_component and set its value to an empty string.`,
         .optional()
         .describe("Label type (default: label)"),
       orientation: z.number().optional().describe("Rotation angle 0/90/180/270 (default: 0)"),
+      snapTolerance: z
+        .number()
+        .optional()
+        .describe(
+          "When raw position [x, y] is given, auto-snap onto the nearest pin within this many mm.  Default 0.05 mm — tight enough that the snap only fires on float-imprecision near-misses, not on labels intentionally placed between pins.  Pass 0 to disable.",
+        ),
     },
     async (args: {
       schematicPath: string;
@@ -580,6 +586,7 @@ edit_schematic_component and set its value to an empty string.`,
       pinNumber?: string | number;
       labelType?: string;
       orientation?: number;
+      snapTolerance?: number;
     }) => {
       const result = await callKicadScript("add_schematic_net_label", args);
       if (result.success) {
