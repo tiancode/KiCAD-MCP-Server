@@ -483,7 +483,25 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Route pad to pad tool
   server.tool(
     "route_pad_to_pad",
-    "Add a DIRECT trace segment between two named component pads (auto-via on layer change). Looks up pad positions, detects the net from the source pad, and inserts a via if the pads are on different copper layers. NOT an autorouter — does NOT avoid obstacles; emits warnings if the segment crosses another pad. Default trace width comes from the source net's netclass (falling back to the board's current track width).",
+    `Place a STRAIGHT-LINE trace segment between two named component pads (auto-via on layer change).
+
+This is NOT an autorouter — it is a wire-placement tool. There is no obstacle
+avoidance, no layer-switching mid-trace, no rip-up-and-retry. If the straight
+line between the two pads crosses a third pad, a board edge, or another trace,
+the resulting PCB will have DRC violations (tracks_crossing, solder_mask_bridge,
+or net-shorting).
+
+Use this when you have planned the routing yourself and just need to commit the
+segments. After placing the traces for a circuit, ALWAYS call run_drc to verify
+— a clean call here does NOT mean the trace is electrically correct, only that
+the API call succeeded. The response includes obstacleCount and obstaclesCrossed
+when a third-party pad's bbox lies on the segment; these warnings are now
+filtered to exclude the trace's own endpoints (previously the start/end pads
+were reported on every trace, drowning out real crossings).
+
+Looks up pad positions, detects the net from the source pad, and inserts a via
+if the pads are on different copper layers. Default trace width comes from the
+source net's netclass (falling back to the board's current track width).`,
     {
       fromRef: z.string().describe("Reference of the source component (e.g. 'U2')"),
       fromPad: z

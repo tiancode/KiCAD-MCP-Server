@@ -5,7 +5,8 @@ Routing-related command implementations for KiCAD interface
 import logging
 import math
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pcbnew
 
@@ -161,14 +162,6 @@ class RoutingCommands:
             if width is None:
                 width = self._netclass_track_width_mm(start_pad)
 
-            # Warn if the proposed segment crosses any other pad — this
-            # routine draws a direct trace and does not avoid obstacles, so
-            # the only way to surface that fact non-destructively is to
-            # report it instead of silently producing a short.
-            obstacle_warnings = self._pads_intersecting_segment(
-                start_pos, end_pos, exclude=(start_pad, end_pad)
-            )
-
             # Detect if pads are on different copper layers → need via.
             # SMD pad.GetLayer() reports F.Cu even on flipped B.Cu footprints in
             # KiCAD 9 SWIG. Use footprint.GetLayer() instead — it always reflects
@@ -184,6 +177,16 @@ class RoutingCommands:
                 and start_layer != end_layer
             )
 
+            # Endpoint pads to exclude from obstacle reporting.  Identify by
+            # (ref, pad_num) — `id(pad)` of the SWIG proxy does NOT work
+            # because every fp.Pads() iteration creates fresh Python proxies
+            # for the same underlying C++ pads, so the IDs we collected from
+            # find_pad would never match the IDs the obstacle scanner sees.
+            # That's why every trace previously reported its own start/end
+            # pads as obstacles, drowning out the real crossings the user
+            # actually needed to see.
+            endpoint_keys = {(from_ref, from_pad), (to_ref, to_pad)}
+
             if needs_via:
                 # Place via directly below the start pad (same X).
                 # Using the geometric midpoint X causes all vias to stack at
@@ -191,6 +194,21 @@ class RoutingCommands:
                 # on F.Cu/B.Cu): midpoint is always the board center.
                 via_x = start_pos.x / scale
                 via_y = (start_pos.y + end_pos.y) / 2 / scale
+                # Plain duck-typed point — _pads_intersecting_segment
+                # only reads .x / .y, so we don't need pcbnew.VECTOR2I.
+                via_pt = SimpleNamespace(x=start_pos.x, y=(start_pos.y + end_pos.y) / 2)
+
+                # Obstacle checks run per-actual-leg, not on the imaginary
+                # direct line — start→via is vertical on start_layer, via→end
+                # is diagonal on end_layer; the diagonal direct line is
+                # neither of them.  Only the start pad is excluded from
+                # leg 1 (the end pad isn't on this layer's path); only the
+                # end pad from leg 2.
+                obstacle_warnings = self._pads_intersecting_segment(
+                    start_pos, via_pt, exclude_pad_keys={(from_ref, from_pad)}
+                ) + self._pads_intersecting_segment(
+                    via_pt, end_pos, exclude_pad_keys={(to_ref, to_pad)}
+                )
 
                 # Trace on start layer: start_pad → via
                 r1 = self.route_trace(
@@ -229,7 +247,11 @@ class RoutingCommands:
                     "via_position": {"x": via_x, "y": via_y},
                 }
             else:
-                # Same layer — direct trace
+                # Same layer — direct trace.  Exclude both endpoints; only
+                # genuinely-crossed third-party pads remain in the warning.
+                obstacle_warnings = self._pads_intersecting_segment(
+                    start_pos, end_pos, exclude_pad_keys=endpoint_keys
+                )
                 result = self.route_trace(
                     {
                         "start": {"x": start_pos.x / scale, "y": start_pos.y / scale, "unit": "mm"},
@@ -256,6 +278,13 @@ class RoutingCommands:
                 if obstacle_warnings:
                     result.setdefault("warnings", []).extend(obstacle_warnings)
                     result["obstaclesCrossed"] = obstacle_warnings
+                    # Headline count so the agent doesn't have to scan a
+                    # giant warnings array to know whether this trace is
+                    # likely DRC-clean.  Same-net pads are tagged
+                    # separately because crossing same-net pads is
+                    # usually harmless (the trace still belongs to that
+                    # net), while different-net crossings will short.
+                    result["obstacleCount"] = len(obstacle_warnings)
 
             return result
 
@@ -299,17 +328,26 @@ class RoutingCommands:
         self,
         start_pos: Any,
         end_pos: Any,
-        exclude: Tuple[Any, ...] = (),
+        exclude_pad_keys: Optional[Set[Tuple[str, str]]] = None,
     ) -> List[str]:
         """Return a list of warnings naming pads the segment would cross.
 
-        Uses an axis-aligned bbox vs. segment intersection test — coarse but
-        cheap, and good enough to flag the "trace goes straight through
-        another pad" case the user reported.
+        ``exclude_pad_keys`` is a set of ``(footprint_ref, pad_number)``
+        tuples — usually the trace's own endpoints, which would otherwise
+        appear in every warning because the trace literally starts and
+        ends inside them.  Identification by ``(ref, num)`` (not by
+        ``id(pad)``) is required: SWIG creates fresh Python proxy
+        objects for the same C++ pad on every ``fp.Pads()`` iteration,
+        so ``id()`` would never match across calls — every trace used
+        to report its own start/end pads in the warning list.
+
+        Uses an axis-aligned bbox vs. segment intersection test — coarse
+        but cheap, and good enough to flag the "trace goes straight
+        through another pad" case the user reported.
         """
         warnings: List[str] = []
+        exclude = exclude_pad_keys or set()
         try:
-            exclude_ids = {id(p) for p in exclude}
             sx, sy = float(start_pos.x), float(start_pos.y)
             ex, ey = float(end_pos.x), float(end_pos.y)
             # Quick reject for zero-length segment
@@ -318,7 +356,8 @@ class RoutingCommands:
             for fp in self.board.GetFootprints():
                 ref = fp.GetReference()
                 for pad in fp.Pads():
-                    if id(pad) in exclude_ids:
+                    pad_num = str(pad.GetNumber())
+                    if (ref, pad_num) in exclude:
                         continue
                     try:
                         bbox = pad.GetBoundingBox()
@@ -326,7 +365,7 @@ class RoutingCommands:
                         continue
                     if self._segment_intersects_bbox(sx, sy, ex, ey, bbox):
                         warnings.append(
-                            f"Trace segment passes through {ref}.{pad.GetNumber()} "
+                            f"Trace segment passes through {ref}.{pad_num} "
                             f"— consider routing around or via a different layer"
                         )
         except Exception:
@@ -336,9 +375,7 @@ class RoutingCommands:
         return warnings
 
     @staticmethod
-    def _segment_intersects_bbox(
-        sx: float, sy: float, ex: float, ey: float, bbox: Any
-    ) -> bool:
+    def _segment_intersects_bbox(sx: float, sy: float, ex: float, ey: float, bbox: Any) -> bool:
         """Liang-Barsky-ish clip: does segment (sx,sy)-(ex,ey) touch bbox?"""
         try:
             x_min = float(bbox.GetLeft())
