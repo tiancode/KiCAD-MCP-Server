@@ -77,6 +77,32 @@ class KiCADProcessManager:
 
         return processes
 
+    # Binary names that indicate a KiCAD GUI process (hosts the IPC API server).
+    _LINUX_KICAD_BINARIES = frozenset({"kicad", "pcbnew", "eeschema"})
+
+    @staticmethod
+    def _linux_kicad_pids() -> List[str]:
+        """Return PIDs whose /proc/<pid>/exe basename is a known KiCAD binary.
+
+        Resolving the exe symlink avoids false positives from command-line
+        substring matches (e.g. a shell whose cwd contains "/kicad").
+        """
+        pids: List[str] = []
+        try:
+            entries = os.listdir("/proc")
+        except OSError:
+            return pids
+        for entry in entries:
+            if not entry.isdigit():
+                continue
+            try:
+                exe = os.readlink(f"/proc/{entry}/exe")
+            except OSError:
+                continue
+            if os.path.basename(exe).lower() in KiCADProcessManager._LINUX_KICAD_BINARIES:
+                pids.append(entry)
+        return pids
+
     @staticmethod
     def is_running() -> bool:
         """
@@ -89,30 +115,7 @@ class KiCADProcessManager:
 
         try:
             if system == "Linux":
-                # Check for actual pcbnew/kicad binaries (not python scripts)
-                # Use exact process name matching to avoid matching our own kicad_interface.py
-                result = subprocess.run(
-                    ["pgrep", "-x", "pcbnew|kicad"], capture_output=True, text=True
-                )
-                if result.returncode == 0:
-                    return True
-                # Also check with -f for full path matching, but exclude our script
-                result = subprocess.run(
-                    ["pgrep", "-f", "/pcbnew|/kicad"], capture_output=True, text=True
-                )
-                # Double-check it's not our own process
-                if result.returncode == 0:
-                    pids = result.stdout.strip().split("\n")
-                    for pid in pids:
-                        try:
-                            cmdline = subprocess.run(
-                                ["ps", "-p", pid, "-o", "command="], capture_output=True, text=True
-                            )
-                            if "kicad_interface.py" not in cmdline.stdout:
-                                return True
-                        except:
-                            pass
-                return False
+                return bool(KiCADProcessManager._linux_kicad_pids())
 
             elif system == "Darwin":  # macOS
                 result = subprocess.run(
@@ -146,8 +149,10 @@ class KiCADProcessManager:
         """
         system = platform.system()
 
-        # Try to find executable in PATH first
-        for cmd in ["pcbnew", "kicad"]:
+        # Prefer the `kicad` project manager — it hosts both the PCB and
+        # schematic editors as panes, matching how users normally work.
+        # Fall back to `pcbnew` only if the project manager isn't installed.
+        for cmd in ["kicad", "pcbnew"]:
             result = subprocess.run(
                 ["which", cmd] if system != "Windows" else ["where", cmd],
                 capture_output=True,
@@ -164,9 +169,9 @@ class KiCADProcessManager:
         # Platform-specific default paths
         if system == "Linux":
             candidates = [
-                Path("/usr/bin/pcbnew"),
-                Path("/usr/local/bin/pcbnew"),
                 Path("/usr/bin/kicad"),
+                Path("/usr/local/bin/kicad"),
+                Path("/usr/bin/pcbnew"),
             ]
         elif system == "Darwin":  # macOS
             candidates = [
@@ -271,26 +276,41 @@ class KiCADProcessManager:
         processes = []
 
         try:
-            if system in ["Linux", "Darwin"]:
+            if system == "Linux":
+                for pid in KiCADProcessManager._linux_kicad_pids():
+                    try:
+                        exe = os.readlink(f"/proc/{pid}/exe")
+                        with open(f"/proc/{pid}/cmdline", "rb") as f:
+                            cmdline = (
+                                f.read()
+                                .replace(b"\x00", b" ")
+                                .decode("utf-8", errors="replace")
+                                .strip()
+                            )
+                    except OSError:
+                        continue
+                    processes.append(
+                        {"pid": pid, "name": os.path.basename(exe), "command": cmdline or exe}
+                    )
+
+            elif system == "Darwin":
                 result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
                 for line in result.stdout.split("\n"):
-                    # Only match actual KiCAD binaries, not our MCP server processes
+                    # macOS: match the canonical app-bundle path, not a substring.
                     if (
-                        ("pcbnew" in line.lower() or "kicad" in line.lower())
+                        ("/KiCad.app/" in line or "/pcbnew" in line)
                         and "kicad_interface.py" not in line
                         and "grep" not in line
                     ):
-                        # More specific check: must have /pcbnew or /kicad in the path
-                        if "/pcbnew" in line or "/kicad" in line or "KiCad.app" in line:
-                            parts = line.split()
-                            if len(parts) >= 11:
-                                processes.append(
-                                    {
-                                        "pid": parts[1],
-                                        "name": parts[10],
-                                        "command": " ".join(parts[10:]),
-                                    }
-                                )
+                        parts = line.split()
+                        if len(parts) >= 11:
+                            processes.append(
+                                {
+                                    "pid": parts[1],
+                                    "name": parts[10],
+                                    "command": " ".join(parts[10:]),
+                                }
+                            )
 
             elif system == "Windows":
                 for proc in KiCADProcessManager._windows_list_processes():
