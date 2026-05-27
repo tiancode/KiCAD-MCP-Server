@@ -246,3 +246,146 @@ class TestERCKicad9SheetsViolations:
         # 1 top-level + 1 from sheets = 2 total
         assert "2 violation" in result["message"]
         assert result["summary"]["by_severity"]["error"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Power-input-not-driven false-positive tagging + demotion + sort.
+# ---------------------------------------------------------------------------
+
+
+# Schematic with a VCC power symbol so _collect_power_label_names returns
+# {"VCC"}.  That's the trigger for `_violation_mentions_power_label` to
+# match — the violation's items[].net field below references the same.
+_SCH_WITH_VCC_POWER = """\
+(kicad_sch
+  (symbol
+    (lib_id "power:VCC")
+    (property "Reference" "#PWR01")
+    (property "Value" "VCC")
+  )
+)
+"""
+
+# Two violations: one power_pin_not_driven false-positive (VCC label
+# exists in the schematic, the items[].net says VCC) and one genuine
+# pin_not_connected error that must remain in the error count.
+_ERC_POWER_FP_AND_REAL = {
+    "violations": [
+        {
+            "type": "power_pin_not_driven",
+            "severity": "error",
+            "description": "Input Power pin not driven by any Power Source",
+            "items": [{"pos": {"x": 100.0, "y": 50.0}, "net": "VCC", "component_ref": "U1"}],
+        },
+        {
+            "type": "pin_not_connected",
+            "severity": "error",
+            "description": "Pin not connected",
+            "items": [{"pos": {"x": 200.0, "y": 75.0}}],
+        },
+    ]
+}
+
+
+@pytest.mark.unit
+class TestPowerNotDrivenFalsePositiveDemotion:
+    """The user's complaint: ERC reports power_pin_not_driven as ERRORS
+    even when the netlist is correct (sync produced clean pad↔net map).
+    We tag those as likely_false_positive AND demote them out of the
+    by_severity error bucket so the headline count reflects real
+    problems."""
+
+    def test_tagged_fps_are_subtracted_from_error_count(self, iface, tmp_path):
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text(_SCH_WITH_VCC_POWER)
+
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_ERC_POWER_FP_AND_REAL)):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        assert result["success"] is True
+        s = result["summary"]
+        assert s["total"] == 2
+        assert s["likely_false_positives"] == 1
+        # The VCC power_pin_not_driven is tagged → demoted out of error.
+        assert s["by_severity"]["error"] == 1, (
+            "Only the pin_not_connected is a real error; the power_pin_not_driven "
+            "must NOT bloat the headline error count once tagged"
+        )
+        # Raw count preserved for callers that want the kicad-cli original.
+        assert s["raw_by_severity"]["error"] == 2
+        assert s["real_errors"] == 1
+
+    def test_real_errors_sort_before_false_positives(self, iface, tmp_path):
+        """Agent scans violations top-down — the actionable ones must
+        come first so the agent doesn't tune out before reaching them."""
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text(_SCH_WITH_VCC_POWER)
+
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_ERC_POWER_FP_AND_REAL)):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        violations = result["violations"]
+        assert violations[0]["type"] == "pin_not_connected"
+        assert "likely_false_positive" not in violations[0]
+        assert violations[1]["type"] == "power_pin_not_driven"
+        assert violations[1].get("likely_false_positive") is True
+
+    def test_item_level_net_field_triggers_fp_tag(self, iface, tmp_path):
+        """kicad-cli sometimes puts the net name in items[].net rather
+        than in the description.  The tagger must check both — the
+        previous description-only check missed this case and let
+        every items-only-net violation through as a hard error."""
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text(_SCH_WITH_VCC_POWER)
+
+        # Description does NOT mention VCC; only items[].net does.
+        erc = {
+            "violations": [
+                {
+                    "type": "power_pin_not_driven",
+                    "severity": "error",
+                    "description": "Input Power pin not driven",
+                    "items": [{"pos": {"x": 1.0, "y": 2.0}, "net": "VCC"}],
+                },
+            ]
+        }
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(erc)):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        assert result["summary"]["likely_false_positives"] == 1
+        assert result["summary"]["by_severity"]["error"] == 0
+
+    def test_no_power_labels_means_no_tagging(self, iface, tmp_path):
+        """Defensive: if the schematic has no power labels/symbols at
+        all, a power_pin_not_driven IS a real error — don't suppress."""
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")  # no power symbols
+
+        # No VCC/GND in description or items.
+        erc = {
+            "violations": [
+                {
+                    "type": "power_pin_not_driven",
+                    "severity": "error",
+                    "description": "Input Power pin not driven",
+                    "items": [{"pos": {"x": 1.0, "y": 2.0}}],
+                },
+            ]
+        }
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(erc)):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        assert result["summary"]["likely_false_positives"] == 0
+        assert result["summary"]["by_severity"]["error"] == 1

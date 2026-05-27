@@ -109,22 +109,41 @@ def _is_power_not_driven(vtype: str, vmsg: str) -> bool:
     )
 
 
-def _violation_mentions_power_label(vmsg: str, label_names: set) -> bool:
-    """True when the violation text references any of the schematic's labels.
+def _violation_mentions_power_label(
+    vmsg: str, label_names: set, items: Optional[list] = None
+) -> bool:
+    """True when the violation references any of the schematic's labels.
+
+    Checks both the description string AND the per-item structured fields
+    that kicad-cli emits — net name often lives in ``items[].net`` /
+    ``items[].netname`` rather than in the human-readable description,
+    so a description-only check would miss it.
 
     Also passes when *any* of the conventional power-rail names appears in
     the message — kicad-cli sometimes omits the net name and just says
     'Input Power pin', in which case the presence of *some* power label
     in the schematic is still a strong false-positive signal.
     """
-    if not vmsg:
-        return False
-    msg = vmsg
-    for name in label_names:
-        if name and name in msg:
-            return True
-    upper = msg.upper()
-    return any(pat in upper for pat in _COMMON_POWER_NET_PATTERNS)
+
+    def _matches(haystack: str) -> bool:
+        if not haystack:
+            return False
+        for name in label_names:
+            if name and name in haystack:
+                return True
+        upper = haystack.upper()
+        return any(pat in upper for pat in _COMMON_POWER_NET_PATTERNS)
+
+    if _matches(vmsg or ""):
+        return True
+    for item in items or ():
+        # Try several plausible field names — kicad-cli has used
+        # different ones across versions.
+        for key in ("net", "netname", "net_name", "name"):
+            val = item.get(key) if isinstance(item, dict) else None
+            if isinstance(val, str) and _matches(val):
+                return True
+    return False
 
 
 def handle_sync_schematic_to_board(
@@ -518,7 +537,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     "location": loc,
                 }
                 if _is_power_not_driven(vtype, vmsg) and _violation_mentions_power_label(
-                    vmsg, power_label_names
+                    vmsg, power_label_names, items
                 ):
                     annotated["likely_false_positive"] = True
                     annotated["reason"] = (
@@ -531,6 +550,22 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     severity_counts[vseverity] += 1
 
             tagged_false_positives = sum(1 for v in violations if v.get("likely_false_positive"))
+            # Demote tagged FPs out of the headline severity buckets so
+            # `by_severity.error` reflects real errors only — otherwise
+            # the agent sees "2 errors" even when both are pedantic
+            # PWR_FLAG complaints on a netlist that's actually correct,
+            # which (the user reported) makes them doubt their work.
+            real_by_severity = dict(severity_counts)
+            for v in violations:
+                if v.get("likely_false_positive"):
+                    sev = v.get("severity", "error")
+                    if sev in real_by_severity and real_by_severity[sev] > 0:
+                        real_by_severity[sev] -= 1
+            # Sort real issues first, FPs last — same severity preserved
+            # within each group.  Keeps the most actionable items at the
+            # top of the list when the agent scans it.
+            violations.sort(key=lambda v: 1 if v.get("likely_false_positive") else 0)
+
             return {
                 "success": True,
                 "message": (
@@ -543,8 +578,13 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 ),
                 "summary": {
                     "total": len(violations),
-                    "by_severity": severity_counts,
+                    # by_severity now counts ONLY real issues per bucket;
+                    # tagged FPs are surfaced separately via
+                    # likely_false_positives + raw_by_severity.
+                    "by_severity": real_by_severity,
+                    "raw_by_severity": severity_counts,
                     "likely_false_positives": tagged_false_positives,
+                    "real_errors": real_by_severity.get("error", 0),
                 },
                 "violations": violations,
             }

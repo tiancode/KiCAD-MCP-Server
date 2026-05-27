@@ -30,7 +30,14 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
   // Add component to schematic
   server.tool(
     "add_schematic_component",
-    "Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g., 'Device:R', 'EDA-MCP:ESP32-C3')",
+    `Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g., 'Device:R', 'EDA-MCP:ESP32-C3').
+
+KiCad's default schematic grid is 1.27 mm (50 mil); symbol pin offsets are
+multiples of that.  Off-grid components produce "wire/pin not aligned to grid"
+ERC warnings on every pin.  Pass snapToGrid=true to round the anchor onto the
+1.27 mm grid before placement — the response surfaces the actual landing
+position under .position and the requested-vs-snapped under .snap when the
+coordinates moved.`,
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       symbol: z
@@ -55,6 +62,19 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
         .min(1)
         .optional()
         .describe("Unit number for multi-unit symbols (1=A, 2=B, 3=C, …). Defaults to 1."),
+      snapToGrid: z
+        .boolean()
+        .optional()
+        .describe(
+          "Round the anchor onto the schematic grid (default 1.27 mm) before placement. Off by default to preserve exact caller coordinates; opt in to avoid 'pin off-grid' ERC warnings.",
+        ),
+      snapGridMm: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "Override the snap grid in mm. Only takes effect when snapToGrid=true. Default 1.27 mm matches KiCad's stock schematic grid.",
+        ),
     },
     async (args: {
       schematicPath: string;
@@ -64,6 +84,8 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
       footprint?: string;
       position?: { x: number; y: number };
       unit?: number;
+      snapToGrid?: boolean;
+      snapGridMm?: number;
     }) => {
       // Transform to what Python backend expects
       const [library, symbolName] = args.symbol.includes(":")
@@ -72,6 +94,8 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
 
       const transformed = {
         schematicPath: args.schematicPath,
+        snapToGrid: args.snapToGrid,
+        snapGridMm: args.snapGridMm,
         component: {
           library,
           type: symbolName,
@@ -1049,7 +1073,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Move a placed symbol, dragging connected wires
   server.tool(
     "move_schematic_component",
-    "Move a placed symbol to a new position in the schematic. By default (preserveWires=true) wire endpoints touching the component's pins are stretched to follow the new position.",
+    "Move a placed symbol to a new position in the schematic. By default (preserveWires=true) wire endpoints touching the component's pins are stretched to follow the new position. Pass snapToGrid=true to round the destination onto KiCad's 1.27 mm schematic grid (opt-in, off by default).",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator (e.g., R1, U1)"),
@@ -1060,12 +1084,27 @@ edit_schematic_component and set its value to an empty string.`,
         .boolean()
         .optional()
         .describe("Stretch connected wire endpoints to follow the move (default true)"),
+      snapToGrid: z
+        .boolean()
+        .optional()
+        .describe(
+          "Round the destination onto the schematic grid (default 1.27 mm) before writing. Off by default; opt in to avoid 'pin off-grid' ERC warnings.",
+        ),
+      snapGridMm: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "Override the snap grid in mm. Only takes effect when snapToGrid=true. Default 1.27 mm matches KiCad's stock schematic grid.",
+        ),
     },
     async (args: {
       schematicPath: string;
       reference: string;
       position: { x: number; y: number };
       preserveWires?: boolean;
+      snapToGrid?: boolean;
+      snapGridMm?: number;
     }) => {
       const result = await callKicadScript("move_schematic_component", args);
       if (result.success) {

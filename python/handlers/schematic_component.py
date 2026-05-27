@@ -10,7 +10,6 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 import sexpdata
-
 from commands.schematic import SchematicManager
 from commands.wire_manager import WireManager
 
@@ -18,6 +17,36 @@ if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger(__name__)
+
+# KiCad's default schematic grid is 50 mil = 1.27 mm; symbol pin offsets
+# are multiples of that, so an off-grid symbol places its pins off-grid
+# and ERC fires "wire/pin not aligned" warnings.  Tools that take mm
+# coordinates accept a ``snapToGrid`` opt-in to round the anchor onto
+# this grid before writing.
+_SCHEMATIC_GRID_MM = 1.27
+
+
+def _snap_to_schematic_grid(value: float, grid_mm: float = _SCHEMATIC_GRID_MM) -> float:
+    """Snap a millimeter coordinate to the nearest schematic-grid multiple."""
+    if grid_mm <= 0:
+        return value
+    return round(value / grid_mm) * grid_mm
+
+
+def _apply_grid_snap(x: float, y: float, params: Dict[str, Any]) -> Tuple[float, float, bool]:
+    """Return (x, y, snapped) honoring the caller's snapToGrid opt-in.
+
+    The flag is *opt-in* — agents that asked for the canonical 1.27mm
+    grid get it; agents that want sub-grid placement get it.  We
+    return the ``snapped`` flag so the response can tell the caller
+    when (and from where) the coordinates moved.
+    """
+    if not params.get("snapToGrid"):
+        return float(x), float(y), False
+    grid_mm = float(params.get("snapGridMm") or _SCHEMATIC_GRID_MM)
+    new_x = _snap_to_schematic_grid(float(x), grid_mm)
+    new_y = _snap_to_schematic_grid(float(y), grid_mm)
+    return new_x, new_y, (new_x != float(x) or new_y != float(y))
 
 
 def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,6 +240,16 @@ def handle_move_schematic_component(
                 "message": "position with x and y is required",
             }
 
+        # Opt-in grid snap (same contract as handle_add_schematic_component).
+        # Read from position OR top-level so callers can put it wherever
+        # feels natural.
+        snap_params = {
+            "snapToGrid": (position.get("snapToGrid") or params.get("snapToGrid")),
+            "snapGridMm": (position.get("snapGridMm") or params.get("snapGridMm")),
+        }
+        requested_new_x, requested_new_y = new_x, new_y
+        new_x, new_y, snapped = _apply_grid_snap(new_x, new_y, snap_params)
+
         with open(schematic_path, "r", encoding="utf-8") as f:
             sch_data = sexpdata.loads(f.read())
 
@@ -256,7 +295,7 @@ def handle_move_schematic_component(
         with open(schematic_path, "w", encoding="utf-8") as f:
             f.write(sexpdata.dumps(sch_data))
 
-        return {
+        response: Dict[str, Any] = {
             "success": True,
             "oldPosition": old_position,
             "newPosition": {"x": new_x, "y": new_y},
@@ -264,6 +303,13 @@ def handle_move_schematic_component(
             "wiresRemoved": drag_summary.get("wires_removed", 0),
             "wiresSynthesized": drag_summary.get("wires_synthesized", 0),
         }
+        if snapped:
+            response["snap"] = {
+                "applied": True,
+                "gridMm": snap_params["snapGridMm"] or _SCHEMATIC_GRID_MM,
+                "requested": {"x": requested_new_x, "y": requested_new_y},
+            }
+        return response
 
     except Exception as e:
         logger.error(f"Error moving schematic component: {e}")
@@ -869,6 +915,16 @@ def handle_add_schematic_component(
         y = component.get("y", 0)
         unit = component.get("unit", 1)
 
+        # Opt-in grid snap.  Read from the component dict OR the top-level
+        # params so callers can pass it either next to the position or as a
+        # request-level flag.  Off by default — caller must ask for it.
+        snap_params = {
+            "snapToGrid": (component.get("snapToGrid") or params.get("snapToGrid")),
+            "snapGridMm": (component.get("snapGridMm") or params.get("snapGridMm")),
+        }
+        requested_x, requested_y = x, y
+        x, y, snapped = _apply_grid_snap(x, y, snap_params)
+
         # Derive project path from schematic path for project-local library resolution.
         # Walk up from the schematic file to find the directory that owns the project
         # (contains sym-lib-table or a .kicad_pro file).  Schematics stored in a
@@ -895,11 +951,22 @@ def handle_add_schematic_component(
             project_path=derived_project_path,
         )
 
-        return {
+        response: Dict[str, Any] = {
             "success": True,
             "component_reference": reference,
             "symbol_source": f"{library}:{comp_type}",
+            "position": {"x": x, "y": y},
         }
+        if snapped:
+            # Tell the caller their coordinates moved — silent snap would
+            # be surprising when an agent tries to land at exactly
+            # (150, 100) and gets (149.86, 99.06).
+            response["snap"] = {
+                "applied": True,
+                "gridMm": snap_params["snapGridMm"] or _SCHEMATIC_GRID_MM,
+                "requested": {"x": requested_x, "y": requested_y},
+            }
+        return response
     except Exception as e:
         logger.error(f"Error adding component to schematic: {str(e)}")
         import traceback

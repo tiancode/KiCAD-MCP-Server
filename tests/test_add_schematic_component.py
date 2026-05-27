@@ -353,3 +353,90 @@ class TestAddComponentMirrorParam:
             "ComponentManager.add_component now appears to honor mirror='y'. "
             "See sibling test_mirror_x_arg_is_silently_dropped."
         )
+
+
+# ---------------------------------------------------------------------------
+# Grid snap (opt-in via snapToGrid=true)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestSchematicGridSnap:
+    """KiCad's stock schematic grid is 1.27 mm.  Off-grid components
+    produce 'pin/wire not aligned to grid' ERC warnings on every pin —
+    the user reported a sea of them after placing at (150, 100) /
+    (130, 80) etc.  Tools now accept snapToGrid=true to round onto the
+    grid; default is OFF so existing flows that depend on exact
+    coordinates aren't surprised."""
+
+    def test_snap_helper_rounds_to_nearest_grid_multiple(self) -> None:
+        from handlers.schematic_component import _snap_to_schematic_grid
+
+        # 150 mm / 1.27 = 118.11 → round to 118 → 149.86 mm
+        assert _snap_to_schematic_grid(150.0) == pytest.approx(149.86, abs=1e-9)
+        # 100 mm / 1.27 = 78.74 → round to 79 → 100.33 mm
+        assert _snap_to_schematic_grid(100.0) == pytest.approx(100.33, abs=1e-9)
+        # An on-grid value stays put.
+        assert _snap_to_schematic_grid(1.27 * 50) == pytest.approx(1.27 * 50, abs=1e-9)
+        # Zero stays zero.
+        assert _snap_to_schematic_grid(0.0) == 0.0
+        # Negative values snap correctly.
+        assert _snap_to_schematic_grid(-1.27 * 3) == pytest.approx(-1.27 * 3, abs=1e-9)
+
+    def test_snap_helper_custom_grid(self) -> None:
+        from handlers.schematic_component import _snap_to_schematic_grid
+
+        # 2.54 mm grid (100 mil) — 100 mm / 2.54 = 39.37 → round 39 → 99.06 mm
+        assert _snap_to_schematic_grid(100.0, grid_mm=2.54) == pytest.approx(99.06, abs=1e-9)
+
+    def test_snap_helper_no_op_on_zero_or_negative_grid(self) -> None:
+        from handlers.schematic_component import _snap_to_schematic_grid
+
+        # Defensive: a zero/negative grid would loop or divide-by-zero.
+        # The helper returns the value untouched.
+        assert _snap_to_schematic_grid(150.0, grid_mm=0) == 150.0
+        assert _snap_to_schematic_grid(150.0, grid_mm=-1.27) == 150.0
+
+    def test_apply_grid_snap_off_by_default(self) -> None:
+        from handlers.schematic_component import _apply_grid_snap
+
+        x, y, snapped = _apply_grid_snap(150.0, 100.0, {})
+
+        assert (x, y) == (150.0, 100.0)
+        assert snapped is False
+
+    def test_apply_grid_snap_with_opt_in(self) -> None:
+        from handlers.schematic_component import _apply_grid_snap
+
+        x, y, snapped = _apply_grid_snap(150.0, 100.0, {"snapToGrid": True})
+
+        # Both moved → both snapped values.
+        assert x == pytest.approx(149.86, abs=1e-9)
+        assert y == pytest.approx(100.33, abs=1e-9)
+        assert snapped is True
+
+    def test_apply_grid_snap_reports_no_movement_on_grid_input(self) -> None:
+        from handlers.schematic_component import _apply_grid_snap
+
+        on_grid_x = 1.27 * 50  # exactly on grid
+        on_grid_y = 1.27 * 70
+
+        x, y, snapped = _apply_grid_snap(on_grid_x, on_grid_y, {"snapToGrid": True})
+
+        assert (x, y) == (on_grid_x, on_grid_y)
+        # `snapped` reports whether coordinates moved, not whether snap
+        # was requested — on-grid input must report False so the
+        # response doesn't include a misleading `.snap` field.
+        assert snapped is False
+
+    def test_apply_grid_snap_custom_grid_mm_param(self) -> None:
+        from handlers.schematic_component import _apply_grid_snap
+
+        # 2.54 mm grid via param.
+        x, y, snapped = _apply_grid_snap(10.0, 20.0, {"snapToGrid": True, "snapGridMm": 2.54})
+
+        # 10 / 2.54 = 3.937 → 4 → 10.16 mm
+        assert x == pytest.approx(10.16, abs=1e-9)
+        # 20 / 2.54 = 7.874 → 8 → 20.32 mm
+        assert y == pytest.approx(20.32, abs=1e-9)
+        assert snapped is True
