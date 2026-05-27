@@ -55,7 +55,28 @@ def handle_check_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
 
 
 def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Launch KiCAD UI (no-op if already running)."""
+    """Launch KiCAD UI (or forward a file-open to the running instance).
+
+    Previously a no-op when KiCad was already running: the caller passed
+    ``projectPath`` expecting the running KiCad to open it, and the
+    handler returned ``alreadyRunning: true, launched: false`` without
+    doing anything with the path.  The handler now forwards the
+    file-open via two best-effort paths:
+
+      1. IPC ``run_action`` — KiCad action names aren't stable across
+         releases; we try a small set ("open file" / "open project"
+         family) and stop on the first ``RAS_OK`` whose effect we can
+         verify via ``get_open_documents()``.
+      2. Spawn ``kicad <path>`` — KiCad's single-instance protocol
+         (wxSingleInstanceChecker) makes the new process hand the
+         file-open off to the running instance, then exit.
+
+    The response surfaces ``fileOpenForwarded: bool`` and
+    ``fileOpenMethod: "ipc_action" | "spawn" | "none"`` so the agent
+    can see which path landed.  When neither works the response carries
+    a ``warning`` instructing the user to drag the file into KiCad
+    manually (or close KiCad and retry).
+    """
     logger.info("Launching KiCAD UI")
     try:
         # Read AUTO_LAUNCH_KICAD lazily to avoid a hard import cycle with
@@ -70,10 +91,150 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         if result.get("running"):
             iface._try_enable_ipc_backend(force=True)
 
+        # If KiCad was already running AND the caller asked for a
+        # specific file, forward the file-open.  Skip when there's no
+        # path (caller just wanted to bring KiCad up) or when launch()
+        # itself spawned the process (it already had the path on argv).
+        if (
+            path_obj is not None
+            and result.get("alreadyRunning")
+            and not result.get("launched")
+        ):
+            forwarded = _forward_file_open_to_running_kicad(iface, path_obj)
+            result.update(forwarded)
+
         return {"success": True, **result, **iface._backend_status()}
     except Exception as e:
         logger.error(f"Error launching KiCAD UI: {str(e)}")
         return {"success": False, "message": str(e)}
+
+
+def _path_already_open(iface: "KiCADInterface", target: Path) -> bool:
+    """Return True iff ``get_open_documents`` lists ``target`` (or its
+    .kicad_pcb sibling when target is .kicad_pro).  Used to verify that
+    a forward attempt actually landed."""
+    ipc_backend = getattr(iface, "ipc_backend", None)
+    if ipc_backend is None or not getattr(ipc_backend, "is_connected", lambda: False)():
+        return False
+    kicad = getattr(ipc_backend, "_kicad", None)
+    if kicad is None:
+        return False
+    try:
+        docs = kicad.get_open_documents() or ()
+    except Exception:
+        return False
+    try:
+        target_resolved = target.resolve()
+    except Exception:
+        target_resolved = target
+    candidate_strs = {str(target), str(target_resolved)}
+    # When the caller passes .kicad_pro, accept the .kicad_pcb sibling as
+    # "open" — and vice versa — since KiCad opens the board frame in
+    # response to either path.
+    sibling_pcb = target_resolved.with_suffix(".kicad_pcb")
+    candidate_strs.add(str(sibling_pcb))
+    for doc in docs:
+        path = getattr(doc, "path", None) or getattr(doc, "board_filename", None)
+        if path and any(str(path).endswith(c) for c in candidate_strs):
+            return True
+    return False
+
+
+def _forward_file_open_to_running_kicad(
+    iface: "KiCADInterface", path: Path
+) -> Dict[str, Any]:
+    """Best-effort: ask the running KiCad to open ``path``.
+
+    Tries IPC ``run_action`` first (action names are KiCad-internal and
+    unstable, so we walk a candidate list).  If verification via
+    ``get_open_documents()`` still doesn't show the path, falls back to
+    spawning ``kicad <path>`` and relying on KiCad's single-instance
+    protocol to hand the open request to the existing process.
+
+    Never raises; the return dict is merged into the
+    ``launch_kicad_ui`` response.
+    """
+    import platform
+    import subprocess
+
+    out: Dict[str, Any] = {
+        "fileOpenForwarded": False,
+        "fileOpenMethod": "none",
+        "fileOpenAttempts": [],
+    }
+
+    # Already-open short-circuit — saves the user from a redundant action.
+    if _path_already_open(iface, path):
+        out["fileOpenForwarded"] = True
+        out["fileOpenMethod"] = "already_open"
+        return out
+
+    # Path 1: IPC run_action.  Most KiCad versions don't expose a
+    # "openFile" action, but we try a small set anyway — gracefully
+    # degrades when none land.
+    ipc_backend = getattr(iface, "ipc_backend", None)
+    if ipc_backend is not None and getattr(ipc_backend, "is_connected", lambda: False)():
+        for action in (
+            "common.Control.openFile",
+            "kicadManager.Control.openProject",
+            "kicadManager.Control.openFile",
+        ):
+            try:
+                resp = ipc_backend.run_action(action)
+            except Exception as exc:  # pragma: no cover - best-effort
+                logger.debug(f"run_action({action!r}) raised: {exc}")
+                continue
+            out["fileOpenAttempts"].append(
+                {"method": "ipc_action", "action": action, "status": resp.get("statusName")}
+            )
+            if resp.get("success") and _path_already_open(iface, path):
+                out["fileOpenForwarded"] = True
+                out["fileOpenMethod"] = "ipc_action"
+                out["fileOpenAction"] = action
+                return out
+
+    # Path 2: spawn ``kicad <path>`` so KiCad's wxSingleInstanceChecker
+    # forwards the open request to the running process.  The new
+    # process exits after handing off; no second window appears on
+    # builds that have single-instance enabled.
+    exe = KiCADProcessManager.get_executable_path()
+    if exe is None:
+        out["fileOpenAttempts"].append({"method": "spawn", "error": "kicad executable not found"})
+        out["warning"] = (
+            "KiCad is running but the MCP couldn't open the file: "
+            "neither IPC's run_action nor the kicad CLI is reachable.  "
+            "Open the file manually in KiCad (File → Open, or drag-drop "
+            "the path) or close KiCad and call launch_kicad_ui again."
+        )
+        return out
+
+    try:
+        # Detach the child so it doesn't tie its lifetime to the MCP
+        # server.  KiCad's single-instance handshake exits the child
+        # quickly; we don't wait on it.
+        creationflags = 0
+        kwargs: Dict[str, Any] = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if platform.system() == "Windows":
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            kwargs["creationflags"] = creationflags
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen([str(exe), str(path)], **kwargs)
+        out["fileOpenAttempts"].append({"method": "spawn", "argv": [str(exe), str(path)]})
+        out["fileOpenForwarded"] = True
+        out["fileOpenMethod"] = "spawn"
+    except Exception as exc:
+        logger.warning(f"spawn fallback for file-open failed: {exc}")
+        out["fileOpenAttempts"].append({"method": "spawn", "error": str(exc)})
+        out["warning"] = (
+            "KiCad is running but the MCP couldn't forward the file-open: "
+            f"{exc}.  Open the file manually in KiCad or close KiCad and "
+            "call launch_kicad_ui again."
+        )
+    return out
 
 
 def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
