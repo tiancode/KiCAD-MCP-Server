@@ -1177,7 +1177,12 @@ edit_schematic_component and set its value to an empty string.`,
   // Annotate schematic
   server.tool(
     "annotate_schematic",
-    "Assign reference designators to unannotated components (R? → R1, R2, ...). Must be called before tools that require known references.",
+    "Assign reference designators to UNANNOTATED components (R? → R1, R2, ...). " +
+      "Only useful when add_schematic_component was called with a placeholder ref " +
+      "ending in '?' (e.g. 'R?', 'U?').  If every component was added with a concrete " +
+      "reference (e.g. reference='U1'), this is a no-op — the response carries " +
+      "annotated: [] and noop: true.  Safe to skip in flows that already assign " +
+      "references at creation time; safe to call defensively too.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
     },
@@ -1187,7 +1192,17 @@ edit_schematic_component and set its value to an empty string.`,
         const annotated = result.annotated || [];
         if (annotated.length === 0) {
           return {
-            content: [{ type: "text", text: "All components are already annotated." }],
+            content: [
+              {
+                type: "text",
+                text:
+                  "No components needed annotation — every symbol already has a " +
+                  "concrete reference (no '?' placeholders found). This is the " +
+                  "expected state when add_schematic_component was called with " +
+                  "explicit references; you can drop annotate_schematic from this " +
+                  "flow.",
+              },
+            ],
           };
         }
         const lines = annotated.map((a: any) => `  ${a.oldReference} → ${a.newReference}`);

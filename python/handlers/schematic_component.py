@@ -87,10 +87,21 @@ def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -
                 unannotated.append((symbol, prefix))
 
         if not unannotated:
+            # No '?' placeholders means add_schematic_component was called
+            # with concrete references at creation — annotate_schematic
+            # has nothing to assign.  Flag this as a no-op so callers can
+            # detect it programmatically and skip the call in future
+            # runs of the same flow.
             return {
                 "success": True,
+                "noop": True,
                 "annotated": [],
-                "message": "All components already annotated",
+                "message": (
+                    "No components needed annotation — every symbol already "
+                    "has a concrete reference (no '?' placeholders). This "
+                    "tool only matters when add_schematic_component was "
+                    "called with placeholder refs like 'R?'."
+                ),
             }
 
         annotated = []
