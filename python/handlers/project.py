@@ -118,6 +118,12 @@ def _autolaunch_for_project(
         "launched": False,
         "running": False,
         "ipcAttached": False,
+        # ipcAttached=true with pcbDocumentOpen=false used to be the trap
+        # behind silent 0×0 get_board_info / "Failed to move component"
+        # results: the IPC socket was up but KiCad had no .kicad_pcb loaded,
+        # so every board op acted on an empty stub.  Surface the document
+        # state explicitly so callers don't have to discover it the hard way.
+        "pcbDocumentOpen": False,
         "message": None,
         "reason": None,
         "error": None,
@@ -199,6 +205,22 @@ def _autolaunch_for_project(
             return base
 
     base["ipcAttached"] = True
+    try:
+        base["pcbDocumentOpen"] = bool(iface._ipc_has_open_board_document())
+    except Exception:
+        base["pcbDocumentOpen"] = False
+    if not base["pcbDocumentOpen"]:
+        # Auto-launching `kicad <project.kicad_pro>` opens the project
+        # manager but not the PCB editor frame.  The IPC socket attaches
+        # immediately, which used to make ipcAttached:true look like
+        # "everything's ready" — but the very next move_component etc.
+        # would fail because no board doc is loaded.  Spell it out.
+        base["warning"] = (
+            "IPC is attached but KiCad has no .kicad_pcb document open. "
+            "Subsequent board ops will be refused with needs_pcb_editor:true "
+            "until the user opens the PCB editor in KiCad (or you call "
+            "open_project with the .kicad_pcb path)."
+        )
     return base
 
 

@@ -18,9 +18,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 @pytest.fixture(autouse=True)
 def _pcb_editor_open(monkeypatch):
     """Pretend the PCB editor frame is open so the IPC board-op gate passes."""
+    from kicad_interface import KiCADInterface
     from utils.kicad_process import KiCADProcessManager
 
     monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+    monkeypatch.setattr(
+        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
 
 
 def _make_iface(api, use_ipc=True):

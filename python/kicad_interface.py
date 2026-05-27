@@ -787,9 +787,10 @@ class KiCADInterface:
     @staticmethod
     def _pcb_editor_gate_reason() -> str:
         return (
-            "KiCAD is running but the PCB editor is not open. "
-            "Open the PCB editor in KiCAD (project manager → PCB icon, "
-            "or open the .kicad_pcb file directly) and retry."
+            "KiCAD has no .kicad_pcb document open over IPC. "
+            "Open the board in KiCAD (project manager → PCB icon, "
+            "or open the .kicad_pcb file directly, "
+            "or call open_project with the .kicad_pcb path) and retry."
         )
 
     def _pcb_editor_gate_response(self, command: Optional[str] = None) -> Dict[str, Any]:
@@ -808,6 +809,40 @@ class KiCADInterface:
             "command": command,
             "message": f"{label} requires the PCB editor: " + self._pcb_editor_gate_reason(),
         }
+
+    def _ipc_has_open_board_document(self) -> bool:
+        """Whether KiCad has a ``.kicad_pcb`` document open via IPC.
+
+        The pcbnew binary can be alive as a kiway worker even with no
+        editor frame visible — ``KiCADProcessManager.is_pcb_editor_running()``
+        then returns True and the old gate let calls through, but kipy
+        had no document to act on so every board op silently returned
+        empty data (``get_board_info`` → 0×0, ``move_component`` →
+        'Failed to move component').
+
+        Ask the IPC server directly: if no doc with a ``.kicad_pcb``
+        path/type comes back, the editor isn't usefully open.
+        """
+        ipc_backend = getattr(self, "ipc_backend", None)
+        if ipc_backend is None or not ipc_backend.is_connected():
+            return False
+        kicad = getattr(ipc_backend, "_kicad", None)
+        if kicad is None:
+            return False
+        try:
+            docs = kicad.get_open_documents()
+        except Exception as e:
+            logger.debug(f"get_open_documents failed: {e}")
+            return False
+        for doc in docs or ():
+            path = getattr(doc, "path", None) or getattr(doc, "board_filename", None)
+            if path and str(path).endswith(".kicad_pcb"):
+                return True
+            doc_type = getattr(doc, "type", None)
+            type_name = getattr(doc_type, "name", "") if doc_type is not None else ""
+            if type_name in {"DOCTYPE_PCB", "PCB"}:
+                return True
+        return False
 
     def require_ipc_board_op(self, *, allow_launch: bool = True) -> Dict[str, Any]:
         """Gate for handler-level IPC board ops.
@@ -876,7 +911,10 @@ class KiCADInterface:
         def _check_editor_gate() -> Optional[Tuple[bool, str]]:
             if not require_pcb_editor:
                 return None
-            if KiCADProcessManager.is_pcb_editor_running():
+            # Ground truth: kipy.get_open_documents() must list a .kicad_pcb
+            # doc.  The process-existence proxy lies when pcbnew is alive
+            # as a kiway worker without a board loaded.
+            if self._ipc_has_open_board_document():
                 return None
             return (False, self._pcb_editor_gate_reason())
 
@@ -1015,7 +1053,11 @@ class KiCADInterface:
                 # ensure_ipc), so the editor-frame gate has to be enforced
                 # at the dispatch site too — otherwise a project-manager-only
                 # KiCAD would silently route mutations to a closed document.
-                if not KiCADProcessManager.is_pcb_editor_running():
+                # The check is "is there a .kicad_pcb open via IPC", NOT
+                # "is pcbnew a running process" — kicad may have pcbnew alive
+                # as a kiway worker with no board, in which case the process
+                # check falsely passes and every call returns empty data.
+                if not self._ipc_has_open_board_document():
                     return self._pcb_editor_gate_response(command)
 
                 # Cross-backend conflict: refuse IPC writes when SWIG has

@@ -21,6 +21,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
 
+@pytest.fixture(autouse=True)
+def _board_document_open(monkeypatch):
+    """IPC gate now asks kipy.get_open_documents() — stub it as 'yes' so
+    these handler-level tests don't trip the editor-frame gate."""
+    from kicad_interface import KiCADInterface
+
+    monkeypatch.setattr(
+        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
+
+
 @pytest.fixture
 def iface():
     """Bare KiCADInterface with a mock IPC board API for the handler to call.

@@ -273,3 +273,180 @@ def test_ipc_handler_require_ipc_message_is_not_double_prefixed(monkeypatch):
 
     assert "socket refused" in out["message"]
     assert out["message"].count("IPC backend") == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix #4 — gate uses kipy.get_open_documents() instead of process existence
+# ---------------------------------------------------------------------------
+# Real-world failure mode: kicad's project manager pre-loads pcbnew as a
+# kiway worker, so the binary IS a running process — but no .kicad_pcb
+# document is loaded.  The old gate (which only checked
+# is_pcb_editor_running) let calls through and ``get_board_info`` /
+# ``move_component`` silently returned 0×0 / generic failure.  Switch to
+# ``_ipc_has_open_board_document`` so the gate fires on that exact state.
+def _kicad_with_docs(docs: list):
+    """Build a stand-in ipc_backend whose kipy returns the given docs list."""
+    backend = MagicMock()
+    backend.is_connected = MagicMock(return_value=True)
+    backend._kicad = MagicMock()
+    backend._kicad.get_open_documents = MagicMock(return_value=docs)
+    return backend
+
+
+class _Doc:
+    """Stand-in for a kipy DocumentSpecifier with a .path attribute."""
+
+    def __init__(self, path: str):
+        self.path = path
+
+
+def test_open_board_document_detection_finds_kicad_pcb_in_open_docs():
+    from kicad_interface import KiCADInterface
+
+    iface = _bare_iface()
+    iface.ipc_backend = _kicad_with_docs([_Doc("/tmp/demo.kicad_pcb")])
+
+    assert KiCADInterface._ipc_has_open_board_document(iface) is True
+
+
+def test_open_board_document_detection_returns_false_when_only_schematic():
+    from kicad_interface import KiCADInterface
+
+    iface = _bare_iface()
+    iface.ipc_backend = _kicad_with_docs([_Doc("/tmp/demo.kicad_sch")])
+
+    assert KiCADInterface._ipc_has_open_board_document(iface) is False
+
+
+def test_open_board_document_detection_returns_false_when_no_docs_open():
+    """The user's real-world failure: pcbnew is running as a kiway worker
+    but no board is loaded, so kipy returns an empty document list. The
+    old process-check gate let calls through; this is the new ground truth."""
+    from kicad_interface import KiCADInterface
+
+    iface = _bare_iface()
+    iface.ipc_backend = _kicad_with_docs([])
+
+    assert KiCADInterface._ipc_has_open_board_document(iface) is False
+
+
+def test_open_board_document_detection_handles_kipy_errors_gracefully():
+    """If get_open_documents itself throws (kipy stale, version mismatch),
+    fail closed — assume no document is open, gate the next call."""
+    from kicad_interface import KiCADInterface
+
+    iface = _bare_iface()
+    iface.ipc_backend = MagicMock()
+    iface.ipc_backend.is_connected = MagicMock(return_value=True)
+    iface.ipc_backend._kicad = MagicMock()
+    iface.ipc_backend._kicad.get_open_documents = MagicMock(
+        side_effect=RuntimeError("kipy stale")
+    )
+
+    assert KiCADInterface._ipc_has_open_board_document(iface) is False
+
+
+def test_handle_command_ipc_fastpath_gates_when_no_board_doc_open(monkeypatch):
+    """End-to-end: ``get_board_info`` used to silently return 0×0 in this
+    state. Now the dispatch sees no .kicad_pcb in get_open_documents and
+    short-circuits with needs_pcb_editor:true."""
+    from kicad_interface import KiCADInterface
+
+    iface = _bare_iface()
+    iface.use_ipc = True
+    iface.ipc_board_api = MagicMock()
+    iface.ipc_backend = _kicad_with_docs([])  # No PCB doc open
+    # The old process-based gate would have been bypassed here:
+    monkeypatch.setattr(
+        "utils.kicad_process.KiCADProcessManager.is_pcb_editor_running",
+        lambda: True,
+    )
+
+    out = KiCADInterface.handle_command(iface, "get_board_info", {})
+
+    assert out["success"] is False
+    assert out["needs_pcb_editor"] is True
+    assert out["command"] == "get_board_info"
+    assert ".kicad_pcb" in out["message"]
+
+
+# ---------------------------------------------------------------------------
+# _autolaunch_for_project surfaces pcbDocumentOpen so the agent doesn't
+# discover the missing board the hard way (silent empty results / "Failed
+# to move component")
+# ---------------------------------------------------------------------------
+def test_autolaunch_marks_pcb_document_open_false_with_warning(monkeypatch, tmp_path):
+    """After auto-launching the project manager, IPC attaches immediately
+    but no PCB editor frame is loaded — _autolaunch_for_project must say
+    so loudly instead of reporting a misleading 'ipcAttached: true' alone."""
+    from handlers import project as project_handler
+    from kicad_interface import KiCADInterface
+
+    project_file = tmp_path / "demo.kicad_pro"
+    project_file.write_text("(kicad_project)\n", encoding="utf-8")
+    (tmp_path / "demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        project_handler,
+        "check_and_launch_kicad",
+        lambda path, auto_launch=True: {
+            "running": True,
+            "launched": True,
+            "processes": [],
+            "message": "KiCAD launched",
+        },
+    )
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _bare_iface()
+    iface._try_enable_ipc_backend = lambda force=False: True
+    iface._current_board_path = lambda: None
+    monkeypatch.setattr(
+        KiCADInterface, "_ipc_has_open_board_document", lambda self: False
+    )
+
+    result = project_handler._autolaunch_for_project(iface, project_file, {})
+
+    assert result["ipcAttached"] is True
+    assert result["pcbDocumentOpen"] is False
+    assert result["warning"] is not None
+    assert "no .kicad_pcb document open" in result["warning"]
+
+
+def test_autolaunch_marks_pcb_document_open_true_when_kipy_reports_it(monkeypatch, tmp_path):
+    """The complementary positive case: when KiCad has the board loaded,
+    pcbDocumentOpen surfaces True and no warning fires."""
+    from handlers import project as project_handler
+    from kicad_interface import KiCADInterface
+
+    project_file = tmp_path / "demo.kicad_pro"
+    project_file.write_text("(kicad_project)\n", encoding="utf-8")
+    board_file = tmp_path / "demo.kicad_pcb"
+    board_file.write_text("(kicad_pcb)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        project_handler,
+        "check_and_launch_kicad",
+        lambda path, auto_launch=True: {
+            "running": True,
+            "launched": False,
+            "processes": [],
+            "message": "KiCAD already running",
+        },
+    )
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _bare_iface()
+    iface._try_enable_ipc_backend = lambda force=False: True
+    iface._current_board_path = lambda: str(board_file)
+    monkeypatch.setattr(
+        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
+
+    result = project_handler._autolaunch_for_project(iface, project_file, {})
+
+    assert result["ipcAttached"] is True
+    assert result["pcbDocumentOpen"] is True
+    assert result["warning"] is None

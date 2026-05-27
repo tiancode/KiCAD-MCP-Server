@@ -45,9 +45,13 @@ def _make_iface(*, use_ipc=True):
 @pytest.fixture(autouse=True)
 def _pcb_editor_open(monkeypatch):
     """PCB editor gate is orthogonal; assume it's open in these tests."""
+    from kicad_interface import KiCADInterface
     from utils.kicad_process import KiCADProcessManager
 
     monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+    monkeypatch.setattr(
+        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
 
 
 # ---------------------------------------------------------------------------

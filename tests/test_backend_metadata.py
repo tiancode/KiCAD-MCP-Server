@@ -359,9 +359,12 @@ def test_ipc_capable_command_reconnects_when_kicad_is_running(monkeypatch):
 
     monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "auto")
     monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_running", lambda: True)
-    # PCB editor gate: IPC board ops short-circuit when pcbnew isn't a
-    # running process. The test simulates a full KiCAD UI, so report True.
+    # PCB editor gate: IPC board ops short-circuit when no .kicad_pcb is
+    # open via IPC. The test simulates a full KiCAD UI, so report True.
     monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+    monkeypatch.setattr(
+        kicad_interface.KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
     monkeypatch.setitem(
         sys.modules,
         "kicad_api.ipc_backend",
@@ -517,8 +520,12 @@ def test_query_traces_can_use_ipc_backend(monkeypatch):
     import kicad_interface
 
     monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "swig")
-    # IPC board ops gate on pcbnew being open; the fake setup simulates that.
+    # IPC board ops gate on a .kicad_pcb being open via IPC; the fake setup
+    # simulates that so the dispatch reaches the IPC fast-path.
     monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+    monkeypatch.setattr(
+        kicad_interface.KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
 
     iface = _make_iface({}, use_ipc=True)
     iface.ipc_board_api = _FakeIPCBoardAPI()
@@ -539,6 +546,9 @@ def test_query_traces_ipc_filters_and_vias(monkeypatch):
 
     monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "swig")
     monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+    monkeypatch.setattr(
+        kicad_interface.KiCADInterface, "_ipc_has_open_board_document", lambda self: True
+    )
 
     iface = _make_iface({}, use_ipc=True)
     iface.ipc_board_api = _FilteringIPCBoardAPI()
