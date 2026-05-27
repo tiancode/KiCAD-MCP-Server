@@ -504,7 +504,14 @@ def handle_list_schematic_components(
 
         schematic = SchematicManager.load_schematic(schematic_path)
         if not schematic:
-            return {"success": False, "message": "Failed to load schematic"}
+            # skip choked on the file (typical when lib_symbols contains a
+            # symbol with `(extends ...)` or an empty property name — the
+            # _base_coords AttributeError from MCP_FEEDBACK A3).  Fall back
+            # to a sexpdata walk so the caller at least sees the
+            # component list; pin enrichment is skipped on this path.
+            return _list_schematic_components_raw_fallback(
+                sch_file, params.get("filter", {})
+            )
 
         # Optional filters
         filter_params = params.get("filter", {})
@@ -513,68 +520,164 @@ def handle_list_schematic_components(
 
         locator = PinLocator()
         components = []
+        skip_failures = 0
 
-        for symbol in schematic.symbol:
-            if not hasattr(symbol.property, "Reference"):
-                continue
-            ref = symbol.property.Reference.value
-            # Skip template symbols
-            if ref.startswith("_TEMPLATE"):
-                continue
-
-            lib_id = symbol.lib_id.value if hasattr(symbol, "lib_id") else ""
-
-            # Apply filters
-            if lib_id_filter and lib_id_filter not in lib_id:
-                continue
-            if ref_prefix_filter and not ref.startswith(ref_prefix_filter):
-                continue
-
-            value = symbol.property.Value.value if hasattr(symbol.property, "Value") else ""
-            footprint = (
-                symbol.property.Footprint.value if hasattr(symbol.property, "Footprint") else ""
+        try:
+            symbol_iter = list(schematic.symbol)
+        except (AttributeError, KeyError, TypeError) as e:
+            # skip's iterator itself blew up (e.g. lib_symbols contained an
+            # extends-symbol with no parent in scope, producing the
+            # `_base_coords` AttributeError reported in MCP_FEEDBACK A3).
+            # Fall back to the raw sexpdata parser.
+            logger.warning(
+                "skip iterator failed for %s (%s); using raw fallback",
+                schematic_path,
+                e,
             )
-            position = symbol.at.value if hasattr(symbol, "at") else [0, 0, 0]
-            uuid_val = symbol.uuid.value if hasattr(symbol, "uuid") else ""
+            return _list_schematic_components_raw_fallback(
+                sch_file, params.get("filter", {})
+            )
 
-            comp = {
-                "reference": ref,
-                "libId": lib_id,
-                "value": value,
-                "footprint": footprint,
-                "position": {"x": float(position[0]), "y": float(position[1])},
-                "rotation": float(position[2]) if len(position) > 2 else 0,
-                "uuid": str(uuid_val),
-            }
-
-            # Get pins if available
+        for symbol in symbol_iter:
             try:
-                all_pins = locator.get_all_symbol_pins(sch_file, ref)
-                if all_pins:
-                    pins_def = locator.get_symbol_pins(sch_file, lib_id) or {}
-                    pin_list = []
-                    for pin_num, coords in all_pins.items():
-                        pin_info = {
-                            "number": pin_num,
-                            "position": {"x": coords[0], "y": coords[1]},
-                        }
-                        if pin_num in pins_def:
-                            pin_info["name"] = pins_def[pin_num].get("name", pin_num)
-                        pin_list.append(pin_info)
-                    comp["pins"] = pin_list
-            except Exception:
-                pass  # Pin lookup is best-effort
+                if not hasattr(symbol.property, "Reference"):
+                    continue
+                ref = symbol.property.Reference.value
+                # Skip template symbols
+                if ref.startswith("_TEMPLATE"):
+                    continue
 
-            components.append(comp)
+                lib_id = symbol.lib_id.value if hasattr(symbol, "lib_id") else ""
 
-        return {"success": True, "components": components, "count": len(components)}
+                # Apply filters
+                if lib_id_filter and lib_id_filter not in lib_id:
+                    continue
+                if ref_prefix_filter and not ref.startswith(ref_prefix_filter):
+                    continue
+
+                value = symbol.property.Value.value if hasattr(symbol.property, "Value") else ""
+                footprint = (
+                    symbol.property.Footprint.value
+                    if hasattr(symbol.property, "Footprint")
+                    else ""
+                )
+                position = symbol.at.value if hasattr(symbol, "at") else [0, 0, 0]
+                uuid_val = symbol.uuid.value if hasattr(symbol, "uuid") else ""
+
+                comp = {
+                    "reference": ref,
+                    "libId": lib_id,
+                    "value": value,
+                    "footprint": footprint,
+                    "position": {"x": float(position[0]), "y": float(position[1])},
+                    "rotation": float(position[2]) if len(position) > 2 else 0,
+                    "uuid": str(uuid_val),
+                }
+
+                # Get pins if available
+                try:
+                    all_pins = locator.get_all_symbol_pins(sch_file, ref)
+                    if all_pins:
+                        pins_def = locator.get_symbol_pins(sch_file, lib_id) or {}
+                        pin_list = []
+                        for pin_num, coords in all_pins.items():
+                            pin_info = {
+                                "number": pin_num,
+                                "position": {"x": coords[0], "y": coords[1]},
+                            }
+                            if pin_num in pins_def:
+                                pin_info["name"] = pins_def[pin_num].get("name", pin_num)
+                            pin_list.append(pin_info)
+                        comp["pins"] = pin_list
+                except Exception:
+                    pass  # Pin lookup is best-effort
+
+                components.append(comp)
+            except (AttributeError, KeyError, TypeError) as e:
+                # One bad symbol in lib_symbols shouldn't take out the
+                # whole list.  Count failures so the caller knows the
+                # result is partial.
+                skip_failures += 1
+                logger.warning(
+                    "Skipping unparseable symbol in %s: %s", schematic_path, e
+                )
+                continue
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "components": components,
+            "count": len(components),
+        }
+        if skip_failures:
+            result["partial"] = True
+            result["skippedSymbols"] = skip_failures
+            result["warning"] = (
+                f"{skip_failures} symbol(s) could not be parsed by kicad-skip "
+                "and were skipped; the list may be incomplete."
+            )
+        return result
 
     except Exception as e:
         logger.error(f"Error listing schematic components: {e}")
         import traceback
 
         logger.error(traceback.format_exc())
-        return {"success": False, "message": str(e)}
+        # Last-ditch fallback: even when skip threw something unexpected,
+        # try the raw parser before giving up.
+        try:
+            return _list_schematic_components_raw_fallback(
+                Path(params["schematicPath"]),
+                params.get("filter") or {},
+            )
+        except Exception:  # noqa: BLE001 — the raw parser failed too
+            return {"success": False, "message": str(e)}
+
+
+def _list_schematic_components_raw_fallback(
+    sch_file: "Path", filter_params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Degraded path used when kicad-skip can't load the schematic.
+
+    Reads top-level (symbol ...) instances directly with sexpdata.
+    Returns the same shape as the happy path minus pin enrichment, plus
+    a `parser: "raw_fallback"` marker so callers can spot the
+    degradation.
+    """
+    from commands.schematic_raw_parser import parse_components
+
+    try:
+        components = parse_components(str(sch_file))
+    except (OSError, ValueError) as e:
+        logger.error("Raw schematic parse failed for %s: %s", sch_file, e)
+        return {
+            "success": False,
+            "message": f"Failed to load schematic (skip + raw parser both failed): {e}",
+        }
+
+    lib_id_filter = filter_params.get("libId", "")
+    ref_prefix_filter = filter_params.get("referencePrefix", "")
+    if lib_id_filter:
+        components = [c for c in components if lib_id_filter in c.get("libId", "")]
+    if ref_prefix_filter:
+        components = [
+            c for c in components if c.get("reference", "").startswith(ref_prefix_filter)
+        ]
+
+    return {
+        "success": True,
+        "components": components,
+        "count": len(components),
+        "partial": True,
+        "parser": "raw_fallback",
+        "warning": (
+            "kicad-skip could not load this schematic (often due to a stock "
+            "symbol with `(extends ...)` or an empty property name in "
+            "lib_symbols); component list was extracted by direct "
+            "S-expression parsing and does not include pin coordinates. "
+            "Use get_schematic_pin_locations for pin data on a per-component "
+            "basis if needed."
+        ),
+    }
 
 
 def handle_get_schematic_pin_locations(
