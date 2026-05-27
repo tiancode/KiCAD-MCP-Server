@@ -293,6 +293,48 @@ class IPCBackend(KiCADBackend):
 
         return IPCBoardAPI(self._kicad, self._notify_change)
 
+    # KiCad-level operations (not specific to one document)
+    def run_action(self, action: str) -> Dict[str, Any]:
+        """
+        Invoke a KiCad TOOL_ACTION by name (escape hatch into the editor).
+
+        kipy upstream marks this as unstable — action names are not guaranteed
+        across releases and side effects vary. Surface it anyway because some
+        operations (close-loop ratsnest refresh, view-fit, plugin triggers,
+        cleanup actions) have no other API.
+
+        Returns the raw RUN_ACTION_STATUS enum value alongside a string label
+        so callers don't have to import kipy's proto enum to interpret it.
+        """
+        if not self.is_connected():
+            raise ConnectionError("Not connected to KiCAD")
+        try:
+            response = self._kicad.run_action(action)
+            # kipy's run_action returns the full RunActionResponse proto
+            # (not just the status enum value, despite the docstring).
+            # Extract .status as int and best-effort resolve the enum name.
+            status_int = int(getattr(response, "status", 0))
+            status_name: Optional[str] = None
+            try:
+                from kipy.proto.common.commands.editor_commands_pb2 import RunActionStatus
+
+                status_name = RunActionStatus.Name(status_int)
+            except Exception:
+                status_name = None
+            # Success = the action ran (RAS_OK = 1).  Anything else is a
+            # client-visible failure (RAS_INVALID action name, RAS_FRAME_NOT_OPEN).
+            ok = status_int == 1
+            self._notify_change("action_invoked", {"action": action, "status": status_int})
+            return {
+                "success": ok,
+                "action": action,
+                "status": status_int,
+                "statusName": status_name,
+            }
+        except Exception as e:
+            logger.error(f"Failed to run action {action!r}: {e}")
+            return {"success": False, "action": action, "errorDetails": str(e)}
+
 
 class IPCBoardAPI(BoardAPI):
     """
@@ -1395,19 +1437,21 @@ class IPCBoardAPI(BoardAPI):
             logger.error(f"Failed to refill zones: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # Selection / interaction
+    # ------------------------------------------------------------------
     def get_selection(self) -> List[Dict[str, Any]]:
-        """Get currently selected items in the KiCAD UI."""
+        """Get currently selected items in the KiCAD UI.
+
+        Returns one dict per item with at least ``id`` and ``type``, plus a
+        few common attributes (reference / value for footprints, position /
+        layer where available) so a caller can identify what's selected
+        without a second round-trip.
+        """
         try:
             board = self._get_board()
             selection = board.get_selection()
-
-            result = []
-            for item in selection:
-                result.append(
-                    {"type": type(item).__name__, "id": str(item.id) if hasattr(item, "id") else ""}
-                )
-
-            return result
+            return [self._describe_item(item) for item in selection]
         except Exception as e:
             logger.error(f"Failed to get selection: {e}")
             return []
@@ -1417,10 +1461,471 @@ class IPCBoardAPI(BoardAPI):
         try:
             board = self._get_board()
             board.clear_selection()
+            self._notify("selection_cleared", {})
             return True
         except Exception as e:
             logger.error(f"Failed to clear selection: {e}")
             return False
+
+    def add_to_selection(self, ids: List[str]) -> Dict[str, Any]:
+        """Add board items (by KIID) to the current selection."""
+        return self._mutate_selection(ids, add=True)
+
+    def remove_from_selection(self, ids: List[str]) -> Dict[str, Any]:
+        """Remove board items (by KIID) from the current selection."""
+        return self._mutate_selection(ids, add=False)
+
+    def _mutate_selection(self, ids: List[str], *, add: bool) -> Dict[str, Any]:
+        try:
+            board = self._get_board()
+            items = self._resolve_items_by_ids(board, ids)
+            if not items:
+                return {
+                    "success": False,
+                    "message": "No items resolved from supplied IDs",
+                    "requested": list(ids),
+                    "resolved": 0,
+                }
+            updated = (
+                board.add_to_selection(items) if add else board.remove_from_selection(items)
+            )
+            event = "selection_added" if add else "selection_removed"
+            self._notify(event, {"ids": list(ids), "count": len(items)})
+            return {
+                "success": True,
+                "requested": list(ids),
+                "resolved": len(items),
+                "selection": [self._describe_item(i) for i in updated],
+            }
+        except Exception as e:
+            logger.error(f"Failed to {'add to' if add else 'remove from'} selection: {e}")
+            return {"success": False, "message": str(e)}
+
+    def hit_test(
+        self,
+        x: float,
+        y: float,
+        item_id: Optional[str] = None,
+        tolerance: float = 0,
+        unit: str = "mm",
+    ) -> Dict[str, Any]:
+        """Hit-test a board item at ``(x, y)``.
+
+        If ``item_id`` is given, test only that item. Otherwise, sweep all
+        footprints, tracks, vias, zones, and graphic shapes and return every
+        item whose ``hit_test`` returns True — useful for "what's at this
+        coordinate?" queries.
+
+        ``tolerance`` is in the same unit as the coordinates.
+        """
+        try:
+            from kipy.geometry import Vector2
+            from kipy.util.units import from_mm
+
+            board = self._get_board()
+            scale = MM_TO_NM if unit == "mm" else INCH_TO_NM
+            position = Vector2.from_xy(int(x * scale), int(y * scale))
+            tol_nm = int(tolerance * scale)
+
+            if item_id:
+                items = self._resolve_items_by_ids(board, [item_id])
+                if not items:
+                    return {"success": False, "message": f"Item {item_id} not found"}
+                hit = bool(board.hit_test(items[0], position, tol_nm))
+                return {
+                    "success": True,
+                    "hit": hit,
+                    "items": [self._describe_item(items[0])] if hit else [],
+                }
+
+            # Sweep — collect anything underneath the cursor.
+            from_mm  # keep import for type-checkers; not used here directly
+            candidates: List[Any] = []
+            for getter in (
+                "get_footprints",
+                "get_tracks",
+                "get_vias",
+                "get_zones",
+                "get_shapes",
+            ):
+                try:
+                    candidates.extend(list(getattr(board, getter)()))
+                except Exception as e:
+                    logger.debug(f"hit_test sweep: {getter} failed: {e}")
+
+            hits = []
+            for item in candidates:
+                try:
+                    if board.hit_test(item, position, tol_nm):
+                        hits.append(self._describe_item(item))
+                except Exception as e:
+                    logger.debug(f"hit_test on item failed: {e}")
+                    continue
+
+            return {"success": True, "hit": bool(hits), "items": hits, "count": len(hits)}
+        except Exception as e:
+            logger.error(f"Failed to hit-test: {e}")
+            return {"success": False, "message": str(e)}
+
+    def interactive_move(self, ids: List[str]) -> Dict[str, Any]:
+        """Initiate KiCad's interactive move tool on the given items.
+
+        This is a blocking-style operation in KiCad — future API calls return
+        AS_BUSY until the user finishes the drag.  We return immediately;
+        callers should not chain further mutations until the user releases.
+        """
+        try:
+            board = self._get_board()
+            items = self._resolve_items_by_ids(board, ids)
+            if not items:
+                return {
+                    "success": False,
+                    "message": "No items resolved from supplied IDs",
+                    "requested": list(ids),
+                }
+            # kipy's interactive_move accepts a single KIID or an iterable.
+            # Pass the proto KIIDs (item.id), not the wrappers.
+            board.interactive_move([item.id for item in items])
+            self._notify("interactive_move", {"ids": list(ids), "count": len(items)})
+            return {
+                "success": True,
+                "requested": list(ids),
+                "resolved": len(items),
+                "message": (
+                    "Interactive move started — KiCAD UI is now in drag mode. "
+                    "Further API calls will return AS_BUSY until the user releases."
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Failed to start interactive move: {e}")
+            return {"success": False, "message": str(e)}
+
+    # ------------------------------------------------------------------
+    # Drawing primitives — graphic shapes on any layer.
+    #
+    # These are *graphic* shapes (no net association unless layer is Cu).
+    # For copper traces use add_track / route_trace; for filled copper use
+    # add_zone.  Routed *arc tracks* (copper) live on add_arc_track —
+    # add_arc here is the graphic version for silk / fab / Edge.Cuts /
+    # User layers.
+    # ------------------------------------------------------------------
+    def add_segment(
+        self,
+        start_x: float,
+        start_y: float,
+        end_x: float,
+        end_y: float,
+        width: float = 0.15,
+        layer: str = "F.SilkS",
+    ) -> Dict[str, Any]:
+        """Add a straight graphic line on any layer."""
+        try:
+            from kipy.board_types import BoardSegment
+            from kipy.geometry import Vector2
+            from kipy.util.units import from_mm
+
+            board = self._get_board()
+            seg = BoardSegment()
+            seg.start = Vector2.from_xy(from_mm(start_x), from_mm(start_y))
+            seg.end = Vector2.from_xy(from_mm(end_x), from_mm(end_y))
+            seg.layer = self._layer_to_enum(layer)
+            seg.attributes.stroke.width = from_mm(width)
+            created_id = self._commit_create(board, seg, f"Added segment on {layer}")
+            self._notify(
+                "shape_added",
+                {
+                    "kind": "segment",
+                    "layer": layer,
+                    "start": {"x": start_x, "y": start_y},
+                    "end": {"x": end_x, "y": end_y},
+                },
+            )
+            return {"success": True, "id": created_id, "layer": layer}
+        except Exception as e:
+            logger.error(f"Failed to add segment: {e}")
+            return {"success": False, "message": str(e)}
+
+    def add_arc(
+        self,
+        start_x: float,
+        start_y: float,
+        mid_x: float,
+        mid_y: float,
+        end_x: float,
+        end_y: float,
+        width: float = 0.15,
+        layer: str = "F.SilkS",
+    ) -> Dict[str, Any]:
+        """Add a graphic arc on any layer (start → mid → end)."""
+        try:
+            from kipy.board_types import BoardArc
+            from kipy.geometry import Vector2
+            from kipy.util.units import from_mm
+
+            board = self._get_board()
+            arc = BoardArc()
+            arc.start = Vector2.from_xy(from_mm(start_x), from_mm(start_y))
+            arc.mid = Vector2.from_xy(from_mm(mid_x), from_mm(mid_y))
+            arc.end = Vector2.from_xy(from_mm(end_x), from_mm(end_y))
+            arc.layer = self._layer_to_enum(layer)
+            arc.attributes.stroke.width = from_mm(width)
+            created_id = self._commit_create(board, arc, f"Added arc on {layer}")
+            self._notify(
+                "shape_added",
+                {
+                    "kind": "arc",
+                    "layer": layer,
+                    "start": {"x": start_x, "y": start_y},
+                    "mid": {"x": mid_x, "y": mid_y},
+                    "end": {"x": end_x, "y": end_y},
+                },
+            )
+            return {"success": True, "id": created_id, "layer": layer}
+        except Exception as e:
+            logger.error(f"Failed to add arc: {e}")
+            return {"success": False, "message": str(e)}
+
+    def add_circle(
+        self,
+        center_x: float,
+        center_y: float,
+        radius: float,
+        width: float = 0.15,
+        layer: str = "F.SilkS",
+        filled: bool = False,
+    ) -> Dict[str, Any]:
+        """Add a graphic circle on any layer.
+
+        ``filled=True`` produces a solid disc (radius is the disc radius);
+        ``filled=False`` produces a stroked ring of the given ``width``.
+        """
+        try:
+            from kipy.board_types import BoardCircle
+            from kipy.geometry import Vector2
+            from kipy.util.units import from_mm
+
+            board = self._get_board()
+            circle = BoardCircle()
+            circle.center = Vector2.from_xy(from_mm(center_x), from_mm(center_y))
+            # radius is given as a "point on the circle" in kipy — pick a
+            # canonical one to the right of centre.
+            circle.radius_point = Vector2.from_xy(
+                from_mm(center_x + radius), from_mm(center_y)
+            )
+            circle.layer = self._layer_to_enum(layer)
+            circle.attributes.stroke.width = from_mm(width)
+            circle.attributes.fill.filled = bool(filled)
+            created_id = self._commit_create(board, circle, f"Added circle on {layer}")
+            self._notify(
+                "shape_added",
+                {
+                    "kind": "circle",
+                    "layer": layer,
+                    "center": {"x": center_x, "y": center_y},
+                    "radius": radius,
+                    "filled": filled,
+                },
+            )
+            return {"success": True, "id": created_id, "layer": layer}
+        except Exception as e:
+            logger.error(f"Failed to add circle: {e}")
+            return {"success": False, "message": str(e)}
+
+    def add_rectangle(
+        self,
+        top_left_x: float,
+        top_left_y: float,
+        bottom_right_x: float,
+        bottom_right_y: float,
+        width: float = 0.15,
+        layer: str = "F.SilkS",
+        filled: bool = False,
+    ) -> Dict[str, Any]:
+        """Add a graphic rectangle on any layer (axis-aligned)."""
+        try:
+            from kipy.board_types import BoardRectangle
+            from kipy.geometry import Vector2
+            from kipy.util.units import from_mm
+
+            board = self._get_board()
+            rect = BoardRectangle()
+            rect.top_left = Vector2.from_xy(from_mm(top_left_x), from_mm(top_left_y))
+            rect.bottom_right = Vector2.from_xy(
+                from_mm(bottom_right_x), from_mm(bottom_right_y)
+            )
+            rect.layer = self._layer_to_enum(layer)
+            rect.attributes.stroke.width = from_mm(width)
+            rect.attributes.fill.filled = bool(filled)
+            created_id = self._commit_create(board, rect, f"Added rectangle on {layer}")
+            self._notify(
+                "shape_added",
+                {
+                    "kind": "rectangle",
+                    "layer": layer,
+                    "topLeft": {"x": top_left_x, "y": top_left_y},
+                    "bottomRight": {"x": bottom_right_x, "y": bottom_right_y},
+                    "filled": filled,
+                },
+            )
+            return {"success": True, "id": created_id, "layer": layer}
+        except Exception as e:
+            logger.error(f"Failed to add rectangle: {e}")
+            return {"success": False, "message": str(e)}
+
+    def add_polygon(
+        self,
+        points: List[Dict[str, float]],
+        width: float = 0.15,
+        layer: str = "F.SilkS",
+        filled: bool = False,
+    ) -> Dict[str, Any]:
+        """Add a closed graphic polygon on any layer.
+
+        ``points`` is a list of ``{"x": ..., "y": ...}`` in mm.  At least 3
+        points are required.  ``filled=True`` produces a solid polygon;
+        ``filled=False`` produces a stroked outline of the given ``width``.
+        """
+        try:
+            from kipy.board_types import BoardPolygon
+            from kipy.util.units import from_mm
+
+            if len(points) < 3:
+                return {"success": False, "message": "Polygon requires at least 3 points"}
+
+            board = self._get_board()
+            poly = BoardPolygon()
+            # Write the polygon outline through the proto directly — the
+            # kipy wrapper's `polygons` list is a one-way cache that doesn't
+            # round-trip into the proto on append.  Same trick the existing
+            # add_zone() code uses for Zone outlines.
+            pwh_proto = poly._proto.shape.polygon.polygons.add()
+            pwh_proto.outline.closed = True
+            for pt in points:
+                px = float(pt.get("x", 0))
+                py = float(pt.get("y", 0))
+                node = pwh_proto.outline.nodes.add()
+                node.point.x_nm = from_mm(px)
+                node.point.y_nm = from_mm(py)
+            poly.layer = self._layer_to_enum(layer)
+            poly.attributes.stroke.width = from_mm(width)
+            poly.attributes.fill.filled = bool(filled)
+            created_id = self._commit_create(board, poly, f"Added polygon on {layer}")
+            self._notify(
+                "shape_added",
+                {
+                    "kind": "polygon",
+                    "layer": layer,
+                    "points": len(points),
+                    "filled": filled,
+                },
+            )
+            return {"success": True, "id": created_id, "layer": layer}
+        except Exception as e:
+            logger.error(f"Failed to add polygon: {e}")
+            return {"success": False, "message": str(e)}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _layer_to_enum(name: str) -> Any:
+        """Map a dotted layer name (e.g. ``F.Cu``, ``Edge.Cuts``) to a
+        ``BoardLayer`` enum value.
+
+        The enum names follow ``BL_<dotted-name with '.' replaced by '_'>``,
+        e.g. ``BL_F_Cu``, ``BL_Edge_Cuts``, ``BL_User_1``.  Unknown layers
+        fall back to ``BL_F_SilkS`` rather than raising — graphic shapes
+        with no layer set draw on nothing useful, so a visible default beats
+        a hard failure.
+        """
+        from kipy.proto.board.board_types_pb2 import BoardLayer
+
+        sanitized = "BL_" + name.replace(".", "_")
+        value = BoardLayer.Value(sanitized) if sanitized in BoardLayer.keys() else None
+        if value is None:
+            logger.warning(f"Unknown layer {name!r}; defaulting to F.SilkS")
+            return BoardLayer.BL_F_SilkS
+        return value
+
+    @staticmethod
+    def _commit_create(board: Any, item: Any, description: str) -> str:
+        """Push a single create_items() inside its own commit. Returns the
+        created item's KIID as a string when available."""
+        commit = board.begin_commit()
+        board.create_items(item)
+        board.push_commit(commit, description)
+        return str(item.id) if hasattr(item, "id") else ""
+
+    @staticmethod
+    def _resolve_items_by_ids(board: Any, ids: List[str]) -> List[Any]:
+        """Resolve KIID strings to BoardItem wrappers via the live board.
+
+        Tries ``board.get_items_by_id`` first (newer kipy); falls back to a
+        full scan if that's unavailable.  Unknown IDs are silently skipped —
+        callers see the gap in the returned ``resolved`` count.
+        """
+        if not ids:
+            return []
+        # Preferred: bulk lookup by ID (kipy ≥ 9.x).
+        try:
+            return list(board.get_items_by_id(list(ids)))
+        except Exception as e:
+            logger.debug(f"get_items_by_id failed; falling back to scan: {e}")
+
+        # Fallback: scan all known item collections.
+        wanted = set(str(i) for i in ids)
+        out: List[Any] = []
+        for getter in (
+            "get_footprints",
+            "get_tracks",
+            "get_vias",
+            "get_zones",
+            "get_shapes",
+            "get_pads",
+        ):
+            try:
+                for item in getattr(board, getter)():
+                    if str(getattr(item, "id", "")) in wanted:
+                        out.append(item)
+            except Exception:
+                continue
+        return out
+
+    @staticmethod
+    def _describe_item(item: Any) -> Dict[str, Any]:
+        """Build a JSON-safe summary of a BoardItem for selection / hit-test
+        responses.  Tolerates missing attributes — the kipy wrapper shape
+        varies by item type."""
+        info: Dict[str, Any] = {
+            "type": type(item).__name__,
+            "id": str(getattr(item, "id", "")),
+        }
+        # Footprint-ish: surface reference + value when present.
+        ref_field = getattr(item, "reference_field", None)
+        if ref_field is not None:
+            try:
+                info["reference"] = ref_field.text.value
+            except Exception:
+                pass
+        val_field = getattr(item, "value_field", None)
+        if val_field is not None:
+            try:
+                info["value"] = val_field.text.value
+            except Exception:
+                pass
+        # Position-ish: footprints / vias / pads / text.
+        try:
+            from kipy.util.units import to_mm
+
+            pos = getattr(item, "position", None)
+            if pos is not None and hasattr(pos, "x"):
+                info["position"] = {"x": to_mm(pos.x), "y": to_mm(pos.y), "unit": "mm"}
+        except Exception:
+            pass
+        layer = getattr(item, "layer", None)
+        if layer is not None:
+            info["layer"] = str(layer)
+        return info
 
 
 # Export for factory

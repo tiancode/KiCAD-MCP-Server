@@ -91,6 +91,33 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     }
 
 
+def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Invoke a KiCad TOOL_ACTION by name via the IPC backend.
+
+    The action namespace is KiCad-internal and not stable across releases —
+    surface kipy's exact response (status + statusName) so callers can
+    detect ``RAS_INVALID`` vs ``RAS_FRAME_NOT_OPEN`` and recover.
+    Requires the IPC backend; SWIG has no equivalent.
+    """
+    if not iface.use_ipc or not iface.ipc_backend:
+        return {
+            "success": False,
+            "message": (
+                "run_action requires the IPC backend. Launch KiCAD with the "
+                "IPC API server enabled (Preferences > Plugins > Enable IPC "
+                "API Server) and try again."
+            ),
+        }
+    action = params.get("action")
+    if not isinstance(action, str) or not action:
+        return {"success": False, "message": "'action' parameter is required (string)"}
+    try:
+        return iface.ipc_backend.run_action(action)
+    except Exception as e:
+        logger.error(f"Error invoking action {action!r}: {e}")
+        return {"success": False, "action": action, "message": str(e)}
+
+
 def handle_get_backend_state(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Return the MCP/KiCad backend state and currently loaded file state."""
     if KiCADProcessManager.is_running():

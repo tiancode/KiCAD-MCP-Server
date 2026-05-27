@@ -376,6 +376,18 @@ class KiCADInterface:
         "get_backend_info": "ui",
         "get_backend_state": "ui",
         "launch_kicad_ui": "ui",
+        "run_action": "ui",
+        "add_to_selection": "selection",
+        "clear_selection": "selection",
+        "get_selection": "selection",
+        "hit_test": "selection",
+        "interactive_move": "selection",
+        "remove_from_selection": "selection",
+        "add_arc": "shapes",
+        "add_circle": "shapes",
+        "add_polygon": "shapes",
+        "add_rectangle": "shapes",
+        "add_segment": "shapes",
     }
 
     def __getattr__(self, name: str):

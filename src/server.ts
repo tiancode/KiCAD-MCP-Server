@@ -58,6 +58,7 @@ import { registerSymbolCreatorTools } from "./tools/symbol-creator.js";
 import { registerUITools } from "./tools/ui.js";
 import { registerFreeroutingTools } from "./tools/freerouting.js";
 import { registerRouterTools } from "./tools/router.js";
+import { registerShapesTools } from "./tools/shapes.js";
 
 // Import resource registration functions
 import { registerProjectResources } from "./resources/project.js";
@@ -374,6 +375,7 @@ export class KiCADMcpServer {
       registerSymbolCreatorTools,
       registerUITools,
       registerFreeroutingTools,
+      registerShapesTools,
     ];
     for (const register of toolRegistrars) register(this.server, cb);
 

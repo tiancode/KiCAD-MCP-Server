@@ -147,5 +147,105 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
     passthrough("ipc_add_text"),
   );
 
-  logger.info("UI + IPC management tools registered");
+  // -----------------------------------------------------------------
+  // run_action — escape hatch into KiCad's internal TOOL_ACTION system.
+  // Action names are unstable across KiCad versions; the response carries
+  // a RAS_INVALID / RAS_FRAME_NOT_OPEN status so AI callers can retry.
+  // -----------------------------------------------------------------
+  server.tool(
+    "run_action",
+    "Invoke any KiCad internal TOOL_ACTION by name (escape hatch via IPC). Action names are KiCad-internal and unstable across releases — use only when no dedicated tool exists. Returns {status, statusName} where statusName is RAS_OK / RAS_INVALID / RAS_FRAME_NOT_OPEN.",
+    {
+      action: z
+        .string()
+        .describe(
+          "KiCad TOOL_ACTION name (e.g. 'pcbnew.EditorControl.zoomFitScreen'). Unstable API.",
+        ),
+    },
+    passthrough("run_action"),
+  );
+
+  // -----------------------------------------------------------------
+  // Selection / interaction tools (IPC-only).
+  //
+  // Identification: most tools accept items by `ids` (KIIDs from
+  // list_components / ipc_get_tracks etc.) or `references` (footprint
+  // reference designators like ["R1","U2"]).  Either is fine; both work.
+  // -----------------------------------------------------------------
+  const itemRefSchema = {
+    ids: z
+      .array(z.string())
+      .optional()
+      .describe("Board item KIIDs (preferred). Get them from list_components / ipc_get_tracks."),
+    references: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Footprint reference designators (e.g. ['R1','U2']). Resolved against the live board.",
+      ),
+  };
+
+  server.tool(
+    "get_selection",
+    "Return the items currently selected in the KiCAD board editor (IPC-only). Each item carries id, type, and optional reference/value/position/layer.",
+    {},
+    passthrough("get_selection"),
+  );
+
+  server.tool(
+    "clear_selection",
+    "Deselect everything in the KiCAD board editor (IPC-only).",
+    {},
+    passthrough("clear_selection"),
+  );
+
+  server.tool(
+    "add_to_selection",
+    "Add board items to the selection by KIID and/or footprint reference (IPC-only). Both forms can be mixed; the resolver de-duplicates.",
+    itemRefSchema,
+    passthrough("add_to_selection"),
+  );
+
+  server.tool(
+    "remove_from_selection",
+    "Remove board items from the selection by KIID and/or footprint reference (IPC-only).",
+    itemRefSchema,
+    passthrough("remove_from_selection"),
+  );
+
+  server.tool(
+    "hit_test",
+    "Find board items at (x, y) (IPC-only). With no `id` / `reference`, sweeps all footprints / tracks / vias / zones / shapes and returns every item under the point. With an `id` or `reference`, tests just that item.",
+    {
+      position: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "inch"]).optional().describe("Coordinate unit (default mm)"),
+        })
+        .optional()
+        .describe("Coordinate to test"),
+      x: z.number().optional().describe("Flat X (mm). Use `position` instead when possible."),
+      y: z.number().optional().describe("Flat Y (mm)."),
+      tolerance: z
+        .number()
+        .optional()
+        .describe("Hit tolerance in the same unit as the position (default 0)."),
+      id: z.string().optional().describe("Optional KIID — test only this specific item."),
+      reference: z
+        .string()
+        .optional()
+        .describe("Optional footprint reference — test only that footprint."),
+    },
+    passthrough("hit_test"),
+  );
+
+  server.tool(
+    "interactive_move",
+    "Start KiCad's interactive move tool on the supplied items (IPC-only). KiCad puts the items on the cursor; the user finishes positioning by hand. Blocking — further mutating API calls return AS_BUSY until the user clicks or presses Escape, so do NOT chain another tool call right after.",
+    itemRefSchema,
+    passthrough("interactive_move"),
+  );
+
+  logger.info("UI + IPC management + selection tools registered");
 }

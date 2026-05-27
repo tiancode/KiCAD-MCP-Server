@@ -26,7 +26,8 @@ export interface ToolCategory {
 export const toolCategories: ToolCategory[] = [
   {
     name: "board",
-    description: "Board configuration: layers, mounting holes, zones, visualization",
+    description:
+      "Board configuration: layers, mounting holes, zones, visualization, and the KiCad TOOL_ACTION escape hatch",
     tools: [
       "add_layer",
       "set_active_layer",
@@ -37,6 +38,32 @@ export const toolCategories: ToolCategory[] = [
       "get_board_extents",
       "get_board_2d_view",
       "launch_kicad_ui",
+      "run_action",
+    ],
+  },
+  {
+    name: "selection",
+    description:
+      "Selection / interactive handoff (IPC-only): query and manipulate what's selected in the running KiCAD editor, hit-test coordinates, and hand off to KiCad's interactive move tool",
+    tools: [
+      "get_selection",
+      "clear_selection",
+      "add_to_selection",
+      "remove_from_selection",
+      "hit_test",
+      "interactive_move",
+    ],
+  },
+  {
+    name: "shapes",
+    description:
+      "Generic graphic primitives (IPC-only): segment, arc, circle, rectangle, polygon on any layer (silk / fab / Edge.Cuts / User.*). For copper traces use the routing category; for fills use add_zone.",
+    tools: [
+      "add_segment",
+      "add_arc",
+      "add_circle",
+      "add_rectangle",
+      "add_polygon",
     ],
   },
   {
