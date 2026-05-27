@@ -36,8 +36,11 @@ def handle_check_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         manager = KiCADProcessManager()
         processes = manager.get_process_info()
         is_running = len(processes) > 0
-        if is_running:
-            iface._try_enable_ipc_backend()
+        # Force-attach unconditionally — covers the "user launched KiCad
+        # after the MCP started" case where /proc detection lags behind
+        # reality, AND the "KiCad has been up the whole time but never
+        # attached" case after a startup-time IPC connect blip.
+        iface._try_enable_ipc_backend(force=True)
 
         return {
             "success": True,
@@ -76,13 +79,18 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
 def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Get information about the current backend (IPC vs. SWIG, version).
 
-    On SWIG the response is *prescriptive*, not descriptive — the agent
-    gets a concrete next step (`launch_kicad_ui`) plus the concrete
-    capabilities it's giving up by staying on SWIG, so it doesn't
-    discover the gap through 8-deep trial-and-error.
+    Actively tries to attach IPC (``_try_enable_ipc_backend(force=True)``)
+    before reporting — otherwise a user who launched KiCad after the MCP
+    server started would still see SWIG on every poll until something
+    else triggered the attach. On SWIG the response is *prescriptive*:
+    the recommendation text branches on whether KiCad is running so the
+    agent gets the right next step (start KiCad vs. enable the IPC API
+    server in Preferences) instead of a generic "call launch_kicad_ui".
     """
-    if KiCADProcessManager.is_running():
-        iface._try_enable_ipc_backend()
+    # Force-attach: covers the "user launched KiCad after MCP" case where
+    # is_running() lags behind reality, and the "KiCad has been up the
+    # whole time but never attached" case after a prior reconnect blip.
+    iface._try_enable_ipc_backend(force=True)
     status = iface._backend_status()
     ipc_backend = getattr(iface, "ipc_backend", None)
     response: Dict[str, Any] = {
@@ -92,19 +100,41 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     }
     if status["backend"] == "ipc":
         response["message"] = "Using IPC backend with real-time UI sync"
-    else:
-        unavailable_count = len(status.get("unavailable_tools", []))
+        return response
+
+    # SWIG branch — diagnose the *specific* reason IPC isn't attached.
+    unavailable_count = len(status.get("unavailable_tools", []))
+    kicad_running = KiCADProcessManager.is_running()
+    if not kicad_running:
+        response["kicad_running"] = False
         response["message"] = (
-            "On SWIG backend — call launch_kicad_ui to enable IPC "
-            "(unlocks realtime sync, transactions, selection, and "
-            f"{unavailable_count} IPC-only tools)"
+            "On SWIG backend — KiCad isn't running. "
+            f"Start KiCad (or call launch_kicad_ui) to enable IPC and unlock "
+            f"{unavailable_count} IPC-only tools."
         )
         response["recommendation"] = (
-            "Call launch_kicad_ui to switch to the IPC backend. Without it "
-            "you lose: realtime UI sync (your changes won't appear until "
-            "KiCAD reloads the file), atomic transactions (no rollback on "
-            "error), the selection API, and "
-            f"{unavailable_count} IPC-only tools (see unavailable_tools)."
+            "Call ``launch_kicad_ui`` to start KiCad with IPC attached.  "
+            "Alternatively start KiCad manually (any platform) — the next "
+            "``get_backend_info`` call will retry the attach automatically.  "
+            "Without IPC you lose: realtime UI sync (changes won't appear "
+            "until KiCAD reloads the file), atomic transactions, the "
+            f"selection API, and {unavailable_count} IPC-only tools "
+            "(see unavailable_tools)."
+        )
+    else:
+        response["kicad_running"] = True
+        response["message"] = (
+            "On SWIG backend — KiCad is running but its IPC API server "
+            "isn't reachable.  Enable it in KiCAD: Preferences → Plugins → "
+            "Enable IPC API Server, then re-call get_backend_info."
+        )
+        response["recommendation"] = (
+            "KiCAD is running but the MCP can't reach its IPC API server.  "
+            "Open KiCAD → Preferences → Plugins → check 'Enable IPC API "
+            "Server' (KiCAD 9+).  No restart needed — the next "
+            "get_backend_info call will retry the attach.  Without IPC you "
+            "lose realtime sync, transactions, selection, and "
+            f"{unavailable_count} IPC-only tools."
         )
     return response
 

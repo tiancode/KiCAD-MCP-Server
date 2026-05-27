@@ -621,6 +621,16 @@ def test_get_backend_info_on_swig_carries_actionable_recommendation(monkeypatch)
     import kicad_interface
 
     monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_running", lambda: False)
+    # The handler now force-attaches IPC on every call (so users who
+    # launched KiCad after the MCP started see IPC on the next poll).
+    # The test is about the SWIG branch, so make the attach a no-op
+    # — otherwise sys.modules pollution from earlier tests can let the
+    # real IPCBackend succeed and flip us to IPC.
+    monkeypatch.setattr(
+        kicad_interface.KiCADInterface,
+        "_try_enable_ipc_backend",
+        lambda self, force=False: False,
+    )
 
     iface = _make_iface({}, use_ipc=False)
     iface.command_routes["get_backend_info"] = iface._handle_get_backend_info
@@ -631,6 +641,9 @@ def test_get_backend_info_on_swig_carries_actionable_recommendation(monkeypatch)
     assert result["backend"] == "swig"
     assert "launch_kicad_ui" in result["message"]
     assert "launch_kicad_ui" in result["recommendation"]
+    # The new diagnostic branch surfaces whether KiCad is running so the
+    # agent gets the right next step (start KiCad vs. enable IPC).
+    assert result["kicad_running"] is False
     # The recommendation cites the concrete capabilities lost so the
     # agent can weigh "is this worth a launch" against its current task.
     assert "realtime" in result["recommendation"].lower()
