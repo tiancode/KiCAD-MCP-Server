@@ -24,6 +24,27 @@ from commands.wire_dragger import EPS, WireDragger, _coords_match, _rotate
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "python" / "templates" / "empty.kicad_sch"
 
 
+@pytest.fixture(autouse=True)
+def _disable_default_grid_snap(monkeypatch):
+    """These tests exercise wire-drag math with exact mm coordinates.
+    The handler now snaps to KiCad's 1.27 mm schematic grid by default,
+    which would round (120, 130) → (120.65, 130.81) and break the
+    position-assertion-after-move tests.  Opt out at the test-file
+    level so the wire-drag behaviour stays pinpoint-verifiable; the
+    snap default itself is covered in test_add_schematic_component.py."""
+    from handlers import schematic_component as sc
+
+    original = sc._apply_grid_snap
+
+    def _no_snap(x, y, params):
+        # Force the opt-out path unless the test explicitly enables snap.
+        if params.get("snapToGrid") is True:
+            return original(x, y, params)
+        return original(x, y, {**params, "snapToGrid": False})
+
+    monkeypatch.setattr(sc, "_apply_grid_snap", _no_snap)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -356,7 +356,7 @@ class TestAddComponentMirrorParam:
 
 
 # ---------------------------------------------------------------------------
-# Grid snap (opt-in via snapToGrid=true)
+# Grid snap (default-on; opt out via snapToGrid=false)
 # ---------------------------------------------------------------------------
 
 
@@ -364,10 +364,9 @@ class TestAddComponentMirrorParam:
 class TestSchematicGridSnap:
     """KiCad's stock schematic grid is 1.27 mm.  Off-grid components
     produce 'pin/wire not aligned to grid' ERC warnings on every pin —
-    the user reported a sea of them after placing at (150, 100) /
-    (130, 80) etc.  Tools now accept snapToGrid=true to round onto the
-    grid; default is OFF so existing flows that depend on exact
-    coordinates aren't surprised."""
+    a user reported 11 warnings from a single off-grid placement at
+    round mm coords like (130, 80).  Snap is now **default-on**: pass
+    ``snapToGrid: false`` only when sub-grid placement is intentional."""
 
     def test_snap_helper_rounds_to_nearest_grid_multiple(self) -> None:
         from handlers.schematic_component import _snap_to_schematic_grid
@@ -397,23 +396,37 @@ class TestSchematicGridSnap:
         assert _snap_to_schematic_grid(150.0, grid_mm=0) == 150.0
         assert _snap_to_schematic_grid(150.0, grid_mm=-1.27) == 150.0
 
-    def test_apply_grid_snap_off_by_default(self) -> None:
+    def test_apply_grid_snap_is_on_by_default(self) -> None:
+        """The user-facing default: no flag passed → snap fires.  An
+        agent that places at round mm like (150, 100) ends up on-grid
+        without having to know about the 1.27 mm quirk."""
         from handlers.schematic_component import _apply_grid_snap
 
         x, y, snapped = _apply_grid_snap(150.0, 100.0, {})
 
-        assert (x, y) == (150.0, 100.0)
-        assert snapped is False
+        assert x == pytest.approx(149.86, abs=1e-9)
+        assert y == pytest.approx(100.33, abs=1e-9)
+        assert snapped is True
 
-    def test_apply_grid_snap_with_opt_in(self) -> None:
+    def test_apply_grid_snap_explicit_true_still_snaps(self) -> None:
         from handlers.schematic_component import _apply_grid_snap
 
         x, y, snapped = _apply_grid_snap(150.0, 100.0, {"snapToGrid": True})
 
-        # Both moved → both snapped values.
         assert x == pytest.approx(149.86, abs=1e-9)
         assert y == pytest.approx(100.33, abs=1e-9)
         assert snapped is True
+
+    def test_apply_grid_snap_false_opts_out(self) -> None:
+        """Explicit ``snapToGrid: false`` is the one way to keep the
+        exact coordinates — for callers reproducing a pre-existing
+        sub-grid placement."""
+        from handlers.schematic_component import _apply_grid_snap
+
+        x, y, snapped = _apply_grid_snap(150.0, 100.0, {"snapToGrid": False})
+
+        assert (x, y) == (150.0, 100.0)
+        assert snapped is False
 
     def test_apply_grid_snap_reports_no_movement_on_grid_input(self) -> None:
         from handlers.schematic_component import _apply_grid_snap
@@ -440,3 +453,103 @@ class TestSchematicGridSnap:
         # 20 / 2.54 = 7.874 → 8 → 20.32 mm
         assert y == pytest.approx(20.32, abs=1e-9)
         assert snapped is True
+
+    def test_add_handler_default_snaps_user_reported_coords(self, monkeypatch) -> None:
+        """User report: add_schematic_component(x=130, y=80) produced 11
+        off-grid ERC warnings.  With default-on snap, the integer mm
+        coords land on-grid and the response surfaces the actual
+        position + the snap delta."""
+        from handlers.schematic_component import handle_add_schematic_component
+
+        # Capture what the symbol loader is asked to write — no need to
+        # touch a real schematic file.
+        captured: dict = {}
+
+        class _FakeLoader:
+            def __init__(self, project_path=None):
+                pass
+
+            def add_component(self, *args, **kwargs):
+                captured["x"] = kwargs["x"]
+                captured["y"] = kwargs["y"]
+
+        monkeypatch.setattr(
+            "commands.dynamic_symbol_loader.DynamicSymbolLoader", _FakeLoader
+        )
+
+        # Need a writable path so the handler's parent-dir walk doesn't crash.
+        sch = tmp_path = Path("/tmp/__snap_default_probe.kicad_sch")
+        sch.write_text("(kicad_sch)\n", encoding="utf-8")
+        try:
+            out = handle_add_schematic_component(
+                iface=None,  # not used in this code path
+                params={
+                    "schematicPath": str(sch),
+                    "component": {
+                        "type": "R",
+                        "library": "Device",
+                        "reference": "R1",
+                        "value": "10k",
+                        # User's exact reproduction — round mm, no snap flag.
+                        "x": 130,
+                        "y": 80,
+                    },
+                },
+            )
+        finally:
+            sch.unlink(missing_ok=True)
+
+        assert out["success"] is True
+        # 130 / 1.27 = 102.36 → 102 → 129.54 mm
+        # 80 / 1.27 = 62.99 → 63 → 80.01 mm
+        assert captured["x"] == pytest.approx(129.54, abs=1e-2)
+        assert captured["y"] == pytest.approx(80.01, abs=1e-2)
+        # Response surfaces the snap delta so the agent isn't surprised.
+        assert out["snap"]["applied"] is True
+        assert out["snap"]["requested"] == {"x": 130, "y": 80}
+        assert out["position"]["x"] == pytest.approx(129.54, abs=1e-2)
+        assert out["position"]["y"] == pytest.approx(80.01, abs=1e-2)
+
+    def test_add_handler_snap_false_preserves_exact_coords(self, monkeypatch) -> None:
+        """``snapToGrid: false`` opts back into exact placement."""
+        from handlers.schematic_component import handle_add_schematic_component
+
+        captured: dict = {}
+
+        class _FakeLoader:
+            def __init__(self, project_path=None):
+                pass
+
+            def add_component(self, *args, **kwargs):
+                captured["x"] = kwargs["x"]
+                captured["y"] = kwargs["y"]
+
+        monkeypatch.setattr(
+            "commands.dynamic_symbol_loader.DynamicSymbolLoader", _FakeLoader
+        )
+
+        sch = Path("/tmp/__snap_optout_probe.kicad_sch")
+        sch.write_text("(kicad_sch)\n", encoding="utf-8")
+        try:
+            out = handle_add_schematic_component(
+                iface=None,
+                params={
+                    "schematicPath": str(sch),
+                    "snapToGrid": False,
+                    "component": {
+                        "type": "R",
+                        "library": "Device",
+                        "reference": "R1",
+                        "x": 130,
+                        "y": 80,
+                    },
+                },
+            )
+        finally:
+            sch.unlink(missing_ok=True)
+
+        assert out["success"] is True
+        assert captured["x"] == 130
+        assert captured["y"] == 80
+        # No snap delta in the response when opt-out is honoured.
+        assert "snap" not in out

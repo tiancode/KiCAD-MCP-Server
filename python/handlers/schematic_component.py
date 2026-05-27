@@ -20,9 +20,12 @@ logger = logging.getLogger(__name__)
 
 # KiCad's default schematic grid is 50 mil = 1.27 mm; symbol pin offsets
 # are multiples of that, so an off-grid symbol places its pins off-grid
-# and ERC fires "wire/pin not aligned" warnings.  Tools that take mm
-# coordinates accept a ``snapToGrid`` opt-in to round the anchor onto
-# this grid before writing.
+# and ERC fires "wire/pin not aligned" warnings on every pin.  Tools
+# that take mm coordinates snap to this grid BY DEFAULT — agents
+# typically use round-mm coordinates like (130, 80) which would
+# otherwise produce ERC warnings on every pin (the user reported 11
+# off-grid warnings from a single off-grid placement).  Pass
+# ``snapToGrid: false`` to opt out when sub-grid placement is intentional.
 _SCHEMATIC_GRID_MM = 1.27
 
 
@@ -34,14 +37,20 @@ def _snap_to_schematic_grid(value: float, grid_mm: float = _SCHEMATIC_GRID_MM) -
 
 
 def _apply_grid_snap(x: float, y: float, params: Dict[str, Any]) -> Tuple[float, float, bool]:
-    """Return (x, y, snapped) honoring the caller's snapToGrid opt-in.
+    """Return (x, y, snapped) honoring the caller's snapToGrid choice.
 
-    The flag is *opt-in* — agents that asked for the canonical 1.27mm
-    grid get it; agents that want sub-grid placement get it.  We
-    return the ``snapped`` flag so the response can tell the caller
-    when (and from where) the coordinates moved.
+    Snap is **default-on** for the 1.27 mm KiCad schematic grid — most
+    callers pass round mm and don't realize KiCad's grid means pins
+    land off-connection-grid otherwise.  Pass ``snapToGrid: false``
+    explicitly to opt out (e.g. when reproducing a pre-existing
+    sub-grid coordinate).  ``snapped`` reports whether the coordinates
+    actually moved, so an on-grid input + default-on snap returns
+    ``False`` and the response omits the ``snap`` field.
     """
-    if not params.get("snapToGrid"):
+    snap_requested = params.get("snapToGrid")
+    # Default-on: only ``False`` opts out.  ``None`` (omitted) or any
+    # truthy value snaps.
+    if snap_requested is False:
         return float(x), float(y), False
     grid_mm = float(params.get("snapGridMm") or _SCHEMATIC_GRID_MM)
     new_x = _snap_to_schematic_grid(float(x), grid_mm)

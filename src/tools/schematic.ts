@@ -33,11 +33,13 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
     `Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g., 'Device:R', 'EDA-MCP:ESP32-C3').
 
 KiCad's default schematic grid is 1.27 mm (50 mil); symbol pin offsets are
-multiples of that.  Off-grid components produce "wire/pin not aligned to grid"
-ERC warnings on every pin.  Pass snapToGrid=true to round the anchor onto the
-1.27 mm grid before placement — the response surfaces the actual landing
-position under .position and the requested-vs-snapped under .snap when the
-coordinates moved.`,
+multiples of that.  Off-grid placements land every pin off-grid and produce
+'wire/pin not aligned to grid' ERC warnings on each one — so coordinates
+SNAP to the 1.27 mm grid BY DEFAULT.  A request for position (130, 80) is
+written as (130.81, 80.01).  The response carries the actual landing
+position under .position and a .snap field with the requested-vs-snapped
+delta when the coordinates moved.  Pass snapToGrid: false to opt out (only
+useful when reproducing an existing sub-grid placement).`,
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       symbol: z
@@ -66,14 +68,14 @@ coordinates moved.`,
         .boolean()
         .optional()
         .describe(
-          "Round the anchor onto the schematic grid (default 1.27 mm) before placement. Off by default to preserve exact caller coordinates; opt in to avoid 'pin off-grid' ERC warnings.",
+          "Round the anchor onto the 1.27 mm schematic grid before placement. **Default true** — pass false only when sub-grid placement is intentional (the response surfaces the actual landing position either way).",
         ),
       snapGridMm: z
         .number()
         .positive()
         .optional()
         .describe(
-          "Override the snap grid in mm. Only takes effect when snapToGrid=true. Default 1.27 mm matches KiCad's stock schematic grid.",
+          "Override the snap grid in mm. Default 1.27 mm matches KiCad's stock schematic grid; common alternatives are 2.54 mm (100 mil) for power rails.",
         ),
     },
     async (args: {
@@ -1073,7 +1075,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Move a placed symbol, dragging connected wires
   server.tool(
     "move_schematic_component",
-    "Move a placed symbol to a new position in the schematic. By default (preserveWires=true) wire endpoints touching the component's pins are stretched to follow the new position. Pass snapToGrid=true to round the destination onto KiCad's 1.27 mm schematic grid (opt-in, off by default).",
+    "Move a placed symbol to a new position in the schematic.  By default (preserveWires=true) wire endpoints touching the component's pins are stretched to follow the new position.  Destination coordinates SNAP to KiCad's 1.27 mm schematic grid by default — off-grid placements produce 'pin off-grid' ERC warnings on every pin.  Pass snapToGrid: false to keep the exact coordinates.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator (e.g., R1, U1)"),
@@ -1088,14 +1090,14 @@ edit_schematic_component and set its value to an empty string.`,
         .boolean()
         .optional()
         .describe(
-          "Round the destination onto the schematic grid (default 1.27 mm) before writing. Off by default; opt in to avoid 'pin off-grid' ERC warnings.",
+          "Round the destination onto the 1.27 mm schematic grid before writing. **Default true** — pass false only when sub-grid placement is intentional.",
         ),
       snapGridMm: z
         .number()
         .positive()
         .optional()
         .describe(
-          "Override the snap grid in mm. Only takes effect when snapToGrid=true. Default 1.27 mm matches KiCad's stock schematic grid.",
+          "Override the snap grid in mm. Default 1.27 mm matches KiCad's stock schematic grid.",
         ),
     },
     async (args: {
