@@ -1962,56 +1962,115 @@ class KiCADInterface:
                 pass
 
     # Grid layout constants for _add_missing_footprints_from_schematic.
-    # Spacing leaves clearance around typical SMD packages (most are under
-    # 10mm bbox); start offset keeps the grid visually distinct from the
-    # (0, 0) page-origin marker.  Units are pcbnew internal nanometers.
-    _NEW_FOOTPRINT_GRID_SPACING_NM = 15_000_000  # 15 mm cell pitch
+    # Pitch defaults assume small SMD packages but adapt up to the largest
+    # loaded module's bbox; start offset keeps the grid visually distinct
+    # from the (0, 0) page-origin marker.  Units are pcbnew internal nm.
+    _NEW_FOOTPRINT_GRID_MIN_PITCH_NM = 15_000_000  # 15 mm floor cell pitch
+    _NEW_FOOTPRINT_GRID_PADDING_NM = 5_000_000  # 5 mm gap between cells
     _NEW_FOOTPRINT_GRID_START_NM = 10_000_000  # 10 mm from page origin
     _NEW_FOOTPRINT_GRID_GUTTER_NM = 20_000_000  # 20 mm gap past existing FPs
+
+    @staticmethod
+    def _footprint_right_edge_nm(fp: Any) -> Optional[int]:
+        """Bounding-box right edge of a footprint in nm, or None on failure.
+
+        Falls back to ``GetPosition().x`` only when ``GetBoundingBox()``
+        isn't available (very old SWIG bindings or a corrupt proxy) —
+        otherwise we'd miss the case where a large IC anchored at e.g.
+        x=50 mm extends 10 mm further right.
+        """
+        try:
+            bbox = fp.GetBoundingBox()
+            return int(bbox.GetRight())
+        except Exception:
+            try:
+                return int(fp.GetPosition().x)
+            except Exception:
+                return None
 
     def _grid_origin_for_new_footprints(self, existing_fps: List[Any]) -> Tuple[int, int]:
         """Pick a safe (x_nm, y_nm) origin for grid-placing new footprints.
 
-        Empty board → fixed offset from (0, 0).  Otherwise, the grid
-        starts to the *right* of the existing footprint cluster so we
-        don't drop the new components on top of the agent's prior work.
+        Empty board → fixed offset from (0, 0).  Otherwise we start
+        20 mm past the *rightmost edge of any existing footprint's
+        bounding box* (not its anchor — a wide IC anchored at x=50 mm
+        whose body extends to x=80 mm would otherwise be overlapped by
+        the new grid at x=70 mm).
         """
         if not existing_fps:
             return (
                 self._NEW_FOOTPRINT_GRID_START_NM,
                 self._NEW_FOOTPRINT_GRID_START_NM,
             )
-        max_x = 0
+        max_right: Optional[int] = None
         for fp in existing_fps:
-            try:
-                pos = fp.GetPosition()
-                if pos.x > max_x:
-                    max_x = pos.x
-            except Exception:
-                # Defensive: a corrupt SWIG proxy on one footprint shouldn't
-                # collapse the whole sync.  Treat as "no clue" → fall back
-                # to the page-origin offset.
-                pass
+            right = self._footprint_right_edge_nm(fp)
+            if right is None:
+                continue
+            # No floor: an all-negative-X cluster must still produce
+            # "20 mm past the rightmost edge" rather than snapping to
+            # the page-origin offset.  Treat the *first* reading as the
+            # initial max so negative coordinates are honored.
+            if max_right is None or right > max_right:
+                max_right = right
+        if max_right is None:
+            # Every footprint failed to report a bbox or position —
+            # fall back to the empty-board contract rather than (0, 0).
+            return (
+                self._NEW_FOOTPRINT_GRID_START_NM,
+                self._NEW_FOOTPRINT_GRID_START_NM,
+            )
         return (
-            max_x + self._NEW_FOOTPRINT_GRID_GUTTER_NM,
+            max_right + self._NEW_FOOTPRINT_GRID_GUTTER_NM,
             self._NEW_FOOTPRINT_GRID_START_NM,
         )
+
+    def _grid_spacing_for_modules(self, modules: List[Any]) -> Tuple[int, int]:
+        """Choose grid cell pitch from the largest loaded module's bbox.
+
+        Hard-coded 15 mm pitch works for small SMD parts but causes
+        outright overlap for QFP/BGA/large connectors whose body
+        extends past one cell.  We measure each loaded module's bbox
+        and use max(min_pitch, largest_bbox + padding) per axis so the
+        grid scales with the worst-case footprint.
+        """
+        max_w = self._NEW_FOOTPRINT_GRID_MIN_PITCH_NM
+        max_h = self._NEW_FOOTPRINT_GRID_MIN_PITCH_NM
+        for module in modules:
+            try:
+                bbox = module.GetBoundingBox()
+                w = int(bbox.GetWidth()) + self._NEW_FOOTPRINT_GRID_PADDING_NM
+                h = int(bbox.GetHeight()) + self._NEW_FOOTPRINT_GRID_PADDING_NM
+            except Exception:
+                continue
+            if w > max_w:
+                max_w = w
+            if h > max_h:
+                max_h = h
+        return max_w, max_h
 
     def _add_missing_footprints_from_schematic(
         self, board: Any, schematic_path: str
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
         """Add footprints to ``board`` for any schematic component not yet present.
 
-        New footprints are laid out in a roughly-square grid (cell pitch
-        15 mm, columns = ``ceil(sqrt(N))``) instead of stacked at the
-        page origin — the old behavior dropped every newly-imported
-        footprint at (0, 0), forcing the agent to manually move each one
-        before any of them were visible.  Grid origin is (10 mm, 10 mm)
-        for empty boards or 20 mm to the right of the existing cluster
-        when the board already has footprints.
+        New footprints are laid out in a roughly-square grid
+        (columns = ``ceil(sqrt(N))``; cell pitch adapts to the largest
+        loaded module's bounding box, minimum 15 mm) instead of stacked
+        at the page origin — the old behavior dropped every newly-
+        imported footprint at (0, 0), forcing the agent to manually
+        move each one before any of them were visible.  Grid origin is
+        (10 mm, 10 mm) for empty boards or 20 mm to the right of the
+        existing footprints' bounding-box right edge when the board
+        already has footprints.
 
         Power/flag references (``#PWR``, ``#FLG``) are skipped — they
-        have no PCB representation.
+        have no PCB representation.  Duplicate references in the
+        extracted netlist (mis-annotated schematic, half-annotated
+        symbols ``R?``) are also deduped against each other, not just
+        against the board's existing footprints — without this guard a
+        schematic with two ``R1`` rows would produce two ``R1``
+        footprints on the PCB.
 
         Returns ``(added, skipped)``.  Each ``added`` entry includes the
         assigned ``position`` (in mm) so callers can surface the layout
@@ -2039,8 +2098,9 @@ class KiCADInterface:
 
         # First pass: filter + load.  We don't position yet because the
         # column count of the grid depends on how many actually load
-        # successfully (skip entries are removed from the count).
-        to_place: List[Tuple[Any, Dict[str, str], str, str]] = []
+        # successfully (skip entries are removed from the count) AND
+        # the cell pitch depends on the largest loaded bbox.
+        to_place: List[Tuple[Any, Dict[str, str]]] = []
         for comp in components:
             ref = comp["reference"]
             fp_str = comp["footprint"]
@@ -2048,6 +2108,8 @@ class KiCADInterface:
                 # Power flags / global indicators — no PCB footprint expected.
                 continue
             if ref in existing_refs:
+                # Catches both refs already on the board AND duplicates
+                # *within* the components list itself — see the docstring.
                 continue
             if not fp_str or ":" not in fp_str:
                 skipped.append(
@@ -2089,25 +2151,29 @@ class KiCADInterface:
                 )
                 continue
 
-            to_place.append((module, comp, lib_name, fp_name))
+            to_place.append((module, comp))
+            # Reserve the ref *now* so a later duplicate in the same
+            # netlist hits the `if ref in existing_refs: continue`
+            # branch above instead of being loaded again.
+            existing_refs.add(ref)
 
         # Second pass: lay out in a grid and add to the board.
         if to_place:
             origin_x, origin_y = self._grid_origin_for_new_footprints(existing_fps)
             cols = max(1, int(math.ceil(math.sqrt(len(to_place)))))
-            spacing = self._NEW_FOOTPRINT_GRID_SPACING_NM
-            for idx, (module, comp, lib_name, fp_name) in enumerate(to_place):
+            pitch_x, pitch_y = self._grid_spacing_for_modules([m for m, _ in to_place])
+            for idx, (module, comp) in enumerate(to_place):
                 ref = comp["reference"]
+                lib_name, fp_name = comp["footprint"].split(":", 1)
                 module.SetReference(ref)
                 if comp["value"]:
                     module.SetValue(comp["value"])
                 module.SetFPID(pcbnew.LIB_ID(lib_name, fp_name))
-                x_nm = origin_x + (idx % cols) * spacing
-                y_nm = origin_y + (idx // cols) * spacing
+                x_nm = origin_x + (idx % cols) * pitch_x
+                y_nm = origin_y + (idx // cols) * pitch_y
                 module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
 
                 board.Add(module)
-                existing_refs.add(ref)
                 added.append(
                     {
                         "reference": ref,

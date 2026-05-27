@@ -343,15 +343,36 @@ def _stub_vector2i_factory():
     return _StubVector2I
 
 
-def _stub_loaded_module(name: str) -> MagicMock:
+def _stub_loaded_module(name: str, bbox_w_nm: int = 0, bbox_h_nm: int = 0) -> MagicMock:
     """A fresh MagicMock per loaded footprint so SetPosition recorders
-    don't bleed across modules."""
+    don't bleed across modules.  Optionally configures the bounding box
+    so tests can exercise the adaptive grid-spacing path (default 0 → the
+    helper's min-pitch floor wins)."""
     module = MagicMock(name=name)
     module.SetPosition = MagicMock()
     module.SetReference = MagicMock()
     module.SetValue = MagicMock()
     module.SetFPID = MagicMock()
+    bbox = MagicMock(name=f"{name}_bbox")
+    bbox.GetWidth.return_value = bbox_w_nm
+    bbox.GetHeight.return_value = bbox_h_nm
+    module.GetBoundingBox.return_value = bbox
     return module
+
+
+def _stub_existing_fp(reference: str, *, bbox_right_nm: int, anchor_x_nm: int = 0) -> MagicMock:
+    """Existing-on-board footprint with a real bounding-box stub.  Tests
+    must pin `bbox_right_nm` rather than relying on MagicMock auto-mock —
+    `int(MagicMock())` happens to return 1 (not raise), so the grid-origin
+    helper's bbox-vs-anchor fallback only kicks in if we don't stub bbox
+    at all."""
+    fp = MagicMock(name=f"existing_{reference}")
+    fp.GetReference.return_value = reference
+    fp.GetPosition.return_value = MagicMock(x=anchor_x_nm, y=0)
+    bbox = MagicMock(name=f"{reference}_bbox")
+    bbox.GetRight.return_value = bbox_right_nm
+    fp.GetBoundingBox.return_value = bbox
+    return fp
 
 
 def _components(count: int) -> List[dict]:
@@ -436,19 +457,15 @@ class TestNewFootprintGridLayout:
 
     def test_non_empty_board_starts_grid_past_existing_cluster(self):
         """When the board already has footprints, the grid origin must
-        offset past their max-X so new components don't overlap the
-        agent's prior work."""
-        # Existing footprint at (50mm, 30mm); reference U99 so it doesn't
-        # collide with the new R1/R2/R3 from the schematic and the test
-        # actually exercises 3 grid placements.
-        existing = MagicMock(name="existing_U99")
-        existing.GetReference.return_value = "U99"
-        existing.GetPosition.return_value = MagicMock(x=50_000_000, y=30_000_000)
+        offset past the rightmost bbox edge (not just the anchor x)."""
+        # Existing footprint whose bbox right edge is at 50 mm.
+        # Reference U99 so it doesn't collide with the new R1/R2/R3.
+        existing = _stub_existing_fp("U99", bbox_right_nm=50_000_000, anchor_x_nm=40_000_000)
 
         added, _, modules = self._run_add(_components(3), existing_fps=[existing])
 
         assert len(added) == 3
-        # First new footprint should be at (max_x + 20mm, 10mm) = (70, 10).
+        # First new footprint should be at (bbox_right + 20mm, 10mm) = (70, 10).
         (vec0,), _ = modules[0].SetPosition.call_args
         assert vec0.x == 70_000_000
         assert vec0.y == 10_000_000
@@ -506,3 +523,127 @@ class TestNewFootprintGridLayout:
             "successful loads must occupy consecutive grid cells; "
             "the failed load must not leave a hole"
         )
+
+
+@pytest.mark.unit
+class TestNewFootprintGridRegressions:
+    """Code-review findings on the first grid-layout commit (c9d9076):
+
+    - Grid origin used `fp.GetPosition().x` not `bbox.GetRight()` — a
+      large IC anchored at x=50mm with a bbox extending to x=80mm would
+      be overlapped by new modules placed at x=70mm.
+    - `max_x = 0` initialisation meant all-negative-X existing FPs
+      reset the grid origin to (20mm, 10mm) instead of past their
+      easternmost edge.
+    - Duplicate refs in `components` (mis-annotated schematic) bypassed
+      dedup because `existing_refs.add(ref)` was deferred to the second
+      pass — both rows hit `if ref in existing_refs: continue` False on
+      the first pass and produced two footprints with the same ref.
+    - Hardcoded 15 mm cell pitch caused new modules with bbox > 15 mm
+      (QFP, BGA, large connectors) to overlap each other in the grid.
+    """
+
+    def _run_add(self, components, existing_fps, loaded_modules=None):
+        from tests.test_sync_schematic_to_board_footprints import _interface
+
+        sch = Path("/tmp/test.kicad_sch")
+        if loaded_modules is None:
+            loaded_modules = [_stub_loaded_module(f"loaded_{i}") for i in range(len(components))]
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = existing_fps
+
+        with (
+            patch.object(
+                _interface().__class__,
+                "_extract_components_from_schematic",
+                return_value=components,
+            ),
+            patch("kicad_interface.pcbnew") as mock_pcbnew,
+            patch("commands.library.LibraryManager") as mock_lm_cls,
+        ):
+            mock_pcbnew.VECTOR2I = _stub_vector2i_factory()
+            mock_pcbnew.LIB_ID = MagicMock()
+            mock_pcbnew.FootprintLoad.side_effect = loaded_modules
+            lm = MagicMock()
+            lm.libraries = {"Resistor_SMD": "/fake/Resistor_SMD.pretty"}
+            mock_lm_cls.return_value = lm
+            iface = _interface()
+            added, skipped = iface._add_missing_footprints_from_schematic(board, str(sch))
+        return added, skipped, loaded_modules
+
+    def test_grid_origin_uses_bbox_right_edge_not_anchor(self):
+        """A wide IC anchored at x=30 mm but extending to x=80 mm must
+        push the grid origin to (80+20, 10), not (30+20, 10)."""
+        existing = _stub_existing_fp("U99", bbox_right_nm=80_000_000, anchor_x_nm=30_000_000)
+        added, _, modules = self._run_add(_components(1), existing_fps=[existing])
+
+        (vec0,), _ = modules[0].SetPosition.call_args
+        assert vec0.x == 100_000_000, (
+            "grid origin must be past the existing footprint's bbox right "
+            "edge (80mm), not its anchor (30mm) — large ICs would otherwise "
+            "have their right edge overlapped by the new grid"
+        )
+
+    def test_grid_origin_handles_all_negative_x_existing_cluster(self):
+        """Existing footprints placed at x=-30mm must still receive the
+        "20mm past their rightmost edge" treatment — not be floored to
+        the page-origin offset."""
+        existing = _stub_existing_fp("U99", bbox_right_nm=-30_000_000, anchor_x_nm=-50_000_000)
+        added, _, modules = self._run_add(_components(1), existing_fps=[existing])
+
+        (vec0,), _ = modules[0].SetPosition.call_args
+        # -30mm + 20mm gutter = -10mm.  Grid starts at -10mm, not 20mm.
+        assert vec0.x == -10_000_000, (
+            "all-negative-X cluster must honor 'past existing cluster' "
+            "contract; previously max_x=0 floor produced (20mm, 10mm) "
+            "regardless of where the existing footprints actually lived"
+        )
+
+    def test_duplicate_reference_in_components_is_deduped(self):
+        """A schematic with two R1 rows (mis-annotated, half-annotated,
+        or a hierarchical-sheet bug in kicad-cli's netlist export) must
+        produce ONE footprint, not two — board.Add for both would leave
+        the PCB with two `R1`s.  Old behavior pre-c9d9076 caught this
+        via in-loop existing_refs.add; the two-pass rewrite needed an
+        explicit re-add at the end of the filter pass."""
+        components = [
+            {"reference": "R1", "value": "10k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
+            {"reference": "R1", "value": "10k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
+            {"reference": "R2", "value": "10k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
+        ]
+        # Only two unique refs → only two footprints get loaded.
+        loaded = [_stub_loaded_module("R1"), _stub_loaded_module("R2")]
+        added, skipped, _ = self._run_add(components, existing_fps=[], loaded_modules=loaded)
+
+        refs = [entry["reference"] for entry in added]
+        assert refs == ["R1", "R2"], f"duplicate R1 must be deduped; got {refs}"
+        assert all(s.get("reason") != "duplicate" for s in skipped), (
+            "the second R1 is silently dropped (same shape as old code) — "
+            "no need to add it to skipped, but it must NOT be in added"
+        )
+
+    def test_grid_spacing_adapts_to_large_module_bbox(self):
+        """A 20mm-wide QFP must NOT be placed at 15mm pitch — that would
+        guarantee overlap between adjacent cells.  The helper picks
+        max(min_pitch, bbox + padding) per axis from the largest loaded
+        module."""
+        # 20 mm × 20 mm bbox → cell pitch should be 25 mm (20 + 5 padding).
+        loaded = [
+            _stub_loaded_module(f"loaded_{i}", bbox_w_nm=20_000_000, bbox_h_nm=20_000_000)
+            for i in range(4)
+        ]
+        added, _, modules = self._run_add(_components(4), existing_fps=[], loaded_modules=loaded)
+
+        # Origin (10, 10), 2x2 grid, pitch 25 mm.
+        (vec0,), _ = modules[0].SetPosition.call_args
+        (vec1,), _ = modules[1].SetPosition.call_args
+        (vec2,), _ = modules[2].SetPosition.call_args
+        assert (vec0.x, vec0.y) == (10_000_000, 10_000_000)
+        # idx=1 → col=1 row=0 → (10 + 25, 10) mm.
+        assert (vec1.x, vec1.y) == (35_000_000, 10_000_000), (
+            "20mm-wide module must use ≥25mm pitch (20mm bbox + 5mm padding); "
+            "old hardcoded 15mm pitch would have placed at (25mm, 10mm) and "
+            "the two bboxes [0..20] and [15..35] would overlap"
+        )
+        # idx=2 → col=0 row=1 → (10, 10 + 25) mm.
+        assert (vec2.x, vec2.y) == (10_000_000, 35_000_000)
