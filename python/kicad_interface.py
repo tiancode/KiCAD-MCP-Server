@@ -562,6 +562,11 @@ class KiCADInterface:
             "get_nets_list": self.routing_commands.get_nets_list,
             "create_netclass": self.routing_commands.create_netclass,
             "add_copper_pour": self._add_copper_pour_with_optional_refill,
+            # ``add_zone`` is the same operation under a different MCP name
+            # (the TS schema exposes both for historical reasons).  Route to
+            # the shared SWIG impl so removing the schema later is a one-line
+            # change and callers don't get an "Unknown command" surprise.
+            "add_zone": self._add_copper_pour_with_optional_refill,
             "route_differential_pair": self.routing_commands.route_differential_pair,
             # Design rule commands
             "set_design_rules": self.design_rule_commands.set_design_rules,
@@ -619,6 +624,9 @@ class KiCADInterface:
         "get_nets_list": "_ipc_get_nets_list",
         # Zone commands
         "add_copper_pour": "_ipc_add_copper_pour",
+        # MCP-name alias of add_copper_pour — both names go through the
+        # same IPC fast-path so the schema isn't a dispatch-time landmine.
+        "add_zone": "_ipc_add_copper_pour",
         "refill_zones": "_ipc_refill_zones",
         # Board commands
         "add_text": "_ipc_add_text",
@@ -1170,6 +1178,7 @@ class KiCADInterface:
         "add_text",
         "add_board_text",
         "add_copper_pour",
+        "add_zone",
         "refill_zones",
         "import_svg_logo",
         "sync_schematic_to_board",

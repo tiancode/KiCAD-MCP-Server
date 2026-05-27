@@ -23,14 +23,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
 @pytest.fixture
 def iface():
-    """Bare KiCADInterface with a mock IPC board API for the handler to call."""
+    """Bare KiCADInterface with a mock IPC board API for the handler to call.
+
+    Wire ipc_backend.get_board() to return the same ipc_board_api mock so
+    that ``_refresh_ipc_board_api`` (which dispatch calls before the IPC
+    fast-path) doesn't replace it with a fresh auto-magic mock and lose our
+    pre-configured ``add_zone`` return value.
+    """
     from kicad_interface import KiCADInterface
 
     obj = KiCADInterface.__new__(KiCADInterface)
     obj.use_ipc = True
-    obj.ipc_board_api = MagicMock()
-    obj.ipc_board_api.add_zone = MagicMock(return_value=True)
+    board_api = MagicMock()
+    board_api.add_zone = MagicMock(return_value=True)
+    obj.ipc_board_api = board_api
     obj.ipc_backend = MagicMock()
+    obj.ipc_backend.get_board = MagicMock(return_value=board_api)
+    obj.ipc_backend.is_connected = MagicMock(return_value=True)
     obj.board = None
     obj.command_routes = {}
     obj._ipc_writes_pending = False
@@ -162,4 +171,103 @@ def test_short_outline_falls_back_to_board_when_possible(iface, monkeypatch):
 
     assert out["success"] is True
     call = iface.ipc_board_api.add_zone.call_args
+    assert len(call.kwargs["points"]) == 4
+
+
+# ---------------------------------------------------------------------------
+# Unit conversion (add_zone schema makes `unit` required and accepts mil/inch)
+# ---------------------------------------------------------------------------
+def test_top_level_unit_inch_is_converted_to_mm(iface):
+    """add_zone's schema requires a `unit` parameter; mil/inch must be
+    converted to mm before reaching kipy (which expects mm)."""
+    from handlers.ipc_fastpath import handle_add_copper_pour
+
+    handle_add_copper_pour(
+        iface,
+        {
+            "layer": "B.Cu",
+            "net": "GND",
+            "unit": "inch",
+            "points": [
+                {"x": 0, "y": 0},
+                {"x": 1, "y": 0},
+                {"x": 1, "y": 1},
+                {"x": 0, "y": 1},
+            ],
+        },
+    )
+
+    call = iface.ipc_board_api.add_zone.call_args
+    pts = call.kwargs["points"]
+    # 1 inch = 25.4 mm
+    assert pts[1]["x"] == pytest.approx(25.4)
+    assert pts[2]["y"] == pytest.approx(25.4)
+
+
+def test_top_level_unit_mil_is_converted_to_mm(iface):
+    from handlers.ipc_fastpath import handle_add_copper_pour
+
+    handle_add_copper_pour(
+        iface,
+        {
+            "layer": "B.Cu",
+            "net": "GND",
+            "unit": "mil",
+            "points": [
+                {"x": 0, "y": 0},
+                {"x": 1000, "y": 0},
+                {"x": 1000, "y": 1000},
+                {"x": 0, "y": 1000},
+            ],
+        },
+    )
+
+    call = iface.ipc_board_api.add_zone.call_args
+    pts = call.kwargs["points"]
+    # 1000 mil = 25.4 mm
+    assert pts[1]["x"] == pytest.approx(25.4)
+
+
+# ---------------------------------------------------------------------------
+# add_zone is wired as an alias for add_copper_pour
+# ---------------------------------------------------------------------------
+def test_add_zone_is_a_registered_command():
+    """``add_zone`` is exposed in the TS schema; the dispatcher used to
+    return 'Unknown command: add_zone' because nothing wired it to a
+    handler. Now it MUST be in command_routes (SWIG path) and
+    IPC_CAPABLE_COMMANDS (IPC fast-path)."""
+    from kicad_interface import KiCADInterface
+
+    assert "add_zone" in KiCADInterface.IPC_CAPABLE_COMMANDS
+    assert (
+        KiCADInterface.IPC_CAPABLE_COMMANDS["add_zone"]
+        == KiCADInterface.IPC_CAPABLE_COMMANDS["add_copper_pour"]
+    )
+    assert "add_zone" in KiCADInterface._BOARD_MUTATING_COMMANDS
+
+
+def test_add_zone_dispatches_through_ipc_when_available(iface, monkeypatch):
+    """``add_zone`` should reach the same IPC handler as ``add_copper_pour``."""
+    from kicad_interface import KiCADInterface
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+    # Pretend KiCAD is up and IPC is attached so the fast-path takes.
+    iface.command_routes = {}
+    out = KiCADInterface.handle_command(
+        iface,
+        "add_zone",
+        {
+            "layer": "B.Cu",
+            "net": "GND",
+            "unit": "mm",
+            "points": _square(40),
+        },
+    )
+
+    assert out.get("success") is True, out
+    iface.ipc_board_api.add_zone.assert_called_once()
+    call = iface.ipc_board_api.add_zone.call_args
+    assert call.kwargs["layer"] == "B.Cu"
+    assert call.kwargs["net_name"] == "GND"
     assert len(call.kwargs["points"]) == 4

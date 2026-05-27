@@ -310,8 +310,21 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
                     ),
                 }
 
-        # Normalise to plain {x, y} dicts in mm.
-        formatted_points = [{"x": p.get("x", 0), "y": p.get("y", 0)} for p in points]
+        # Coordinate unit handling.  The IPC ``add_zone`` API expects mm.
+        # ``add_copper_pour`` callers conventionally pass mm without a unit;
+        # ``add_zone``'s schema makes ``unit`` required and accepts mil/inch,
+        # so honour either a top-level ``unit`` field (whole-call) or a
+        # per-point ``unit`` (matches the SWIG path) before forwarding.
+        _to_mm = {"mm": 1.0, "inch": 25.4, "mil": 0.0254}
+        top_unit = str(params.get("unit", "mm")).lower()
+
+        def _pt_scale(p: Dict[str, Any]) -> float:
+            return _to_mm.get(str(p.get("unit", top_unit)).lower(), 1.0)
+
+        formatted_points = [
+            {"x": p.get("x", 0) * _pt_scale(p), "y": p.get("y", 0) * _pt_scale(p)}
+            for p in points
+        ]
 
         success = iface.ipc_board_api.add_zone(
             points=formatted_points,
