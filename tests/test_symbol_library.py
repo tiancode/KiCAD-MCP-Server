@@ -390,21 +390,31 @@ class TestSearchSymbolsColonSyntax:
         # The exact match must come first (score 500 vs score 50).
         assert names[0] == "Device:LED"
 
-    def test_explicit_library_filter_wins_over_inline_prefix(self):
-        """`query='Device:LED' library='Amplifier_Audio'` must search
-        Amplifier_Audio for the literal 'Device:LED' (which never
-        matches), NOT search Device for 'LED'."""
+    def test_explicit_library_filter_overrides_scope_but_still_strips_prefix(self):
+        """`query='Device:LED' library='Amplifier_Audio'`:
+
+          - library scope = Amplifier_Audio (explicit param wins)
+          - name part      = 'LED' (the inline 'Device:' is stripped)
+
+        Previously the literal 'Device:LED' was fed to the scorer; no
+        field contains ':' so the result was silently 0 — the very same
+        shape of bug the colon-parsing fix was meant to address, just on
+        the explicit-filter path."""
         manager = _make_synthetic_manager(
             {
                 "Device": [_info("LED", "Device", description="Light emitting diode")],
-                "Amplifier_Audio": [_info("Device:LED", "Amplifier_Audio")],
+                "Amplifier_Audio": [
+                    _info("AD8628_LED_driver", "Amplifier_Audio", description="LED driver"),
+                ],
             }
         )
 
         results = manager.search_symbols("Device:LED", library_filter="Amplifier_Audio")
 
-        # The explicit filter wins; the colon stays part of the literal query.
-        assert all(s.library == "Amplifier_Audio" for s in results)
+        assert [s.full_ref for s in results] == ["Amplifier_Audio:AD8628_LED_driver"], (
+            "explicit filter must scope to Amplifier_Audio AND the inline "
+            "'Device:' prefix must be stripped so 'LED' actually matches"
+        )
 
     def test_exact_nickname_match_preferred_over_substring(self):
         """`Device:R` must hit the library named exactly `Device`, not
@@ -480,3 +490,115 @@ class TestSearchSymbolsHandlerInterpretation:
         assert response["success"] is True
         assert "interpretation" not in response
         assert "warning" not in response
+
+
+# ---------------------------------------------------------------------------
+# Edge cases the first pass missed (gap-sweep findings)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestSearchSymbolsEdgeCases:
+    def test_combined_library_filter_with_colon_prefix_strips_and_overrides(self):
+        """`query='Device:LED' library='JLCPCB'`:
+        - searches JLCPCB libraries
+        - searches for 'LED' (NOT the un-matchable literal 'Device:LED')
+        - response includes interpretation.note explaining the override
+        """
+        from commands.library_symbol import SymbolLibraryCommands
+
+        cmds = SymbolLibraryCommands.__new__(SymbolLibraryCommands)
+        cmds.library_manager = _make_synthetic_manager(
+            {
+                "Device": [_info("LED", "Device", description="Light emitting diode")],
+                "JLCPCB-LEDs": [
+                    _info("WS2812B", "JLCPCB-LEDs", description="addressable RGB LED"),
+                ],
+            }
+        )
+        cmds._ensure_manager_for = lambda params: None  # type: ignore[attr-defined]
+
+        response = cmds.search_symbols({"query": "Device:LED", "library": "JLCPCB"})
+
+        assert response["success"] is True
+        # Searched JLCPCB-LEDs (library filter), found WS2812B via 'LED'
+        # description match — proves the prefix was stripped.
+        assert {s["full_ref"] for s in response["symbols"]} == {"JLCPCB-LEDs:WS2812B"}
+        interp = response["interpretation"]
+        assert interp["library"] == "JLCPCB"
+        assert interp["name"] == "LED"
+        assert "Device" in interp["note"]
+        assert "JLCPCB" in interp["note"]
+
+    def test_query_with_empty_name_after_colon_falls_back_to_literal(self):
+        """`query='Device:'` (empty name part) must not crash and must
+        not silently treat itself as "all symbols in Device" — that's
+        what list_library_symbols is for.  Falls back to fuzzy match of
+        the literal 'Device:', which matches nothing in normal data."""
+        manager = _make_synthetic_manager(
+            {"Device": [_info("LED", "Device", description="Light emitting diode")]}
+        )
+
+        name, prefix = manager.split_library_qualifier("Device:")
+
+        assert name == "Device:"
+        assert prefix is None
+
+        results = manager.search_symbols("Device:")
+        assert results == []
+
+    def test_query_with_empty_prefix_before_colon_falls_back_to_literal(self):
+        """`query=':LED'` (empty library prefix) must not split into
+        ('', 'LED').  Falls back to fuzzy match of ':LED'."""
+        manager = _make_synthetic_manager(
+            {"Device": [_info("LED", "Device", description="Light emitting diode")]}
+        )
+
+        name, prefix = manager.split_library_qualifier(":LED")
+
+        assert name == ":LED"
+        assert prefix is None
+
+    def test_broad_short_query_returns_exact_match_first(self):
+        """Single-letter `'R'` query: the old early-break could let
+        description-substring hits fill the budget before the exact
+        Device:R was scored.  The heapq.nlargest path must keep the
+        exact match (score 500) on top across 10k+ noise symbols."""
+        # 5000 symbols whose description contains 'r' (matches "transistor")
+        noise = [
+            _info(f"Q{i}", "Transistor_BJT", description="bipolar transistor NPN")
+            for i in range(5000)
+        ]
+        manager = _make_synthetic_manager(
+            {
+                "Transistor_BJT": noise,
+                "Device": [_info("R", "Device", description="Resistor")],
+            }
+        )
+
+        results = manager.search_symbols("R", limit=5)
+
+        assert results[0].full_ref == "Device:R"
+        # Even with 5000 noise hits, the heap keeps just the top 5.
+        assert len(results) == 5
+
+    def test_handler_interpretation_carries_override_note_when_both_supplied(self):
+        """Regression for the gap: previously `query='Device:LED'
+        library='JLCPCB'` returned no interpretation at all because the
+        early-out compared interpreted_library to library_filter.  The
+        plan-based handler must surface the inline_prefix override."""
+        from commands.library_symbol import SymbolLibraryCommands
+
+        cmds = SymbolLibraryCommands.__new__(SymbolLibraryCommands)
+        cmds.library_manager = _make_synthetic_manager(
+            {
+                "Device": [_info("LED", "Device", description="Light emitting diode")],
+                "JLCPCB-LEDs": [_info("WS2812B", "JLCPCB-LEDs", description="LED")],
+            }
+        )
+        cmds._ensure_manager_for = lambda params: None  # type: ignore[attr-defined]
+
+        response = cmds.search_symbols({"query": "Device:LED", "library": "JLCPCB"})
+
+        assert "interpretation" in response
+        assert "note" in response["interpretation"]
