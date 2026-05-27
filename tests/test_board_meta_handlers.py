@@ -8,7 +8,21 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
+
+
+@pytest.fixture(autouse=True)
+def _pcb_editor_open(monkeypatch):
+    """Pretend the PCB editor frame is open so the IPC board-op gate passes.
+
+    These tests exercise handler logic with a fake ipc_board_api; the
+    pcbnew-running gate isn't what they're testing.
+    """
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
 
 
 def _make_iface(api=None, use_ipc=True):
@@ -46,14 +60,21 @@ class _RecordingAPI:
             "date": "D",
             "revision": "A",
             "company": "C",
-            "comments": {"1": "old1", "2": "", "3": "", "4": "", "5": "old5",
-                         "6": "", "7": "", "8": "", "9": ""},
+            "comments": {
+                "1": "old1",
+                "2": "",
+                "3": "",
+                "4": "",
+                "5": "old5",
+                "6": "",
+                "7": "",
+                "8": "",
+                "9": "",
+            },
         }
 
     def set_title_block_info(self, *, title, date, revision, company, comments):
-        self.calls.append(
-            ("set_title_block_info", title, date, revision, company, comments)
-        )
+        self.calls.append(("set_title_block_info", title, date, revision, company, comments))
         return {"success": True}
 
 
@@ -77,9 +98,7 @@ def test_get_origin_passes_explicit_type_and_unit():
 def test_set_origin_with_position_object():
     api = _RecordingAPI()
     iface = _make_iface(api)
-    out = iface._handle_set_origin(
-        {"type": "drill", "position": {"x": 5, "y": 7, "unit": "mm"}}
-    )
+    out = iface._handle_set_origin({"type": "drill", "position": {"x": 5, "y": 7, "unit": "mm"}})
     assert out["success"] is True
     assert api.calls[-1] == ("set_origin", "drill", 5.0, 7.0, "mm")
 
@@ -134,9 +153,7 @@ def test_set_origin_accepts_explicit_zero():
     """(0, 0) is a perfectly valid origin — must NOT be confused with 'missing'."""
     api = _RecordingAPI()
     iface = _make_iface(api)
-    out = iface._handle_set_origin(
-        {"type": "drill", "position": {"x": 0, "y": 0}}
-    )
+    out = iface._handle_set_origin({"type": "drill", "position": {"x": 0, "y": 0}})
     assert out["success"] is True
     assert api.calls[-1] == ("set_origin", "drill", 0.0, 0.0, "mm")
 
@@ -171,9 +188,7 @@ def test_set_title_block_info_partial_update_omits_none():
 def test_set_title_block_info_comments_dict():
     api = _RecordingAPI()
     iface = _make_iface(api)
-    iface._handle_set_title_block_info(
-        {"comments": {"1": "hello", "5": "world"}}
-    )
+    iface._handle_set_title_block_info({"comments": {"1": "hello", "5": "world"}})
     cmd = api.calls[-1]
     assert cmd[5] == {1: "hello", 5: "world"}
 
@@ -202,9 +217,7 @@ def test_set_title_block_info_null_comment_means_no_change_not_clear():
     Now null is treated as 'no change'."""
     api = _RecordingAPI()
     iface = _make_iface(api)
-    iface._handle_set_title_block_info(
-        {"comments": {"1": "kept", "2": None, "5": ""}}
-    )
+    iface._handle_set_title_block_info({"comments": {"1": "kept", "2": None, "5": ""}})
     cmd = api.calls[-1]
     # Slot 1 set to "kept"; slot 2 skipped (None = no change); slot 5
     # explicitly cleared (empty string still means clear).

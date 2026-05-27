@@ -28,7 +28,7 @@ shapes the IPC API can't represent — that behaviour is preserved here.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
@@ -219,28 +219,99 @@ def handle_add_net(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
     }
 
 
+def _ipc_board_edge_rect(ipc_board_api: Any) -> Optional[List[Dict[str, float]]]:
+    """Best-effort rectangle from the board's Edge.Cuts shapes, or None.
+
+    Mirrors the SWIG path's "omit outline → use board outline" fallback so
+    ``add_copper_pour`` is usable on either backend without forcing the
+    caller to pass an outline.  Returns four CCW corners in mm, or None
+    when no Edge.Cuts geometry is available (in which case the handler
+    refuses with a clear message instead of silently picking a wrong rect).
+    """
+    try:
+        from kipy.proto.board.board_types_pb2 import BoardLayer  # type: ignore
+        from kipy.util.units import to_mm  # type: ignore
+
+        board = ipc_board_api._get_board()  # noqa: SLF001 — private accessor on our wrapper
+        shapes = board.get_shapes() if board is not None else []
+        if not shapes:
+            return None
+        edge_layer = BoardLayer.BL_Edge_Cuts
+        min_x = min_y = float("inf")
+        max_x = max_y = float("-inf")
+        for shape in shapes:
+            try:
+                if getattr(shape, "layer", None) != edge_layer:
+                    continue
+                bbox = board.get_item_bounding_box(shape)
+                if not bbox:
+                    continue
+                left, top, right, bottom = ipc_board_api._get_box2_extents(bbox)
+                if left < min_x:
+                    min_x = left
+                if top < min_y:
+                    min_y = top
+                if right > max_x:
+                    max_x = right
+                if bottom > max_y:
+                    max_y = bottom
+            except Exception:
+                continue
+        if min_x == float("inf"):
+            return None
+        return [
+            {"x": to_mm(min_x), "y": to_mm(min_y)},
+            {"x": to_mm(max_x), "y": to_mm(min_y)},
+            {"x": to_mm(max_x), "y": to_mm(max_y)},
+            {"x": to_mm(min_x), "y": to_mm(max_y)},
+        ]
+    except Exception as e:
+        logger.debug(f"Could not derive board edge rect via IPC: {e}")
+        return None
+
+
 def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """IPC handler for add_copper_pour — adds zone with real-time UI update."""
+    """IPC handler for add_copper_pour — adds zone with real-time UI update.
+
+    Accepts the outline under either ``outline`` (canonical, matches the
+    TS schema and the SWIG path) or ``points`` (legacy alias).  When the
+    caller omits both, falls back to the board's Edge.Cuts bounding box
+    so the documented "omit → use board outline" behaviour holds on the
+    IPC path too — previously the IPC handler only read ``points`` and
+    rejected every call that used the documented ``outline`` name.
+    """
     try:
         layer = params.get("layer", "F.Cu")
         net = params.get("net")
         clearance = params.get("clearance", 0.5)
         min_width = params.get("minWidth", 0.25)
-        points = params.get("points", [])
+        # The MCP schema names this `outline`; some legacy callers pass
+        # `points`.  Accept both.
+        points = params.get("outline")
+        if not points:
+            points = params.get("points", [])
         priority = params.get("priority", 0)
         fill_type = params.get("fillType", "solid")
         name = params.get("name", "")
 
+        # If no outline given, derive from Edge.Cuts (matches SWIG behaviour
+        # and the public docstring).
         if not points or len(points) < 3:
-            return {
-                "success": False,
-                "message": "At least 3 points are required for copper pour outline",
-            }
+            derived = _ipc_board_edge_rect(iface.ipc_board_api)
+            if derived is not None:
+                points = derived
+            else:
+                return {
+                    "success": False,
+                    "message": (
+                        "Missing outline. Pass `outline` as an array of at "
+                        "least 3 {x, y} points, or add a board outline "
+                        "(Edge.Cuts) first so the pour can default to it."
+                    ),
+                }
 
-        # Convert points format if needed (handle both {x, y} and {x, y, unit})
-        formatted_points = []
-        for point in points:
-            formatted_points.append({"x": point.get("x", 0), "y": point.get("y", 0)})
+        # Normalise to plain {x, y} dicts in mm.
+        formatted_points = [{"x": p.get("x", 0), "y": p.get("y", 0)} for p in points]
 
         success = iface.ipc_board_api.add_zone(
             points=formatted_points,
@@ -267,7 +338,7 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
                 "minWidth": min_width,
                 "priority": priority,
                 "fillType": fill_type,
-                "pointCount": len(points),
+                "pointCount": len(formatted_points),
             },
         }
     except Exception as e:

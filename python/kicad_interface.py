@@ -381,6 +381,7 @@ class KiCADInterface:
         "get_backend_info": "ui",
         "get_backend_state": "ui",
         "launch_kicad_ui": "ui",
+        "reconcile_backends": "ui",
         "run_action": "ui",
         "add_to_selection": "selection",
         "clear_selection": "selection",
@@ -455,6 +456,14 @@ class KiCADInterface:
         self._last_auto_save_status: Optional[Dict[str, Any]] = None
         # Number of timestamped backups to keep in .mcp-backups/ per board file.
         self._auto_save_backup_keep = 20
+        # Cross-backend conflict tracking.  The SWIG and IPC paths each
+        # carry their own copy of the board (SWIG in-memory + on-disk file
+        # vs. KiCad's UI memory accessed over IPC), and writes from one
+        # silently invalidate the other.  These two flags let us refuse
+        # cross-backend writes until the user reconciles them.
+        self._ipc_writes_pending = False  # IPC mutated KiCad memory; disk stale
+        self._swig_writes_landed = False  # SWIG wrote disk; KiCad memory stale
+        self._ipc_change_callback_registered = False
         self.use_ipc = USE_IPC_BACKEND
         self.ipc_backend = ipc_backend
         self.ipc_board_api = None
@@ -630,18 +639,6 @@ class KiCADInterface:
         "save_project": "_ipc_save_project",
     }
 
-    # Commands that are implemented by the explicit IPC command handlers in
-    # command_routes, rather than by the generic IPC_CAPABLE_COMMANDS fast path.
-    IPC_DIRECT_COMMANDS = {
-        "ipc_add_track",
-        "ipc_add_via",
-        "ipc_add_text",
-        "ipc_list_components",
-        "ipc_get_tracks",
-        "ipc_get_vias",
-        "ipc_save_board",
-    }
-
     def _refresh_ipc_board_api(self) -> bool:
         """Refresh the IPC board API after KiCAD or a board becomes available."""
         ipc_backend = getattr(self, "ipc_backend", None)
@@ -651,11 +648,104 @@ class KiCADInterface:
 
         try:
             self.ipc_board_api = ipc_backend.get_board()
-            return True
         except Exception as e:
             logger.warning(f"Connected to KiCAD IPC, but no board API is available yet: {e}")
             self.ipc_board_api = None
             return False
+        # Hook the dirty-tracker once per IPCBackend.  IPCBoardAPI forwards
+        # every mutation through IPCBackend._notify_change, so a single
+        # registration covers re-creations of the board API on reconnect.
+        # ``__new__``-instantiated test interfaces skip __init__, so default
+        # the flag via getattr.
+        if not getattr(self, "_ipc_change_callback_registered", False):
+            try:
+                ipc_backend.register_change_callback(self._on_ipc_change)
+                self._ipc_change_callback_registered = True
+            except Exception as e:
+                logger.debug(f"Could not register IPC change callback: {e}")
+        return True
+
+    def _on_ipc_change(self, change_type: str, details: Dict[str, Any]) -> None:
+        """Track which side has unsaved/uncommitted writes for the conflict gate.
+
+        IPCBoardAPI fires this for every mutation (component/track/zone/etc.)
+        and for ``save`` events when KiCad writes to disk.  We use it to
+        keep ``_ipc_writes_pending`` accurate so SWIG mutations can refuse
+        to run on a stale disk (and lose the IPC changes when they save).
+        """
+        if change_type == "save":
+            self._ipc_writes_pending = False
+            # After IPC save, disk reflects KiCad memory — refresh the
+            # signature so SWIG auto-save doesn't see it as 'changed
+            # externally' and refuse legitimate follow-up writes.
+            try:
+                self._record_board_signature()
+            except Exception:
+                pass
+            return
+        # Selection state and action_invoked don't change board content; they
+        # leave both backends consistent.
+        if change_type in {
+            "selection_cleared",
+            "selection_added",
+            "selection_removed",
+            "action_invoked",
+        }:
+            return
+        self._ipc_writes_pending = True
+
+    def _cross_backend_conflict(self, *, attempting: str) -> Optional[Dict[str, Any]]:
+        """Refuse cross-backend writes that would silently lose data.
+
+        ``attempting`` is ``"ipc"`` (the caller is about to write through
+        the IPC API) or ``"swig"`` (about to mutate the SWIG board).  When
+        the other side has uncommitted writes the dispatcher returns a
+        structured response with ``needs_reconcile: True`` and a concrete
+        ``direction`` so agents can either call ``reconcile_backends`` or
+        prompt the user with the manual recovery steps.
+
+        The two cases:
+        - SWIG wrote disk → KiCad memory is stale.  ``ipc_save_board``
+          would overwrite the SWIG content with KiCad's old data; no IPC
+          mutation can proceed safely.  Direction: ``swig_to_ipc``.  No
+          programmatic fix — the user has to reload the .kicad_pcb file
+          inside KiCad (File → Revert, or close+reopen).
+        - IPC has unsaved changes → SWIG mutations would read stale disk
+          and the auto-save would lose the IPC changes.  Direction:
+          ``ipc_to_swig``.  ``reconcile_backends`` can do this
+          automatically (ipc_save_board + SWIG reload).
+        """
+        if attempting == "ipc" and getattr(self, "_swig_writes_landed", False):
+            return {
+                "success": False,
+                "needs_reconcile": True,
+                "direction": "swig_to_ipc",
+                "message": (
+                    "SWIG wrote new content to disk that KiCad's in-memory "
+                    "state doesn't include. Saving via IPC now would "
+                    "overwrite those changes with KiCad's stale copy. "
+                    "Reload the .kicad_pcb file inside KiCad (File → Revert "
+                    "from saved, or close+reopen the file) to pick up the "
+                    "SWIG content; further IPC work is safe after that. "
+                    "This direction cannot be reconciled programmatically — "
+                    "kipy has no 'reload from disk' API."
+                ),
+            }
+        if attempting == "swig" and getattr(self, "_ipc_writes_pending", False):
+            return {
+                "success": False,
+                "needs_reconcile": True,
+                "direction": "ipc_to_swig",
+                "message": (
+                    "IPC has unsaved changes in KiCad memory that the .kicad_pcb "
+                    "file on disk doesn't include. A SWIG mutation here would "
+                    "read the stale disk content and its auto-save would "
+                    "overwrite the IPC changes. Call `reconcile_backends` "
+                    "(direction=ipc_to_swig) to flush IPC to disk and reload "
+                    "the SWIG board, then retry."
+                ),
+            }
+        return None
 
     def _try_enable_ipc_backend(self, force: bool = False) -> bool:
         """Try to switch an already-running interface to IPC when KiCAD is available."""
@@ -686,7 +776,70 @@ class KiCADInterface:
             logger.info(f"Runtime IPC connection not available: {e}")
             return False
 
-    def ensure_ipc(self, *, allow_launch: bool = True, timeout_s: float = 30.0) -> Tuple[bool, str]:
+    @staticmethod
+    def _pcb_editor_gate_reason() -> str:
+        return (
+            "KiCAD is running but the PCB editor is not open. "
+            "Open the PCB editor in KiCAD (project manager → PCB icon, "
+            "or open the .kicad_pcb file directly) and retry."
+        )
+
+    def _pcb_editor_gate_response(self, command: Optional[str] = None) -> Dict[str, Any]:
+        """Build a structured 'PCB editor not open' response for IPC board ops.
+
+        Surfaced as ``success: False`` with ``needs_pcb_editor: True`` so an
+        agent can detect this specific recoverable state and prompt the user
+        instead of falling back to silent file-only mutations.  ``command`` is
+        optional because handler-level gates don't always have the MCP command
+        name in scope; ``handle_command`` passes it for a more pointed message.
+        """
+        label = f"'{command}'" if command else "This IPC board operation"
+        return {
+            "success": False,
+            "needs_pcb_editor": True,
+            "command": command,
+            "message": f"{label} requires the PCB editor: " + self._pcb_editor_gate_reason(),
+        }
+
+    def require_ipc_board_op(self, *, allow_launch: bool = True) -> Dict[str, Any]:
+        """Gate for handler-level IPC board ops.
+
+        Returns one of four shapes:
+          - ``{}`` when IPC, the PCB editor frame, and the cross-backend
+            sync state are all clean.
+          - The ``_pcb_editor_gate_response`` shape (``needs_pcb_editor: True``)
+            when the editor frame is closed.  Detected via reason-string
+            equality on the canonical gate text from ``ensure_ipc`` rather
+            than re-probing the process list — that avoids both a TOCTOU
+            race (editor opened/closed between the two checks) and the
+            mis-classification where ``KICAD_BACKEND=swig`` plus a bare
+            project manager was reported as 'open the PCB editor'.
+          - The ``_cross_backend_conflict`` shape
+            (``needs_reconcile: True``) when SWIG has landed writes that
+            KiCad memory doesn't include — an IPC write would either fail
+            (kipy) or, on save, silently overwrite the SWIG content.
+          - ``{"success": False, "_ipc_reason": <raw reason>}`` for all
+            other IPC-unavailable cases.  Handlers wrap that raw reason
+            with their own domain-specific envelope so error messages
+            don't end up doubly-prefixed.
+        """
+        ok, reason = self.ensure_ipc(allow_launch=allow_launch, require_pcb_editor=True)
+        if not ok:
+            if reason == self._pcb_editor_gate_reason():
+                return self._pcb_editor_gate_response()
+            return {"success": False, "_ipc_reason": reason}
+        conflict = self._cross_backend_conflict(attempting="ipc")
+        if conflict is not None:
+            return conflict
+        return {}
+
+    def ensure_ipc(
+        self,
+        *,
+        allow_launch: bool = True,
+        timeout_s: float = 30.0,
+        require_pcb_editor: bool = True,
+    ) -> Tuple[bool, str]:
         """Make IPC available for the calling handler, auto-launching KiCAD if needed.
 
         Sequence:
@@ -695,6 +848,13 @@ class KiCADInterface:
           3. KiCAD not running and ``allow_launch`` (gated by KICAD_AUTO_LAUNCH
              ≠ "false") → launch the project manager and poll for the socket.
 
+        With ``require_pcb_editor=True`` (the default for board-level handlers)
+        a connected IPC is still rejected when ``pcbnew`` isn't a running
+        process, because the project manager hosts the IPC server on its own
+        and board mutations against that bare server fail cryptically or
+        silently mutate a closed document.  Frame-agnostic callers like
+        ``run_action`` opt out via ``require_pcb_editor=False``.
+
         Returns ``(True, "")`` on success, ``(False, reason)`` otherwise. The
         reason text is meant to be surfaced to the agent so it can decide
         whether to retry or fall back.
@@ -702,12 +862,22 @@ class KiCADInterface:
         if KICAD_BACKEND == "swig":
             return (False, "KICAD_BACKEND=swig; IPC is disabled by configuration")
 
+        def _connected() -> bool:
+            return bool(self.use_ipc and self.ipc_board_api)
+
+        def _check_editor_gate() -> Optional[Tuple[bool, str]]:
+            if not require_pcb_editor:
+                return None
+            if KiCADProcessManager.is_pcb_editor_running():
+                return None
+            return (False, self._pcb_editor_gate_reason())
+
         # Already connected?
-        if self.use_ipc and self.ipc_board_api:
-            return (True, "")
+        if _connected():
+            return _check_editor_gate() or (True, "")
         if self._try_enable_ipc_backend(force=True):
-            if self.use_ipc and self.ipc_board_api:
-                return (True, "")
+            if _connected():
+                return _check_editor_gate() or (True, "")
 
         # Honor KICAD_AUTO_LAUNCH=false as an explicit opt-out.
         env_optout = os.environ.get("KICAD_AUTO_LAUNCH", "").strip().lower() == "false"
@@ -738,8 +908,8 @@ class KiCADInterface:
         deadline = time.monotonic() + max(1.0, timeout_s)
         while time.monotonic() < deadline:
             if self._try_enable_ipc_backend(force=True):
-                if self.use_ipc and self.ipc_board_api:
-                    return (True, "")
+                if _connected():
+                    return _check_editor_gate() or (True, "")
             time.sleep(0.5)
 
         return (
@@ -822,25 +992,6 @@ class KiCADInterface:
             return layer_name[3:].replace("_", ".")
         return layer_name
 
-    # Backend/state meta-tools: they describe the backend themselves, so the
-    # generic SWIG _recommendation stamp would just duplicate their own message.
-    _BACKEND_META_COMMANDS: Tuple[str, ...] = (
-        "get_backend_info",
-        "get_backend_state",
-        "check_kicad_ui",
-        "launch_kicad_ui",
-    )
-
-    def _result_backend_for_command(self, command: str, result: Dict[str, Any]) -> str:
-        """Return the backend label for a command result."""
-        if command in self._BACKEND_META_COMMANDS:
-            return result.get("backend", "ipc" if self.use_ipc else "swig")
-
-        if command in self.IPC_DIRECT_COMMANDS:
-            return "ipc" if self.use_ipc else "unavailable"
-
-        return "swig"
-
     def handle_command(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Route command to appropriate handler, preferring IPC when available"""
         logger.info(f"Handling command: {command}")
@@ -852,18 +1003,28 @@ class KiCADInterface:
 
             # Check if we can use IPC for this command (real-time UI sync)
             if self.use_ipc and self.ipc_board_api and command in self.IPC_CAPABLE_COMMANDS:
+                # IPC board ops are dispatched directly here (not through
+                # ensure_ipc), so the editor-frame gate has to be enforced
+                # at the dispatch site too — otherwise a project-manager-only
+                # KiCAD would silently route mutations to a closed document.
+                if not KiCADProcessManager.is_pcb_editor_running():
+                    return self._pcb_editor_gate_response(command)
+
+                # Cross-backend conflict: refuse IPC writes when SWIG has
+                # landed content on disk that KiCad memory doesn't include
+                # (an IPC save here would overwrite it).  Read-only queries
+                # are safe to let through.
+                if command not in self._IPC_READ_ONLY_COMMANDS:
+                    conflict = self._cross_backend_conflict(attempting="ipc")
+                    if conflict is not None:
+                        return conflict
+
                 ipc_handler_name = self.IPC_CAPABLE_COMMANDS[command]
                 ipc_handler = getattr(self, ipc_handler_name, None)
 
                 if ipc_handler:
                     logger.info(f"Using IPC backend for {command} (real-time sync)")
                     result = ipc_handler(params)
-
-                    # Add indicator that IPC was used
-                    if isinstance(result, dict):
-                        result["_backend"] = "ipc"
-                        result["_realtime"] = True
-
                     logger.debug(f"IPC command result: {result}")
                     return result
 
@@ -876,37 +1037,20 @@ class KiCADInterface:
             # Get the handler for the command
             handler = self.command_routes.get(command)
 
+            # Cross-backend conflict for SWIG mutations: refuse when IPC has
+            # unsaved changes in KiCad memory.  SWIG reads the on-disk file
+            # (which doesn't include them) and the auto-save would write
+            # back, losing the IPC changes.  Reads + project lifecycle
+            # commands fall through; only mutating board ops are gated.
+            if handler is not None and command in self._BOARD_MUTATING_COMMANDS:
+                conflict = self._cross_backend_conflict(attempting="swig")
+                if conflict is not None:
+                    return conflict
+
             if handler:
                 # Execute the command
                 result = handler(params)
                 logger.debug(f"Command result: {result}")
-
-                # Add backend indicator
-                if isinstance(result, dict):
-                    backend = self._result_backend_for_command(command, result)
-                    result["_backend"] = backend
-                    result["_realtime"] = bool(
-                        backend == "ipc" and result.get("realtime", self.use_ipc)
-                    )
-                    # Persistent nudge: every SWIG-backed success tells the
-                    # agent the one action that unlocks IPC.  Skip on the
-                    # backend meta-tools (they already say it themselves)
-                    # and on failures (the error is the signal).  Use the
-                    # same truthy `.get(..., False)` shape as the autosave
-                    # guard four lines below so both branches agree on what
-                    # "successful" means.
-                    if (
-                        backend == "swig"
-                        and command not in self._BACKEND_META_COMMANDS
-                        and result.get("success", False)
-                        and "_recommendation" not in result
-                    ):
-                        result["_recommendation"] = (
-                            "On SWIG backend — call launch_kicad_ui for "
-                            "realtime UI sync, transactions, and IPC-only "
-                            "tools. Without it, changes won't appear in "
-                            "KiCAD until the file is reloaded."
-                        )
 
                 # Update board reference if command was successful
                 if result.get("success", False):
@@ -952,8 +1096,6 @@ class KiCADInterface:
                                         "current Python process — restart the MCP "
                                         "server to recover."
                                     ),
-                                    "_backend": "swig",
-                                    "_realtime": False,
                                 }
                         self._update_command_handlers()
                         # Record the file's signature so subsequent auto-saves
@@ -961,9 +1103,18 @@ class KiCADInterface:
                         # overwrite them.
                         self._record_board_signature()
                         self._last_auto_save_status = None
+                        # Fresh load → both SWIG and disk are in sync.  The
+                        # IPC side is left alone: it might still have
+                        # pending changes if KiCad held them through the
+                        # reload, and we can't assume otherwise from here.
+                        self._swig_writes_landed = False
                     elif command == "save_project":
                         self._record_board_signature()
                         self._last_auto_save_status = None
+                        # SWIG save writes the in-memory board to disk;
+                        # KiCad memory now diverges from disk if KiCad has
+                        # the file open.
+                        self._swig_writes_landed = True
                     elif command in self._BOARD_MUTATING_COMMANDS:
                         # Auto-save after every board mutation via SWIG.
                         # Prevents data loss if Claude hits context limit before
@@ -977,6 +1128,11 @@ class KiCADInterface:
                             if save_status.get("warning"):
                                 result.setdefault("warnings", []).append(save_status["warning"])
                             result["autoSave"] = save_status
+                        if save_status.get("saved"):
+                            # SWIG just landed content on disk; mark the
+                            # SWIG→IPC direction dirty so any later IPC
+                            # write is gated until KiCad reloads the file.
+                            self._swig_writes_landed = True
 
                 return result
             else:
@@ -1020,6 +1176,32 @@ class KiCADInterface:
         "connect_passthrough",
         "connect_to_net",
     }
+
+    # IPC commands that only read the board.  Used by the cross-backend
+    # conflict gate to let queries through even when SWIG has landed
+    # writes that haven't been picked up by KiCad memory — reads can't
+    # cause data loss.
+    _IPC_READ_ONLY_COMMANDS = frozenset(
+        {
+            # IPC fast-path queries (subset of IPC_CAPABLE_COMMANDS).
+            "query_traces",
+            "get_nets_list",
+            "get_board_info",
+            "get_layer_list",
+            "get_component_list",
+            "get_component_properties",
+            # Direct IPC queries (handlers/ipc.py).
+            "ipc_list_components",
+            "ipc_get_tracks",
+            "ipc_get_vias",
+            # board_meta / selection / transactions queries.
+            "get_origin",
+            "get_title_block_info",
+            "get_selection",
+            "hit_test",
+            "get_transaction_status",
+        }
+    )
 
     @staticmethod
     def _disk_signature(path: str) -> Optional[Tuple[int, str]]:

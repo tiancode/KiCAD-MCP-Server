@@ -35,17 +35,16 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
 
 
 def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    if iface.use_ipc and iface.ipc_board_api:
+    """Gate transactions on IPC + an open PCB editor frame."""
+    gate = iface.require_ipc_board_op(allow_launch=True)
+    if not gate:
         return {}
-    ok, reason = iface.ensure_ipc(allow_launch=True)
-    if ok:
-        return {}
-    return _ipc_unavailable(reason)
+    if gate.get("needs_pcb_editor"):
+        return gate
+    return _ipc_unavailable(gate.get("_ipc_reason", ""))
 
 
-def handle_begin_transaction(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_begin_transaction(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Open a transaction. Refuses to nest — commit or rollback first.
 
     Forwards ``description`` as-is (including explicit empty string).
@@ -61,9 +60,7 @@ def handle_begin_transaction(
     return iface.ipc_board_api.begin_transaction(description)
 
 
-def handle_commit_transaction(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_commit_transaction(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Push the open transaction as one undo step.
 
     ``description`` overrides the label set at begin_transaction; omit it
@@ -78,9 +75,7 @@ def handle_commit_transaction(
     return iface.ipc_board_api.commit_transaction(description)
 
 
-def handle_rollback_transaction(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_rollback_transaction(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Discard the open transaction — every change since begin is reverted."""
     gate = _require_ipc(iface)
     if gate:

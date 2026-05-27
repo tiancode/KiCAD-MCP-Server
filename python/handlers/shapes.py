@@ -34,12 +34,13 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
 
 
 def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    if iface.use_ipc and iface.ipc_board_api:
+    """Gate shape ops on IPC + an open PCB editor frame."""
+    gate = iface.require_ipc_board_op(allow_launch=True)
+    if not gate:
         return {}
-    ok, reason = iface.ensure_ipc(allow_launch=True)
-    if ok:
-        return {}
-    return _ipc_unavailable(reason)
+    if gate.get("needs_pcb_editor"):
+        return gate
+    return _ipc_unavailable(gate.get("_ipc_reason", ""))
 
 
 def _xy(params: Dict[str, Any], key: str, fallback_x: str, fallback_y: str) -> tuple:

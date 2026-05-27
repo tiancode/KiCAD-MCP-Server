@@ -83,9 +83,7 @@ def handle_get_schematic_overview(
     }
 
 
-def handle_get_pcb_overview(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """One-shot snapshot of the PCB: components, tracks, vias, zones, layers.
 
     Mirrors get_schematic_overview for the PCB side so agents can scan the
@@ -126,9 +124,7 @@ def handle_get_pcb_overview(
     return {
         "success": not failed,
         "message": (
-            "PCB overview"
-            if not failed
-            else f"PCB overview (slices failed: {', '.join(failed)})"
+            "PCB overview" if not failed else f"PCB overview (slices failed: {', '.join(failed)})"
         ),
         "summary": summary,
         "components": components,

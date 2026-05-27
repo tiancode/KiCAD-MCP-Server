@@ -29,17 +29,20 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
 
 
 def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    """Ensure IPC is reachable, auto-launching KiCAD if needed.
+    """Ensure IPC + the PCB editor frame are both reachable.
 
-    Returns ``{}`` when IPC is ready, or a `_ipc_unavailable` payload to
-    short-circuit the handler.
+    Mirrors the other handler modules: pass the editor-gate response through
+    unchanged (so ``needs_pcb_editor: True`` reaches the agent), and wrap
+    other IPC-unavailable cases through ``_ipc_unavailable`` so the raw
+    reason text stays a short tail clause rather than getting doubly
+    prefixed by the upstream "IPC backend not available:" envelope.
     """
-    if iface.use_ipc and iface.ipc_board_api:
+    gate = iface.require_ipc_board_op(allow_launch=True)
+    if not gate:
         return {}
-    ok, reason = iface.ensure_ipc(allow_launch=True)
-    if ok:
-        return {}
-    return _ipc_unavailable(reason)
+    if gate.get("needs_pcb_editor"):
+        return gate
+    return _ipc_unavailable(gate.get("_ipc_reason", ""))
 
 
 def handle_ipc_add_track(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

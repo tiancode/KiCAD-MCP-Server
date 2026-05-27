@@ -81,8 +81,26 @@ class KiCADProcessManager:
     _LINUX_KICAD_BINARIES = frozenset({"kicad", "pcbnew", "eeschema"})
 
     @staticmethod
-    def _linux_kicad_pids() -> List[str]:
-        """Return PIDs whose /proc/<pid>/exe basename is a known KiCAD binary.
+    def _linux_proc_exe_basename(pid: str) -> Optional[str]:
+        """Resolve /proc/<pid>/exe to a normalized lowercase basename, or None.
+
+        Linux appends ``" (deleted)"`` to the symlink target when the binary
+        was replaced on disk while the process is still running — typical
+        after ``pacman -Syu kicad`` mid-session.  Strip that suffix before
+        comparing so we don't lose the process on every package upgrade.
+        """
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            return None
+        name = os.path.basename(exe).lower()
+        if name.endswith(" (deleted)"):
+            name = name[: -len(" (deleted)")]
+        return name
+
+    @staticmethod
+    def _linux_pids_for(names: frozenset) -> List[str]:
+        """Return PIDs whose /proc/<pid>/exe basename is in ``names``.
 
         Resolving the exe symlink avoids false positives from command-line
         substring matches (e.g. a shell whose cwd contains "/kicad").
@@ -95,13 +113,15 @@ class KiCADProcessManager:
         for entry in entries:
             if not entry.isdigit():
                 continue
-            try:
-                exe = os.readlink(f"/proc/{entry}/exe")
-            except OSError:
-                continue
-            if os.path.basename(exe).lower() in KiCADProcessManager._LINUX_KICAD_BINARIES:
+            name = KiCADProcessManager._linux_proc_exe_basename(entry)
+            if name is not None and name in names:
                 pids.append(entry)
         return pids
+
+    @staticmethod
+    def _linux_kicad_pids() -> List[str]:
+        """PIDs running any known KiCAD GUI binary (kicad / pcbnew / eeschema)."""
+        return KiCADProcessManager._linux_pids_for(KiCADProcessManager._LINUX_KICAD_BINARIES)
 
     @staticmethod
     def is_running() -> bool:
@@ -137,6 +157,45 @@ class KiCADProcessManager:
 
         except Exception as e:
             logger.error(f"Error checking if KiCAD is running: {e}")
+            return False
+
+    _PCBNEW_ONLY = frozenset({"pcbnew"})
+
+    @staticmethod
+    def is_pcb_editor_running() -> bool:
+        """Whether the PCB editor (pcbnew) frame is currently a running process.
+
+        The project manager (`kicad`) hosts the IPC API server on its own —
+        ``is_running()`` returns True for a bare project manager, but no
+        ``.kicad_pcb`` document is open in that state.  Board-level IPC ops
+        attempted then either fail with cryptic kipy errors or silently route
+        to a closed document, so callers that mutate the board gate on this
+        and ask the user to open the PCB editor.
+        """
+        system = platform.system()
+        try:
+            if system == "Linux":
+                # Reuses _linux_pids_for so the " (deleted)" fix-up in
+                # _linux_proc_exe_basename applies to this gate too.
+                return bool(KiCADProcessManager._linux_pids_for(KiCADProcessManager._PCBNEW_ONLY))
+
+            elif system == "Darwin":  # macOS
+                result = subprocess.run(["pgrep", "-f", "pcbnew"], capture_output=True, text=True)
+                return result.returncode == 0
+
+            elif system == "Windows":
+                for proc in KiCADProcessManager._windows_list_processes():
+                    name = (proc.get("name") or "").lower()
+                    if name == "pcbnew.exe":
+                        return True
+                return False
+
+            else:
+                logger.warning(f"PCB editor detection not implemented for {system}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error checking if PCB editor is running: {e}")
             return False
 
     @staticmethod

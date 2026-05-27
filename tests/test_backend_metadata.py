@@ -180,7 +180,16 @@ def _stub_kipy_units(monkeypatch):
     monkeypatch.setitem(sys.modules, "kipy.util.units", units_module)
 
 
-def test_generic_command_is_tagged_as_swig():
+def test_dispatcher_no_longer_stamps_backend_banner_fields():
+    """The dispatcher used to inject ``_backend`` / ``_realtime`` (and a
+    long ``_recommendation`` string on every SWIG success) into every
+    response.  The user asked for all three to be gone — they were noise
+    on hot paths and the SWIG-tagged recommendation was misleading when
+    surfaced on schematic / file-only tools that can't use IPC anyway.
+    Backend state is still queryable via ``get_backend_state`` /
+    ``get_backend_info``; tools just no longer carry it inline.
+    """
+    # Generic SWIG-routed command.
     iface = _make_iface(
         {
             "get_project_info": lambda params: {
@@ -190,14 +199,11 @@ def test_generic_command_is_tagged_as_swig():
         },
         use_ipc=True,
     )
-
     result = iface.handle_command("get_project_info", {})
+    for noisy in ("_backend", "_realtime", "_recommendation"):
+        assert noisy not in result, f"{noisy} should not be stamped on responses"
 
-    assert result["_backend"] == "swig"
-    assert result["_realtime"] is False
-
-
-def test_explicit_ipc_command_is_tagged_as_ipc_when_ipc_is_active():
+    # Explicit IPC handler (ipc_add_track) — used to get ``_backend: ipc``.
     iface = _make_iface(
         {
             "ipc_add_track": lambda params: {
@@ -208,14 +214,12 @@ def test_explicit_ipc_command_is_tagged_as_ipc_when_ipc_is_active():
         },
         use_ipc=True,
     )
-
     result = iface.handle_command("ipc_add_track", {})
+    for noisy in ("_backend", "_realtime", "_recommendation"):
+        assert noisy not in result
 
-    assert result["_backend"] == "ipc"
-    assert result["_realtime"] is True
-
-
-def test_backend_info_uses_reported_backend_for_metadata():
+    # Meta command (get_backend_info) — handler returns its own
+    # backend/realtime_sync fields, dispatcher must not shadow them.
     iface = _make_iface(
         {
             "get_backend_info": lambda params: {
@@ -226,11 +230,11 @@ def test_backend_info_uses_reported_backend_for_metadata():
         },
         use_ipc=True,
     )
-
     result = iface.handle_command("get_backend_info", {})
-
-    assert result["_backend"] == "ipc"
-    assert result["_realtime"] is True
+    assert result["backend"] == "ipc"
+    assert result["realtime_sync"] is True
+    for noisy in ("_backend", "_realtime", "_recommendation"):
+        assert noisy not in result
 
 
 def test_backend_state_without_board_reports_loaded_flags(monkeypatch):
@@ -252,8 +256,6 @@ def test_backend_state_without_board_reports_loaded_flags(monkeypatch):
     assert result["projectPath"] is None
     assert result["boardPath"] is None
     assert result["dirty"] is False
-    assert result["_backend"] == "swig"
-    assert result["_realtime"] is False
 
 
 def test_backend_state_reports_loaded_project_board_and_clean_signature(tmp_path, monkeypatch):
@@ -350,8 +352,6 @@ def test_backend_state_reports_ipc_connection_without_loaded_board(monkeypatch):
     assert result["realtime"] is True
     assert result["ipcConnected"] is True
     assert result["loadedBoard"] is False
-    assert result["_backend"] == "ipc"
-    assert result["_realtime"] is True
 
 
 def test_ipc_capable_command_reconnects_when_kicad_is_running(monkeypatch):
@@ -359,6 +359,9 @@ def test_ipc_capable_command_reconnects_when_kicad_is_running(monkeypatch):
 
     monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "auto")
     monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_running", lambda: True)
+    # PCB editor gate: IPC board ops short-circuit when pcbnew isn't a
+    # running process. The test simulates a full KiCAD UI, so report True.
+    monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_pcb_editor_running", lambda: True)
     monkeypatch.setitem(
         sys.modules,
         "kicad_api.ipc_backend",
@@ -370,8 +373,10 @@ def test_ipc_capable_command_reconnects_when_kicad_is_running(monkeypatch):
     result = iface.handle_command("get_board_info", {})
 
     assert result["success"] is True
-    assert result["_backend"] == "ipc"
-    assert result["_realtime"] is True
+    # IPC reconnection should have taken: confirm via the connection state,
+    # not via a per-response banner (which we no longer stamp).
+    assert iface.use_ipc is True
+    assert iface.ipc_board_api is not None
 
 
 def test_ipc_capable_command_does_not_reconnect_in_strict_swig_mode(monkeypatch):
@@ -398,8 +403,6 @@ def test_ipc_capable_command_does_not_reconnect_in_strict_swig_mode(monkeypatch)
     result = iface.handle_command("get_board_info", {})
 
     assert result["success"] is True
-    assert result["_backend"] == "swig"
-    assert result["_realtime"] is False
     assert iface.ipc_board_api is None
 
 
@@ -427,8 +430,6 @@ def test_ipc_reconnect_failure_falls_back_to_swig(monkeypatch):
     result = iface.handle_command("get_board_info", {})
 
     assert result["success"] is True
-    assert result["_backend"] == "swig"
-    assert result["_realtime"] is False
     assert iface.use_ipc is False
     assert iface.ipc_board_api is None
 
@@ -459,8 +460,6 @@ def test_connected_ipc_without_board_api_reports_status_but_board_tools_fallback
     backend_result = iface.handle_command("get_backend_info", {})
 
     assert board_result["success"] is True
-    assert board_result["_backend"] == "swig"
-    assert board_result["_realtime"] is False
     assert iface.use_ipc is True
     assert iface.ipc_board_api is None
 
@@ -468,7 +467,6 @@ def test_connected_ipc_without_board_api_reports_status_but_board_tools_fallback
     assert backend_result["backend"] == "ipc"
     assert backend_result["realtime_sync"] is True
     assert backend_result["ipc_connected"] is True
-    assert backend_result["_backend"] == "ipc"
 
 
 def test_ui_status_tools_report_live_ipc_backend_status(monkeypatch):
@@ -513,14 +511,14 @@ def test_ui_status_tools_report_live_ipc_backend_status(monkeypatch):
         assert result["backend"] == "ipc"
         assert result["realtime_sync"] is True
         assert result["ipc_connected"] is True
-        assert result["_backend"] == "ipc"
-        assert result["_realtime"] is True
 
 
 def test_query_traces_can_use_ipc_backend(monkeypatch):
     import kicad_interface
 
     monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "swig")
+    # IPC board ops gate on pcbnew being open; the fake setup simulates that.
+    monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_pcb_editor_running", lambda: True)
 
     iface = _make_iface({}, use_ipc=True)
     iface.ipc_board_api = _FakeIPCBoardAPI()
@@ -534,13 +532,13 @@ def test_query_traces_can_use_ipc_backend(monkeypatch):
     assert result["traceCount"] == 1
     assert result["traces"][0]["layer"] == "F.Cu"
     assert result["traces"][0]["length"] == 5
-    assert result["_backend"] == "ipc"
 
 
 def test_query_traces_ipc_filters_and_vias(monkeypatch):
     import kicad_interface
 
     monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "swig")
+    monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_pcb_editor_running", lambda: True)
 
     iface = _make_iface({}, use_ipc=True)
     iface.ipc_board_api = _FilteringIPCBoardAPI()
@@ -558,7 +556,6 @@ def test_query_traces_ipc_filters_and_vias(monkeypatch):
 
     assert net_miss["success"] is True
     assert net_miss["traceCount"] == 0
-    assert net_miss["_backend"] == "ipc"
 
     assert layer_match["success"] is True
     assert layer_match["traceCount"] == 1
@@ -657,11 +654,12 @@ def test_get_backend_info_on_ipc_has_no_recommendation(monkeypatch):
     assert "recommendation" not in result
 
 
-def test_generic_swig_success_carries_recommendation_to_switch_to_ipc():
-    """Every successful SWIG-backed tool call should nudge the agent toward
-    IPC.  This is the persistent reminder the user explicitly asked for —
-    without it agents do not realize they're on a degraded backend until
-    they hit a missing tool."""
+def test_swig_success_no_longer_carries_recommendation_string():
+    """The dispatcher used to inject a long 'On SWIG backend — call
+    launch_kicad_ui...' string into every successful SWIG response.  The
+    user asked for this to go away (it was noise on every tool call and,
+    on schematic / file-only tools that can't use IPC, actively
+    misleading)."""
     iface = _make_iface(
         {
             "get_project_info": lambda params: {
@@ -674,67 +672,9 @@ def test_generic_swig_success_carries_recommendation_to_switch_to_ipc():
 
     result = iface.handle_command("get_project_info", {})
 
-    assert result["_backend"] == "swig"
-    assert "launch_kicad_ui" in result["_recommendation"]
-
-
-def test_swig_recommendation_not_added_for_failed_results():
-    """The error is the signal on failure — don't bury it under a generic
-    recommendation that may not be relevant to the failure."""
-    iface = _make_iface(
-        {
-            "get_project_info": lambda params: {
-                "success": False,
-                "message": "no project open",
-            }
-        },
-        use_ipc=False,
-    )
-
-    result = iface.handle_command("get_project_info", {})
-
-    assert result["_backend"] == "swig"
     assert "_recommendation" not in result
-
-
-def test_swig_recommendation_not_added_for_backend_meta_commands():
-    """get_backend_info has its own (richer) recommendation; the dispatcher
-    must not stomp on it with the generic stamp."""
-    iface = _make_iface(
-        {
-            "get_backend_info": lambda params: {
-                "success": True,
-                "backend": "swig",
-                "recommendation": "rich custom recommendation",
-            }
-        },
-        use_ipc=False,
-    )
-
-    result = iface.handle_command("get_backend_info", {})
-
-    assert result["_backend"] == "swig"
-    assert result["recommendation"] == "rich custom recommendation"
-    assert "_recommendation" not in result
-
-
-def test_swig_recommendation_not_added_when_already_on_ipc():
-    """IPC results don't need the nudge."""
-    iface = _make_iface(
-        {
-            "ipc_add_track": lambda params: {
-                "success": True,
-                "message": "Track added",
-                "realtime": True,
-            }
-        },
-        use_ipc=True,
-    )
-
-    result = iface.handle_command("ipc_add_track", {})
-
-    assert result["_backend"] == "ipc"
-    assert "_recommendation" not in result
+    assert "_backend" not in result
+    assert "_realtime" not in result
 
 
 def test_create_project_default_auto_launches_kicad_ui(monkeypatch, tmp_path):

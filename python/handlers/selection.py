@@ -35,12 +35,13 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
 
 
 def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    if iface.use_ipc and iface.ipc_board_api:
+    """Gate selection ops on IPC + an open PCB editor frame."""
+    gate = iface.require_ipc_board_op(allow_launch=True)
+    if not gate:
         return {}
-    ok, reason = iface.ensure_ipc(allow_launch=True)
-    if ok:
-        return {}
-    return _ipc_unavailable(reason)
+    if gate.get("needs_pcb_editor"):
+        return gate
+    return _ipc_unavailable(gate.get("_ipc_reason", ""))
 
 
 def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
@@ -122,9 +123,7 @@ def handle_add_to_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     return iface.ipc_board_api.add_to_selection(ids)
 
 
-def handle_remove_from_selection(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_remove_from_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Remove items from the selection by KIID and/or footprint reference."""
     gate = _require_ipc(iface)
     if gate:
@@ -169,14 +168,10 @@ def handle_hit_test(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str
         ids = _resolve_ids(iface, {"references": [params["reference"]]})
         item_id = ids[0] if ids else None
 
-    return iface.ipc_board_api.hit_test(
-        x=x, y=y, item_id=item_id, tolerance=tolerance, unit=unit
-    )
+    return iface.ipc_board_api.hit_test(x=x, y=y, item_id=item_id, tolerance=tolerance, unit=unit)
 
 
-def handle_interactive_move(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_interactive_move(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Start KiCad's interactive move on the supplied items.
 
     Blocks the editor's cursor on the items until the user clicks or

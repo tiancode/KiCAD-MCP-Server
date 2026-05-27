@@ -509,9 +509,7 @@ def handle_list_schematic_components(
             # _base_coords AttributeError from MCP_FEEDBACK A3).  Fall back
             # to a sexpdata walk so the caller at least sees the
             # component list; pin enrichment is skipped on this path.
-            return _list_schematic_components_raw_fallback(
-                sch_file, params.get("filter", {})
-            )
+            return _list_schematic_components_raw_fallback(sch_file, params.get("filter", {}))
 
         # Optional filters
         filter_params = params.get("filter", {})
@@ -534,9 +532,7 @@ def handle_list_schematic_components(
                 schematic_path,
                 e,
             )
-            return _list_schematic_components_raw_fallback(
-                sch_file, params.get("filter", {})
-            )
+            return _list_schematic_components_raw_fallback(sch_file, params.get("filter", {}))
 
         for symbol in symbol_iter:
             try:
@@ -557,9 +553,7 @@ def handle_list_schematic_components(
 
                 value = symbol.property.Value.value if hasattr(symbol.property, "Value") else ""
                 footprint = (
-                    symbol.property.Footprint.value
-                    if hasattr(symbol.property, "Footprint")
-                    else ""
+                    symbol.property.Footprint.value if hasattr(symbol.property, "Footprint") else ""
                 )
                 position = symbol.at.value if hasattr(symbol, "at") else [0, 0, 0]
                 uuid_val = symbol.uuid.value if hasattr(symbol, "uuid") else ""
@@ -598,9 +592,7 @@ def handle_list_schematic_components(
                 # whole list.  Count failures so the caller knows the
                 # result is partial.
                 skip_failures += 1
-                logger.warning(
-                    "Skipping unparseable symbol in %s: %s", schematic_path, e
-                )
+                logger.warning("Skipping unparseable symbol in %s: %s", schematic_path, e)
                 continue
 
         result: Dict[str, Any] = {
@@ -659,9 +651,7 @@ def _list_schematic_components_raw_fallback(
     if lib_id_filter:
         components = [c for c in components if lib_id_filter in c.get("libId", "")]
     if ref_prefix_filter:
-        components = [
-            c for c in components if c.get("reference", "").startswith(ref_prefix_filter)
-        ]
+        components = [c for c in components if c.get("reference", "").startswith(ref_prefix_filter)]
 
     return {
         "success": True,

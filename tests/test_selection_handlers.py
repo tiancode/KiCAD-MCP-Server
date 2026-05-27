@@ -10,7 +10,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
+
+
+@pytest.fixture(autouse=True)
+def _pcb_editor_open(monkeypatch):
+    """Pretend the PCB editor frame is open so the IPC board-op gate passes."""
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
 
 
 def _make_iface(ipc_board_api=None, use_ipc=True):

@@ -370,9 +370,7 @@ class IPCBoardAPI(BoardAPI):
     #: ``None`` rather than copy-substituting their own default.
     _DEFAULT_COMMIT_LABEL = "MCP Operation"
 
-    def begin_transaction(
-        self, description: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def begin_transaction(self, description: Optional[str] = None) -> Dict[str, Any]:
         """Open a transaction. Subsequent mutating calls fold into one undo step.
 
         Refuses to nest — a second begin without an intervening commit /
@@ -408,9 +406,7 @@ class IPCBoardAPI(BoardAPI):
             logger.error(f"Failed to begin transaction: {e}")
             return {"success": False, "message": str(e)}
 
-    def commit_transaction(
-        self, description: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def commit_transaction(self, description: Optional[str] = None) -> Dict[str, Any]:
         """Push the open transaction as one undo step. ``description`` of
         ``None`` keeps the label set at ``begin_transaction``; an explicit
         empty string overrides to blank."""
@@ -494,9 +490,7 @@ class IPCBoardAPI(BoardAPI):
                 return str(first.id)
         return str(item.id) if hasattr(item, "id") else ""
 
-    def _apply_update(
-        self, board: Any, items: List[Any], description: str
-    ) -> None:
+    def _apply_update(self, board: Any, items: List[Any], description: str) -> None:
         """Update items, respecting any open transaction."""
         if self._current_commit is not None:
             board.update_items(items)
@@ -505,9 +499,7 @@ class IPCBoardAPI(BoardAPI):
             board.update_items(items)
             board.push_commit(commit, description)
 
-    def _apply_remove(
-        self, board: Any, items: List[Any], description: str
-    ) -> None:
+    def _apply_remove(self, board: Any, items: List[Any], description: str) -> None:
         """Remove items, respecting any open transaction."""
         if self._current_commit is not None:
             board.remove_items(items)
@@ -1594,9 +1586,7 @@ class IPCBoardAPI(BoardAPI):
                     "requested": list(ids),
                     "resolved": 0,
                 }
-            updated = (
-                board.add_to_selection(items) if add else board.remove_from_selection(items)
-            )
+            updated = board.add_to_selection(items) if add else board.remove_from_selection(items)
             event = "selection_added" if add else "selection_removed"
             self._notify(event, {"ids": list(ids), "count": len(items)})
             return {
@@ -1817,9 +1807,7 @@ class IPCBoardAPI(BoardAPI):
             circle.center = Vector2.from_xy(from_mm(center_x), from_mm(center_y))
             # radius is given as a "point on the circle" in kipy — pick a
             # canonical one to the right of centre.
-            circle.radius_point = Vector2.from_xy(
-                from_mm(center_x + radius), from_mm(center_y)
-            )
+            circle.radius_point = Vector2.from_xy(from_mm(center_x + radius), from_mm(center_y))
             circle.layer = self._layer_to_enum(layer)
             circle.attributes.stroke.width = from_mm(width)
             circle.attributes.fill.filled = bool(filled)
@@ -1858,9 +1846,7 @@ class IPCBoardAPI(BoardAPI):
             board = self._get_board()
             rect = BoardRectangle()
             rect.top_left = Vector2.from_xy(from_mm(top_left_x), from_mm(top_left_y))
-            rect.bottom_right = Vector2.from_xy(
-                from_mm(bottom_right_x), from_mm(bottom_right_y)
-            )
+            rect.bottom_right = Vector2.from_xy(from_mm(bottom_right_x), from_mm(bottom_right_y))
             rect.layer = self._layer_to_enum(layer)
             rect.attributes.stroke.width = from_mm(width)
             rect.attributes.fill.filled = bool(filled)
@@ -2078,9 +2064,7 @@ class IPCBoardAPI(BoardAPI):
                     if 1 <= slot <= 9:
                         setattr(merged._proto, f"comment{slot}", str(v))
                     else:
-                        logger.warning(
-                            f"Comment slot {slot} out of range 1..9; ignored"
-                        )
+                        logger.warning(f"Comment slot {slot} out of range 1..9; ignored")
             board.set_title_block_info(merged)
             self._notify(
                 "title_block_set",
@@ -2109,9 +2093,7 @@ class IPCBoardAPI(BoardAPI):
         let a ``unit="mil"`` request walk through the mm code path and label
         the result as ``mil`` while the math used mm — wrong by 25.4×."""
         if unit not in ("mm", "inch"):
-            raise ValueError(
-                f"Unknown unit {unit!r}; expected 'mm' or 'inch'"
-            )
+            raise ValueError(f"Unknown unit {unit!r}; expected 'mm' or 'inch'")
 
     @staticmethod
     def _origin_name_to_enum(name: str) -> int:
@@ -2128,9 +2110,7 @@ class IPCBoardAPI(BoardAPI):
             return BoardOriginType.BOT_DRILL
         if canonical == "grid":
             return BoardOriginType.BOT_GRID
-        raise ValueError(
-            f"Unknown origin type {name!r}; expected 'grid', 'drill', or 'aux'"
-        )
+        raise ValueError(f"Unknown origin type {name!r}; expected 'grid', 'drill', or 'aux'")
 
     # ------------------------------------------------------------------
     # Internal helpers

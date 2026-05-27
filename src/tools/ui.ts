@@ -141,6 +141,32 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   );
 
   // -----------------------------------------------------------------
+  // reconcile_backends — explicit cross-backend sync.
+  //
+  // The SWIG and IPC paths each hold their own copy of the board (SWIG
+  // in-memory + on-disk file vs. KiCad's UI memory).  Writes from one
+  // side silently invalidate the other; the dispatcher refuses cross-
+  // backend mutations with `needs_reconcile: true` until this tool runs.
+  // -----------------------------------------------------------------
+  server.tool(
+    "reconcile_backends",
+    "Flush pending changes between the SWIG and IPC backends. " +
+      "Use direction='ipc_to_swig' after IPC mutations (the tool calls " +
+      "ipc_save_board and reloads the SWIG board from disk). " +
+      "direction='swig_to_ipc' returns the manual steps to take in KiCad " +
+      "because kipy has no reload-from-disk API.",
+    {
+      direction: z
+        .enum(["ipc_to_swig", "swig_to_ipc"])
+        .describe(
+          "Which side has pending changes that need to land on the other. " +
+            "ipc_to_swig is fully automatic; swig_to_ipc returns manual steps.",
+        ),
+    },
+    passthrough("reconcile_backends"),
+  );
+
+  // -----------------------------------------------------------------
   // run_action — escape hatch into KiCad's internal TOOL_ACTION system.
   // Action names are unstable across KiCad versions; the response carries
   // a RAS_INVALID / RAS_FRAME_NOT_OPEN status so AI callers can retry.

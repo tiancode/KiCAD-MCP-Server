@@ -25,6 +25,14 @@ _kipy_units.to_mm = lambda v: v / 1_000_000
 _kipy_units.from_mm = lambda v: int(v * 1_000_000)
 
 
+@pytest.fixture(autouse=True)
+def _pcb_editor_open(monkeypatch):
+    """Pretend the PCB editor frame is open so the IPC board-op gate passes."""
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
+
+
 def _make_iface(ipc_board_api=None, use_ipc=True):
     """Bare KiCADInterface with the few attributes our handlers read."""
     from kicad_interface import KiCADInterface

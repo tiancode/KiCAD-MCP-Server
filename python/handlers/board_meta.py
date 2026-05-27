@@ -35,12 +35,21 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
 
 
 def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    if iface.use_ipc and iface.ipc_board_api:
+    """Gate board-metadata ops on IPC + an open PCB editor frame.
+
+    Routes through ``KiCADInterface.require_ipc_board_op``:
+    - ``{}`` → ready, fall through.
+    - ``needs_pcb_editor: True`` → pass the editor-gate response through.
+    - else → wrap the raw ``_ipc_reason`` in our domain envelope so the
+      message reads cleanly instead of nesting two "IPC backend not
+      available" prefixes.
+    """
+    gate = iface.require_ipc_board_op(allow_launch=True)
+    if not gate:
         return {}
-    ok, reason = iface.ensure_ipc(allow_launch=True)
-    if ok:
-        return {}
-    return _ipc_unavailable(reason)
+    if gate.get("needs_pcb_editor"):
+        return gate
+    return _ipc_unavailable(gate.get("_ipc_reason", ""))
 
 
 def _xy_from_params(params: Dict[str, Any]) -> tuple:
@@ -126,9 +135,7 @@ def handle_set_origin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
     return iface.ipc_board_api.set_origin(origin_type=origin_type, x=x, y=y, unit=unit)
 
 
-def handle_get_title_block_info(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_get_title_block_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Return the board title block (title / company / revision / date /
     comments dict keyed '1'..'9')."""
     gate = _require_ipc(iface)
@@ -169,9 +176,7 @@ def _normalize_comments(
     return {}
 
 
-def handle_set_title_block_info(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_set_title_block_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Partial-update the board title block.
 
     Any of ``title / date / revision / company / comments`` may be omitted;

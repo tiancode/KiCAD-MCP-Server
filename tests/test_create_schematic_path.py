@@ -26,12 +26,16 @@ _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 SchematicManager = _mod.SchematicManager
 
-_OPEN_MOCK = MagicMock(return_value=MagicMock(
-    __enter__=MagicMock(return_value=MagicMock(
-        read=MagicMock(return_value="(uuid 00000000-0000-0000-0000-000000000000)")
-    )),
-    __exit__=MagicMock(return_value=False),
-))
+_OPEN_MOCK = MagicMock(
+    return_value=MagicMock(
+        __enter__=MagicMock(
+            return_value=MagicMock(
+                read=MagicMock(return_value="(uuid 00000000-0000-0000-0000-000000000000)")
+            )
+        ),
+        __exit__=MagicMock(return_value=False),
+    )
+)
 
 
 def test_create_schematic_uses_path_argument():
@@ -40,18 +44,20 @@ def test_create_schematic_uses_path_argument():
     when that argument is provided, not in the process working directory.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
-        with patch.object(_mod, "Schematic") as mock_sch_cls, \
-             patch("shutil.copy"), \
-             patch("os.path.exists", return_value=True), \
-             patch("builtins.open", _OPEN_MOCK):
+        with (
+            patch.object(_mod, "Schematic") as mock_sch_cls,
+            patch("shutil.copy"),
+            patch("os.path.exists", return_value=True),
+            patch("builtins.open", _OPEN_MOCK),
+        ):
             mock_sch_cls.return_value = MagicMock()
 
             SchematicManager.create_schematic("myschematic", path=tmpdir)
 
             used_path = mock_sch_cls.call_args[0][0]
-            assert used_path.startswith(tmpdir), (
-                f"Expected path inside {tmpdir!r}, got {used_path!r}"
-            )
+            assert used_path.startswith(
+                tmpdir
+            ), f"Expected path inside {tmpdir!r}, got {used_path!r}"
             assert used_path.endswith("myschematic.kicad_sch")
 
 
@@ -59,10 +65,12 @@ def test_create_schematic_without_path_uses_relative():
     """
     When no path is given, behaviour is unchanged — file goes to cwd-relative name.
     """
-    with patch.object(_mod, "Schematic") as mock_sch_cls, \
-         patch("shutil.copy"), \
-         patch("os.path.exists", return_value=True), \
-         patch("builtins.open", _OPEN_MOCK):
+    with (
+        patch.object(_mod, "Schematic") as mock_sch_cls,
+        patch("shutil.copy"),
+        patch("os.path.exists", return_value=True),
+        patch("builtins.open", _OPEN_MOCK),
+    ):
         mock_sch_cls.return_value = MagicMock()
 
         SchematicManager.create_schematic("myschematic")
@@ -76,10 +84,12 @@ def test_create_schematic_accepts_full_sch_filename():
     If name already ends with .kicad_sch, it should not double the suffix.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
-        with patch.object(_mod, "Schematic") as mock_sch_cls, \
-             patch("shutil.copy"), \
-             patch("os.path.exists", return_value=True), \
-             patch("builtins.open", _OPEN_MOCK):
+        with (
+            patch.object(_mod, "Schematic") as mock_sch_cls,
+            patch("shutil.copy"),
+            patch("os.path.exists", return_value=True),
+            patch("builtins.open", _OPEN_MOCK),
+        ):
             mock_sch_cls.return_value = MagicMock()
 
             SchematicManager.create_schematic("myschematic.kicad_sch", path=tmpdir)

@@ -209,6 +209,7 @@ export const directToolNames = [
   // UI management
   "get_backend_state",
   "check_kicad_ui",
+  "reconcile_backends",
 
   // Overview / workflow discovery (one-shot summaries reduce token churn)
   "get_schematic_overview",
