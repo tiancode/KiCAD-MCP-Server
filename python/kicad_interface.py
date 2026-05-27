@@ -379,7 +379,7 @@ class KiCADInterface:
     }
 
     def __getattr__(self, name: str):
-        """Generate _handle_<command> shims on demand.
+        """Generate _handle_<command> and _ipc_<command> shims on demand.
 
         Every MCP tool used to have its own ~4-line trampoline method on
         KiCADInterface that imported the matching handlers/<module>.py and
@@ -387,9 +387,17 @@ class KiCADInterface:
         ~320 lines of boilerplate that drifted easily.  Replaced with a
         single dispatcher driven by _HANDLER_MAP.
 
+        The same trampoline now also covers the IPC fast-path handlers
+        that used to live inline as _ipc_<cmd> methods on this class.
+        They now sit in handlers/ipc_fastpath.py as handle_<cmd>; the
+        IPC_CAPABLE_COMMANDS dispatch in handle_command still references
+        them by their old "_ipc_<cmd>" name so this shim keeps the dispatch
+        site unchanged.
+
         The dispatcher preserves the call surface tests rely on:
             iface._handle_check_kicad_ui({})
-        still works exactly as before.
+            iface._ipc_place_component({...})
+        still work exactly as before.
         """
         if name.startswith("_handle_"):
             cmd = name[len("_handle_") :]
@@ -402,6 +410,14 @@ class KiCADInterface:
                 # Return a callable bound to this iface instance so the
                 # dispatch table can store the result of attribute access
                 # the same way it stores bound methods.
+                return lambda params, _h=handler: _h(self, params)
+        if name.startswith("_ipc_"):
+            cmd = name[len("_ipc_") :]
+            from importlib import import_module
+
+            module = import_module("handlers.ipc_fastpath")
+            handler = getattr(module, f"handle_{cmd}", None)
+            if handler is not None:
                 return lambda params, _h=handler: _h(self, params)
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
@@ -459,13 +475,17 @@ class KiCADInterface:
         # Schematic-related classes don't need board reference
         # as they operate directly on schematic files
 
-        # Command routing dictionary
+        # Command routing dictionary.
+        #
+        # Only commands that dispatch directly to a *_commands handler class
+        # (no per-tool shim) are listed here.  Commands whose handler lives in
+        # python/handlers/<module>.py are NOT listed — they're auto-injected
+        # below from _HANDLER_MAP, which keeps the two sources of truth from
+        # drifting apart.  Adding such a tool now means touching _HANDLER_MAP
+        # plus the matching handlers/<module>.py, not three places.
         self.command_routes = {
             # Project commands
-            "create_project": self._handle_create_project,
-            "open_project": self._handle_open_project,
             "save_project": self.project_commands.save_project,
-            "snapshot_project": self._handle_snapshot_project,
             "get_project_info": self.project_commands.get_project_info,
             # Board commands
             "set_board_size": self.board_commands.set_board_size,
@@ -481,7 +501,6 @@ class KiCADInterface:
             "add_board_text": self.board_commands.add_text,  # Alias for TypeScript tool
             # Component commands
             "route_pad_to_pad": self.routing_commands.route_pad_to_pad,
-            "place_component": self._handle_place_component,
             "move_component": self.component_commands.move_component,
             "rotate_component": self.component_commands.rotate_component,
             "delete_component": self.component_commands.delete_component,
@@ -510,7 +529,6 @@ class KiCADInterface:
             "create_netclass": self.routing_commands.create_netclass,
             "add_copper_pour": self.routing_commands.add_copper_pour,
             "route_differential_pair": self.routing_commands.route_differential_pair,
-            "refill_zones": self._handle_refill_zones,
             # Design rule commands
             "set_design_rules": self.design_rule_commands.set_design_rules,
             "get_design_rules": self.design_rule_commands.get_design_rules,
@@ -532,95 +550,25 @@ class KiCADInterface:
             "search_symbols": self.symbol_library_commands.search_symbols,
             "list_library_symbols": self.symbol_library_commands.list_library_symbols,
             "get_symbol_info": self.symbol_library_commands.get_symbol_info,
-            # JLCPCB API commands (complete parts catalog via API)
-            "download_jlcpcb_database": self._handle_download_jlcpcb_database,
-            "search_jlcpcb_parts": self._handle_search_jlcpcb_parts,
-            "get_jlcpcb_part": self._handle_get_jlcpcb_part,
-            "get_jlcpcb_database_stats": self._handle_get_jlcpcb_database_stats,
-            "suggest_jlcpcb_alternatives": self._handle_suggest_jlcpcb_alternatives,
-            # Datasheet commands
-            "enrich_datasheets": self._handle_enrich_datasheets,
-            "get_datasheet_url": self._handle_get_datasheet_url,
-            # Schematic commands
-            "create_schematic": self._handle_create_schematic,
-            "load_schematic": self._handle_load_schematic,
-            "add_schematic_component": self._handle_add_schematic_component,
-            "delete_schematic_component": self._handle_delete_schematic_component,
-            "edit_schematic_component": self._handle_edit_schematic_component,
-            "set_schematic_component_property": self._handle_set_schematic_component_property,
-            "remove_schematic_component_property": self._handle_remove_schematic_component_property,
-            "get_schematic_component": self._handle_get_schematic_component,
-            "add_schematic_wire": self._handle_add_schematic_wire,
-            "add_schematic_net_label": self._handle_add_schematic_net_label,
-            "add_no_connect": self._handle_add_no_connect,
-            "connect_to_net": self._handle_connect_to_net,
-            "connect_passthrough": self._handle_connect_passthrough,
-            "get_schematic_pin_locations": self._handle_get_schematic_pin_locations,
-            "get_net_connections": self._handle_get_net_connections,
-            "get_wire_connections": self._handle_get_wire_connections,
-            "get_net_at_point": self._handle_get_net_at_point,
-            "run_erc": self._handle_run_erc,
-            "export_netlist": self._handle_export_netlist,
-            "generate_netlist": self._handle_generate_netlist,
-            "sync_schematic_to_board": self._handle_sync_schematic_to_board,
-            "list_schematic_libraries": self._handle_list_schematic_libraries,
-            "get_schematic_view": self._handle_get_schematic_view,
-            "list_schematic_components": self._handle_list_schematic_components,
-            "list_schematic_nets": self._handle_list_schematic_nets,
-            "list_schematic_wires": self._handle_list_schematic_wires,
-            "list_schematic_labels": self._handle_list_schematic_labels,
-            "move_schematic_component": self._handle_move_schematic_component,
-            "rotate_schematic_component": self._handle_rotate_schematic_component,
-            "annotate_schematic": self._handle_annotate_schematic,
-            "delete_schematic_wire": self._handle_delete_schematic_wire,
-            "delete_schematic_net_label": self._handle_delete_schematic_net_label,
-            "move_schematic_net_label": self._handle_move_schematic_net_label,
-            "export_schematic_pdf": self._handle_export_schematic_pdf,
-            "export_schematic_svg": self._handle_export_schematic_svg,
-            # Schematic analysis tools (read-only)
-            "get_schematic_view_region": self._handle_get_schematic_view_region,
-            "find_overlapping_elements": self._handle_find_overlapping_elements,
-            "get_elements_in_region": self._handle_get_elements_in_region,
-            "find_wires_crossing_symbols": self._handle_find_wires_crossing_symbols,
-            "find_orphaned_wires": self._handle_find_orphaned_wires,
-            "list_floating_labels": self._handle_list_floating_labels,
-            "snap_to_grid": self._handle_snap_to_grid,
-            "add_schematic_hierarchical_label": self._handle_add_schematic_hierarchical_label,
-            "add_schematic_text": self._handle_add_schematic_text,
-            "list_schematic_texts": self._handle_list_schematic_texts,
-            "add_sheet_pin": self._handle_add_sheet_pin,
-            "import_svg_logo": self._handle_import_svg_logo,
-            # UI/Process management commands
-            "get_backend_state": self._handle_get_backend_state,
-            "check_kicad_ui": self._handle_check_kicad_ui,
-            "launch_kicad_ui": self._handle_launch_kicad_ui,
-            # Internal warm-up (pays wxApp init cost during startup)
+            # Internal warm-up (pays wxApp init cost during startup).
+            # _handle_warmup is a real method on this class, not synthesised
+            # from _HANDLER_MAP, so it has to be registered explicitly.
             "_warmup": self._handle_warmup,
-            # IPC-specific commands (real-time operations)
-            "get_backend_info": self._handle_get_backend_info,
-            "ipc_add_track": self._handle_ipc_add_track,
-            "ipc_add_via": self._handle_ipc_add_via,
-            "ipc_add_text": self._handle_ipc_add_text,
-            "ipc_list_components": self._handle_ipc_list_components,
-            "ipc_get_tracks": self._handle_ipc_get_tracks,
-            "ipc_get_vias": self._handle_ipc_get_vias,
-            "ipc_save_board": self._handle_ipc_save_board,
-            # Footprint commands
-            "create_footprint": self._handle_create_footprint,
-            "edit_footprint_pad": self._handle_edit_footprint_pad,
-            "list_footprint_libraries": self._handle_list_footprint_libraries,
-            "register_footprint_library": self._handle_register_footprint_library,
-            # Symbol creator commands
-            "create_symbol": self._handle_create_symbol,
-            "delete_symbol": self._handle_delete_symbol,
-            "list_symbols_in_library": self._handle_list_symbols_in_library,
-            "register_symbol_library": self._handle_register_symbol_library,
             # Freerouting autoroute commands
             "autoroute": self.freerouting_commands.autoroute,
             "export_dsn": self.freerouting_commands.export_dsn,
             "import_ses": self.freerouting_commands.import_ses,
             "check_freerouting": self.freerouting_commands.check_freerouting,
         }
+
+        # Auto-inject handler-module dispatchers.  Each _HANDLER_MAP entry
+        # points at a python/handlers/<module>.py whose handle_<cmd>(iface,
+        # params) is reached via the __getattr__ trampoline above, so
+        # ``getattr(self, "_handle_<cmd>")`` resolves to a bound handler.
+        # setdefault means anything explicitly listed in command_routes
+        # above wins, in case a future tool needs a custom override.
+        for _cmd in self._HANDLER_MAP:
+            self.command_routes.setdefault(_cmd, getattr(self, f"_handle_{_cmd}"))
 
         logger.info(f"KiCAD interface initialized (backend: {'IPC' if self.use_ipc else 'SWIG'})")
 
@@ -1882,718 +1830,18 @@ class KiCADInterface:
     # Schematic analysis tools (read-only)
     # ===================================================================
 
-    # UI / backend-state handlers live in handlers/ui.py.  Thin trampolines
-    # below preserve the `iface._handle_*` call surface that older tests
-    # use; the actual implementation is in handlers.ui.
-    # =========================================================================
-    # IPC Backend handlers - these provide real-time UI synchronization
-    # These methods are called automatically when IPC is available
-    # =========================================================================
-
-    def _ipc_route_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for route_trace - adds track with real-time UI update"""
-        try:
-            # Extract parameters matching the existing route_trace interface
-            start = params.get("start", {})
-            end = params.get("end", {})
-            layer = params.get("layer", "F.Cu")
-            width = params.get("width", 0.25)
-            net = params.get("net")
-
-            # Handle both dict format and direct x/y
-            start_x = start.get("x", 0) if isinstance(start, dict) else params.get("startX", 0)
-            start_y = start.get("y", 0) if isinstance(start, dict) else params.get("startY", 0)
-            end_x = end.get("x", 0) if isinstance(end, dict) else params.get("endX", 0)
-            end_y = end.get("y", 0) if isinstance(end, dict) else params.get("endY", 0)
-
-            success = self.ipc_board_api.add_track(
-                start_x=start_x,
-                start_y=start_y,
-                end_x=end_x,
-                end_y=end_y,
-                width=width,
-                layer=layer,
-                net_name=net,
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    "Added trace (visible in KiCAD UI)" if success else "Failed to add trace"
-                ),
-                "trace": {
-                    "start": {"x": start_x, "y": start_y, "unit": "mm"},
-                    "end": {"x": end_x, "y": end_y, "unit": "mm"},
-                    "layer": layer,
-                    "width": width,
-                    "net": net,
-                },
-            }
-        except Exception as e:
-            logger.error(f"IPC route_trace error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_route_arc_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for route_arc_trace - adds copper arc with real-time UI update"""
-        try:
-            start = params.get("start", {})
-            mid = params.get("mid", {})
-            end = params.get("end", {})
-            layer = params.get("layer", "F.Cu")
-            width = params.get("width", 0.25)
-            net = params.get("net")
-
-            start_x = start.get("x", 0)
-            start_y = start.get("y", 0)
-            mid_x = mid.get("x", 0)
-            mid_y = mid.get("y", 0)
-            end_x = end.get("x", 0)
-            end_y = end.get("y", 0)
-
-            if not hasattr(self.ipc_board_api, "add_arc_track"):
-                return {
-                    "success": False,
-                    "message": "IPC backend does not support arc track on this installation",
-                }
-
-            success = self.ipc_board_api.add_arc_track(
-                start_x=start_x,
-                start_y=start_y,
-                mid_x=mid_x,
-                mid_y=mid_y,
-                end_x=end_x,
-                end_y=end_y,
-                width=width,
-                layer=layer,
-                net_name=net,
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    "Added arc trace (visible in KiCAD UI)"
-                    if success
-                    else "Failed to add arc trace"
-                ),
-                "arc": {
-                    "start": {"x": start_x, "y": start_y, "unit": "mm"},
-                    "mid": {"x": mid_x, "y": mid_y, "unit": "mm"},
-                    "end": {"x": end_x, "y": end_y, "unit": "mm"},
-                    "layer": layer,
-                    "width": width,
-                    "net": net,
-                },
-            }
-        except Exception as e:
-            logger.error(f"IPC route_arc_trace error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_add_via(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for add_via - adds via with real-time UI update"""
-        try:
-            position = params.get("position", {})
-            x = position.get("x", 0) if isinstance(position, dict) else params.get("x", 0)
-            y = position.get("y", 0) if isinstance(position, dict) else params.get("y", 0)
-
-            size = params.get("size", 0.8)
-            drill = params.get("drill", 0.4)
-            net = params.get("net")
-            from_layer = params.get("from_layer", "F.Cu")
-            to_layer = params.get("to_layer", "B.Cu")
-
-            success = self.ipc_board_api.add_via(
-                x=x, y=y, diameter=size, drill=drill, net_name=net, via_type="through"
-            )
-
-            return {
-                "success": success,
-                "message": ("Added via (visible in KiCAD UI)" if success else "Failed to add via"),
-                "via": {
-                    "position": {"x": x, "y": y, "unit": "mm"},
-                    "size": size,
-                    "drill": drill,
-                    "from_layer": from_layer,
-                    "to_layer": to_layer,
-                    "net": net,
-                },
-            }
-        except Exception as e:
-            logger.error(f"IPC add_via error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_add_net(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for add_net"""
-        # Note: Net creation via IPC is limited - nets are typically created
-        # when components are placed. Return success for compatibility.
-        name = params.get("name")
-        logger.info(f"IPC add_net: {name} (nets auto-created with components)")
-        return {
-            "success": True,
-            "message": f"Net '{name}' will be created when components are connected",
-            "net": {"name": name},
-        }
-
-    def _ipc_add_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for add_copper_pour - adds zone with real-time UI update"""
-        try:
-            layer = params.get("layer", "F.Cu")
-            net = params.get("net")
-            clearance = params.get("clearance", 0.5)
-            min_width = params.get("minWidth", 0.25)
-            points = params.get("points", [])
-            priority = params.get("priority", 0)
-            fill_type = params.get("fillType", "solid")
-            name = params.get("name", "")
-
-            if not points or len(points) < 3:
-                return {
-                    "success": False,
-                    "message": "At least 3 points are required for copper pour outline",
-                }
-
-            # Convert points format if needed (handle both {x, y} and {x, y, unit})
-            formatted_points = []
-            for point in points:
-                formatted_points.append({"x": point.get("x", 0), "y": point.get("y", 0)})
-
-            success = self.ipc_board_api.add_zone(
-                points=formatted_points,
-                layer=layer,
-                net_name=net,
-                clearance=clearance,
-                min_thickness=min_width,
-                priority=priority,
-                fill_mode=fill_type,
-                name=name,
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    "Added copper pour (visible in KiCAD UI)"
-                    if success
-                    else "Failed to add copper pour"
-                ),
-                "pour": {
-                    "layer": layer,
-                    "net": net,
-                    "clearance": clearance,
-                    "minWidth": min_width,
-                    "priority": priority,
-                    "fillType": fill_type,
-                    "pointCount": len(points),
-                },
-            }
-        except Exception as e:
-            logger.error(f"IPC add_copper_pour error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_refill_zones(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for refill_zones - refills all zones with real-time UI update"""
-        try:
-            success = self.ipc_board_api.refill_zones()
-
-            return {
-                "success": success,
-                "message": (
-                    "Zones refilled (visible in KiCAD UI)" if success else "Failed to refill zones"
-                ),
-            }
-        except Exception as e:
-            logger.error(f"IPC refill_zones error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_add_text(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for add_text/add_board_text - adds text with real-time UI update"""
-        try:
-            text = params.get("text", "")
-            position = params.get("position", {})
-            x = position.get("x", 0) if isinstance(position, dict) else params.get("x", 0)
-            y = position.get("y", 0) if isinstance(position, dict) else params.get("y", 0)
-            layer = params.get("layer", "F.SilkS")
-            size = params.get("size", 1.0)
-            rotation = params.get("rotation", 0)
-
-            success = self.ipc_board_api.add_text(
-                text=text, x=x, y=y, layer=layer, size=size, rotation=rotation
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    f"Added text '{text}' (visible in KiCAD UI)"
-                    if success
-                    else "Failed to add text"
-                ),
-            }
-        except Exception as e:
-            logger.error(f"IPC add_text error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_set_board_size(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for set_board_size"""
-        try:
-            width = params.get("width", 100)
-            height = params.get("height", 100)
-            unit = params.get("unit", "mm")
-
-            success = self.ipc_board_api.set_size(width, height, unit)
-
-            return {
-                "success": success,
-                "message": (
-                    f"Board size set to {width}x{height} {unit} (visible in KiCAD UI)"
-                    if success
-                    else "Failed to set board size"
-                ),
-                "boardSize": {"width": width, "height": height, "unit": unit},
-            }
-        except Exception as e:
-            logger.error(f"IPC set_board_size error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_get_board_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for get_board_info"""
-        try:
-            size = self.ipc_board_api.get_size()
-            components = self.ipc_board_api.list_components()
-            tracks = self.ipc_board_api.get_tracks()
-            vias = self.ipc_board_api.get_vias()
-            nets = self.ipc_board_api.get_nets()
-
-            return {
-                "success": True,
-                "boardInfo": {
-                    "size": size,
-                    "componentCount": len(components),
-                    "trackCount": len(tracks),
-                    "viaCount": len(vias),
-                    "netCount": len(nets),
-                    "backend": "ipc",
-                    "realtime": True,
-                },
-            }
-        except Exception as e:
-            logger.error(f"IPC get_board_info error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_place_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for place_component - places component with real-time UI update"""
-        try:
-            reference = params.get("reference", params.get("componentId", ""))
-            footprint = params.get("footprint", "")
-            position = params.get("position", {})
-            x = position.get("x", 0) if isinstance(position, dict) else params.get("x", 0)
-            y = position.get("y", 0) if isinstance(position, dict) else params.get("y", 0)
-            unit = position.get("unit", "mm") if isinstance(position, dict) else "mm"
-            rotation = params.get("rotation", 0)
-            layer = params.get("layer", "F.Cu")
-            value = params.get("value", "")
-
-            # Convert to mm since ipc_backend expects mm
-            if unit == "inch":
-                x = x * 25.4
-                y = y * 25.4
-            elif unit == "mil":
-                x = x * 0.0254
-                y = y * 0.0254
-
-            success = self.ipc_board_api.place_component(
-                reference=reference,
-                footprint=footprint,
-                x=x,
-                y=y,
-                rotation=rotation,
-                layer=layer,
-                value=value,
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    f"Placed component {reference} (visible in KiCAD UI)"
-                    if success
-                    else "Failed to place component"
-                ),
-                "component": {
-                    "reference": reference,
-                    "footprint": footprint,
-                    "position": {"x": x, "y": y, "unit": "mm"},
-                    "rotation": rotation,
-                    "layer": layer,
-                },
-            }
-        except Exception as e:
-            logger.error(f"IPC place_component error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_move_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for move_component - moves component with real-time UI update"""
-        try:
-            reference = params.get("reference", params.get("componentId", ""))
-            position = params.get("position", {})
-            x = position.get("x", 0) if isinstance(position, dict) else params.get("x", 0)
-            y = position.get("y", 0) if isinstance(position, dict) else params.get("y", 0)
-            unit = position.get("unit", "mm") if isinstance(position, dict) else "mm"
-            rotation = params.get("rotation")
-
-            # Convert to mm since ipc_backend.move_component expects mm
-            if unit == "inch":
-                x = x * 25.4
-                y = y * 25.4
-            elif unit == "mil":
-                x = x * 0.0254
-                y = y * 0.0254
-
-            success = self.ipc_board_api.move_component(
-                reference=reference, x=x, y=y, rotation=rotation
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    f"Moved component {reference} (visible in KiCAD UI)"
-                    if success
-                    else "Failed to move component"
-                ),
-            }
-        except Exception as e:
-            logger.error(f"IPC move_component error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_delete_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for delete_component - deletes component with real-time UI update"""
-        try:
-            reference = params.get("reference", params.get("componentId", ""))
-
-            success = self.ipc_board_api.delete_component(reference=reference)
-
-            return {
-                "success": success,
-                "message": (
-                    f"Deleted component {reference} (visible in KiCAD UI)"
-                    if success
-                    else "Failed to delete component"
-                ),
-            }
-        except Exception as e:
-            logger.error(f"IPC delete_component error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_get_component_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for get_component_list"""
-        try:
-            components = self.ipc_board_api.list_components()
-
-            # If IPC didn't provide bounding boxes, enrich from SWIG backend
-            if self.board and components and not components[0].get("boundingBox"):
-                try:
-                    swig_result = self.component_commands.get_component_list(params)
-                    if swig_result.get("success"):
-                        swig_map = {c["reference"]: c for c in swig_result.get("components", [])}
-                        for comp in components:
-                            swig_comp = swig_map.get(comp.get("reference"))
-                            if swig_comp and swig_comp.get("boundingBox"):
-                                comp["boundingBox"] = swig_comp["boundingBox"]
-                except Exception:
-                    pass
-
-            return {"success": True, "components": components, "count": len(components)}
-        except Exception as e:
-            logger.error(f"IPC get_component_list error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_save_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for save_project"""
-        try:
-            success = self.ipc_board_api.save()
-
-            return {
-                "success": success,
-                "message": "Project saved" if success else "Failed to save project",
-            }
-        except Exception as e:
-            logger.error(f"IPC save_project error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_delete_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for delete_trace - Note: IPC doesn't support direct trace deletion yet"""
-        # IPC API doesn't have a direct delete track method
-        # Fall back to SWIG for this operation
-        logger.info("delete_trace: Falling back to SWIG (IPC doesn't support trace deletion)")
-        return self.routing_commands.delete_trace(params)
-
-    def _ipc_query_traces(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for query_traces - reads traces from the live KiCAD board."""
-        try:
-            net_name = params.get("net")
-            layer_filter = params.get("layer")
-            bbox = params.get("boundingBox")
-            include_vias = params.get("includeVias", False)
-
-            def point_in_bbox(point: Dict[str, Any]) -> bool:
-                if not bbox:
-                    return True
-                unit_scale = 25.4 if bbox.get("unit", "mm") == "inch" else 1.0
-                x1 = bbox.get("x1", 0) * unit_scale
-                y1 = bbox.get("y1", 0) * unit_scale
-                x2 = bbox.get("x2", 0) * unit_scale
-                y2 = bbox.get("y2", 0) * unit_scale
-                low_x, high_x = sorted((x1, x2))
-                low_y, high_y = sorted((y1, y2))
-                return low_x <= point.get("x", 0) <= high_x and low_y <= point.get("y", 0) <= high_y
-
-            traces = []
-            for track in self.ipc_board_api.get_tracks():
-                if net_name and track.get("net") != net_name:
-                    continue
-
-                layer = self._normalize_ipc_layer_name(track.get("layer", ""))
-                if layer_filter and layer != layer_filter:
-                    continue
-
-                start = track.get("start", {})
-                end = track.get("end", {})
-                if bbox and not (point_in_bbox(start) or point_in_bbox(end)):
-                    continue
-
-                start_with_unit = {**start, "unit": "mm"}
-                end_with_unit = {**end, "unit": "mm"}
-                dx = end.get("x", 0) - start.get("x", 0)
-                dy = end.get("y", 0) - start.get("y", 0)
-                traces.append(
-                    {
-                        "uuid": track.get("id", ""),
-                        "net": track.get("net", ""),
-                        "netCode": track.get("netCode", 0),
-                        "layer": layer,
-                        "width": track.get("width", 0),
-                        "start": start_with_unit,
-                        "end": end_with_unit,
-                        "length": (dx**2 + dy**2) ** 0.5,
-                    }
-                )
-
-            result = {"success": True, "traceCount": len(traces), "traces": traces}
-
-            if include_vias:
-                vias = []
-                for via in self.ipc_board_api.get_vias():
-                    if net_name and via.get("net") != net_name:
-                        continue
-                    position = via.get("position", {})
-                    if bbox and not point_in_bbox(position):
-                        continue
-                    vias.append(
-                        {
-                            "uuid": via.get("id", ""),
-                            "position": {**position, "unit": "mm"},
-                            "net": via.get("net", ""),
-                            "netCode": via.get("netCode", 0),
-                            "diameter": via.get("diameter", 0),
-                            "drill": via.get("drill", 0),
-                        }
-                    )
-                result["viaCount"] = len(vias)
-                result["vias"] = vias
-
-            return result
-        except Exception as e:
-            logger.error(f"IPC query_traces error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_get_nets_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for get_nets_list - gets nets with real-time data"""
-        try:
-            nets = self.ipc_board_api.get_nets()
-
-            return {"success": True, "nets": nets, "count": len(nets)}
-        except Exception as e:
-            logger.error(f"IPC get_nets_list error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_add_board_outline(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for add_board_outline - adds board edge with real-time UI update.
-        Rounded rectangles are delegated to the SWIG path because the IPC BoardSegment
-        type cannot represent arcs; the SWIG path writes directly to the .kicad_pcb file
-        and correctly generates PCB_SHAPE arcs for rounded corners.
-        """
-        shape = params.get("shape", "rectangle")
-        if shape in ("rounded_rectangle", "rectangle"):
-            # IPC path only supports straight segments from a points list,
-            # but Claude sends rectangle/rounded_rectangle as shape+width+height.
-            # Fall back to the SWIG path which correctly handles both shapes.
-            logger.info(f"_ipc_add_board_outline: delegating {shape} to SWIG path")
-            return self.board_commands.add_board_outline(params)
-
-        try:
-            from kipy.board_types import BoardSegment
-            from kipy.geometry import Vector2
-            from kipy.proto.board.board_types_pb2 import BoardLayer
-            from kipy.util.units import from_mm
-
-            board = self.ipc_board_api._get_board()
-
-            # Unwrap nested params (Claude sends {"shape":..., "params":{...}})
-            inner = params.get("params", params)
-            points = inner.get("points", params.get("points", []))
-            width = inner.get("width", params.get("width", 0.1))
-
-            if len(points) < 2:
-                return {
-                    "success": False,
-                    "message": "At least 2 points required for board outline",
-                }
-
-            commit = board.begin_commit()
-            lines_created = 0
-
-            # Create line segments connecting the points
-            for i in range(len(points)):
-                start = points[i]
-                end = points[(i + 1) % len(points)]  # Wrap around to close the outline
-
-                segment = BoardSegment()
-                segment.start = Vector2.from_xy(
-                    from_mm(start.get("x", 0)), from_mm(start.get("y", 0))
-                )
-                segment.end = Vector2.from_xy(from_mm(end.get("x", 0)), from_mm(end.get("y", 0)))
-                segment.layer = BoardLayer.BL_Edge_Cuts
-                segment.attributes.stroke.width = from_mm(width)
-
-                board.create_items(segment)
-                lines_created += 1
-
-            board.push_commit(commit, "Added board outline")
-
-            return {
-                "success": True,
-                "message": f"Added board outline with {lines_created} segments (visible in KiCAD UI)",
-                "segments": lines_created,
-            }
-        except Exception as e:
-            logger.error(f"IPC add_board_outline error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_add_mounting_hole(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for add_mounting_hole - adds mounting hole with real-time UI update"""
-        try:
-            from kipy.board_types import BoardCircle
-            from kipy.geometry import Vector2
-            from kipy.proto.board.board_types_pb2 import BoardLayer
-            from kipy.util.units import from_mm
-
-            board = self.ipc_board_api._get_board()
-
-            x = params.get("x", 0)
-            y = params.get("y", 0)
-            diameter = params.get("diameter", 3.2)  # M3 hole default
-
-            commit = board.begin_commit()
-
-            # Create circle on Edge.Cuts layer for the hole
-            circle = BoardCircle()
-            circle.center = Vector2.from_xy(from_mm(x), from_mm(y))
-            circle.radius = from_mm(diameter / 2)
-            circle.layer = BoardLayer.BL_Edge_Cuts
-            circle.attributes.stroke.width = from_mm(0.1)
-
-            board.create_items(circle)
-            board.push_commit(commit, f"Added mounting hole at ({x}, {y})")
-
-            return {
-                "success": True,
-                "message": f"Added mounting hole at ({x}, {y}) mm (visible in KiCAD UI)",
-                "hole": {"position": {"x": x, "y": y}, "diameter": diameter},
-            }
-        except Exception as e:
-            logger.error(f"IPC add_mounting_hole error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_get_layer_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for get_layer_list - gets enabled layers"""
-        try:
-            layers = self.ipc_board_api.get_enabled_layers()
-
-            return {"success": True, "layers": layers, "count": len(layers)}
-        except Exception as e:
-            logger.error(f"IPC get_layer_list error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_rotate_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for rotate_component - rotates component with real-time UI update"""
-        try:
-            reference = params.get("reference", params.get("componentId", ""))
-            angle = params.get("angle", params.get("rotation", 90))
-
-            # Get current component to find its position
-            components = self.ipc_board_api.list_components()
-            target = None
-            for comp in components:
-                if comp.get("reference") == reference:
-                    target = comp
-                    break
-
-            if not target:
-                return {"success": False, "message": f"Component {reference} not found"}
-
-            # Use angle as absolute rotation (matches schema description)
-            new_rotation = angle % 360
-
-            # Use move_component with new rotation (position stays the same)
-            success = self.ipc_board_api.move_component(
-                reference=reference,
-                x=target.get("position", {}).get("x", 0),
-                y=target.get("position", {}).get("y", 0),
-                rotation=new_rotation,
-            )
-
-            return {
-                "success": success,
-                "message": (
-                    f"Rotated component {reference} by {angle}° (visible in KiCAD UI)"
-                    if success
-                    else "Failed to rotate component"
-                ),
-                "newRotation": new_rotation,
-            }
-        except Exception as e:
-            logger.error(f"IPC rotate_component error: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _ipc_get_component_properties(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """IPC handler for get_component_properties - gets detailed component info"""
-        try:
-            reference = params.get("reference", params.get("componentId", ""))
-
-            components = self.ipc_board_api.list_components()
-            target = None
-            for comp in components:
-                if comp.get("reference") == reference:
-                    target = comp
-                    break
-
-            if not target:
-                return {"success": False, "message": f"Component {reference} not found"}
-
-            # If IPC didn't provide bounding box, try SWIG backend as fallback
-            if not target.get("boundingBox") and self.board:
-                try:
-                    swig_result = self.component_commands.get_component_properties(params)
-                    if swig_result.get("success"):
-                        swig_comp = swig_result.get("component", {})
-                        target["boundingBox"] = swig_comp.get("boundingBox")
-                        target["courtyard"] = swig_comp.get("courtyard")
-                except Exception:
-                    pass
-
-            return {"success": True, "component": target}
-        except Exception as e:
-            logger.error(f"IPC get_component_properties error: {e}")
-            return {"success": False, "message": str(e)}
-
-    # =========================================================================
-    # Legacy IPC command handlers (explicit ipc_* commands)
+    # IPC fast-path handlers (route_trace, place_component, …) — alternate
+    # implementations that mutate via the live IPC API instead of the SWIG
+    # pcbnew proxy — live in handlers/ipc_fastpath.py.  IPC_CAPABLE_COMMANDS
+    # (above) references them by their historical ``_ipc_<cmd>`` names; the
+    # __getattr__ trampoline resolves those to ``handle_<cmd>`` in that
+    # module so the dispatch site in handle_command stays unchanged, and
+    # tests that poke ``iface._ipc_<cmd>(...)`` directly keep working.
+    #
+    # Explicit ``ipc_*`` MCP commands (ipc_add_track, …) live in
+    # handlers/ipc.py, and UI / backend-state handlers in handlers/ui.py —
+    # both reached through the same _HANDLER_MAP + __getattr__ trampoline
+    # used by every other tool.
 
     def _handle_warmup(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Force full pcbnew/wxApp initialisation.

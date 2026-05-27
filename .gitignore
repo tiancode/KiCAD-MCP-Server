@@ -97,3 +97,4 @@ CLAUDE.md
 
 inspect-tools.mjs
 resources/images/icon_b64.txt
+.venv-test/
