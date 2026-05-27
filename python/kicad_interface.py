@@ -2058,11 +2058,20 @@ class KiCADInterface:
                     except Exception:
                         pass
 
-            # Power symbols (#PWR / #FLG): value property IS the net name; use pin 1 pos
+            # Power-PORT symbols (#PWR): Value property IS the net name
+            # ("+3V3", "GND", ...); use pin 1 pos.  Power-FLAG symbols
+            # (#FLG) are intentionally skipped — their Value is the
+            # literal "PWR_FLAG" which is an ERC marker, NOT a net.
+            # Including #FLG used to leak "PWR_FLAG" into ``all_net_names``
+            # and ``board.GetNetInfo()`` after ``sync_schematic_to_board``,
+            # producing a confusing fake net on every pad list / DRC run.
+            # The flag's wire is still electrically traced because the
+            # wire-graph BFS below propagates the real net name (from a
+            # neighboring #PWR or label) across the flag's anchor point.
             for sym in getattr(sch, "symbol", None) or []:
                 try:
                     ref = sym.property.Reference.value
-                    if not (ref.startswith("#PWR") or ref.startswith("#FLG")):
+                    if not ref.startswith("#PWR"):
                         continue
                     net_name = sym.property.Value.value
                     if not net_name:

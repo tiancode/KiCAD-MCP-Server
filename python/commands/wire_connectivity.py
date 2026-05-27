@@ -21,6 +21,20 @@ logger = logging.getLogger("kicad_interface")
 
 _IU_PER_MM = 10000  # KiCad schematic internal units per millimeter
 
+# Sentinel registered into ``point_to_label`` for #FLG (PWR_FLAG) symbol
+# pins.  We want orphan-wire detection to treat the position as an anchor
+# (so a wire terminating only on a PWR_FLAG isn't reported as dangling),
+# but PWR_FLAG is NOT a net name — kicad uses it only as an ERC marker.
+# A non-net-name sentinel keeps net-resolution from accidentally
+# surfacing "PWR_FLAG" as the wire's net.  Use ``is_pwrflag_label`` to
+# test for it; never compare against the literal string elsewhere.
+PWRFLAG_LABEL_SENTINEL = "__pwrflag_anchor__"
+
+
+def is_pwrflag_label(label: Optional[str]) -> bool:
+    """True iff ``label`` is the PWR_FLAG anchor sentinel."""
+    return label == PWRFLAG_LABEL_SENTINEL
+
 
 def _to_iu(x_mm: float, y_mm: float) -> Tuple[int, int]:
     """Convert mm coordinates to KiCad internal units (integer)."""
@@ -258,20 +272,23 @@ def _parse_virtual_connections(
                     point_to_label[pt] = name
                     label_to_points.setdefault(name, []).append(pt)
                 else:
-                    # Power-flag symbol (#FLG*): Value is always "PWR_FLAG" — an
-                    # ERC marker, not a net name. The pin position is registered
-                    # in point_to_label so find_orphaned_wires accepts wire ends
-                    # terminating on a PWR_FLAG as valid anchors. It is NOT added
-                    # to label_to_points: doing so would let BFS-via-label-jump
-                    # virtually bridge every distinct power rail that has a
-                    # pwr-flag into one mega-net (since every #FLG shares
-                    # Value="PWR_FLAG"). The pwr-flag remains electrically
-                    # connected to its rail via the wire-graph BFS through the
-                    # wire it sits on; the label-bridge mechanism is unneeded
-                    # and actively harmful here.
+                    # Power-flag symbol (#FLG*): the schematic Value is always
+                    # the literal "PWR_FLAG", which is an ERC marker — NOT a
+                    # net name.  Register the pin position with a sentinel so
+                    # ``find_orphaned_wires`` still treats it as an anchor (a
+                    # wire terminating only on a PWR_FLAG isn't dangling),
+                    # but net-name resolvers can filter the sentinel out via
+                    # ``is_pwrflag_label`` and avoid surfacing "PWR_FLAG" as
+                    # the wire's net.
+                    # It is NOT added to label_to_points: doing so would let
+                    # BFS-via-label-jump virtually bridge every distinct power
+                    # rail that has a pwr-flag into one mega-net (every #FLG
+                    # shares Value="PWR_FLAG"). The pwr-flag remains
+                    # electrically connected to its rail via the wire-graph
+                    # BFS through the wire it sits on.
                     # setdefault avoids clobbering an upstream power-port label
                     # in the unlikely case that one sits at the same point.
-                    point_to_label.setdefault(pt, name)
+                    point_to_label.setdefault(pt, PWRFLAG_LABEL_SENTINEL)
             except Exception as e:
                 logger.warning(f"Error parsing power symbol: {e}")
 
@@ -515,11 +532,14 @@ def get_wire_connections(
     if visited is None:
         return None
 
-    # Resolve net name: first label anchor that falls on this net's IU points
+    # Resolve net name: first label anchor that falls on this net's IU points.
+    # Skip the PWR_FLAG sentinel — those positions are anchors for orphan-wire
+    # detection but carry no real net name.  The actual net comes from a
+    # #PWR symbol or a label elsewhere on the same wire.
     net: Optional[str] = None
     for pt in net_points:
         label = point_to_label.get(pt)
-        if label is not None:
+        if label is not None and not is_pwrflag_label(label):
             net = label
             break
 
@@ -720,9 +740,11 @@ def get_net_at_point(
     # Build label map from schematic
     point_to_label, _ = _parse_virtual_connections(schematic, schematic_path)
 
-    # Check if query point is exactly on a net label / power symbol position
+    # Check if query point is exactly on a net label / power symbol position.
+    # PWR_FLAG anchors are skipped — they're not net names, so the resolver
+    # falls through to the wire-trace branch below.
     label_name = point_to_label.get(query_iu)
-    if label_name is not None:
+    if label_name is not None and not is_pwrflag_label(label_name):
         return {"net_name": label_name, "position": position, "source": "net_label"}
 
     # Check if query point is on a wire endpoint
@@ -744,8 +766,9 @@ def get_net_at_point(
                 net: Optional[str] = None
                 if net_points:
                     for pt in net_points:
-                        net = point_to_label.get(pt)
-                        if net is not None:
+                        candidate = point_to_label.get(pt)
+                        if candidate is not None and not is_pwrflag_label(candidate):
+                            net = candidate
                             break
                 return {"net_name": net, "position": position, "source": "wire_endpoint"}
 
