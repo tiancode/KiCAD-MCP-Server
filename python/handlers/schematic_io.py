@@ -26,6 +26,112 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Net names whose presence as a label on the offending net strongly suggests
+# kicad-cli's "Input Power pin not driven" is a false positive — the netlist
+# is correct, kicad-cli just won't accept a label as a driver without an
+# explicit PWR_FLAG symbol.
+_COMMON_POWER_NET_PATTERNS = (
+    "VCC",
+    "VDD",
+    "VEE",
+    "VSS",
+    "VBUS",
+    "GND",
+    "AGND",
+    "DGND",
+    "PGND",
+    "+3V3",
+    "+5V",
+    "+12V",
+    "-12V",
+    "+24V",
+    "-24V",
+)
+
+
+def _collect_power_label_names(schematic_path: str) -> set:
+    """Return the set of net-label names that look like power nets.
+
+    Best-effort: parses the .kicad_sch S-expression tree for label /
+    global_label / hierarchical_label entries plus power: lib_ids and
+    returns the names. Used to tag pin_not_driven ERC false positives.
+    """
+    names: set = set()
+    try:
+        with open(schematic_path, "r", encoding="utf-8") as f:
+            tree = sexpdata.loads(f.read())
+    except Exception as e:
+        logger.debug(f"Could not parse {schematic_path} for power labels: {e}")
+        return names
+
+    def _sym(x: Any) -> str:
+        try:
+            return x.value() if hasattr(x, "value") else str(x)
+        except Exception:
+            return ""
+
+    def _walk(node: Any) -> None:
+        if not isinstance(node, list) or not node:
+            return
+        head = _sym(node[0])
+        if head in ("label", "global_label", "hierarchical_label"):
+            if len(node) >= 2 and isinstance(node[1], str):
+                names.add(node[1])
+        # power:VCC style symbols expose their net name as the value field
+        elif head == "symbol":
+            value_text = None
+            lib_id_text = None
+            for child in node[1:]:
+                if isinstance(child, list) and child:
+                    chead = _sym(child[0])
+                    if chead == "lib_id" and len(child) >= 2 and isinstance(child[1], str):
+                        lib_id_text = child[1]
+                    elif chead == "property" and len(child) >= 3 and isinstance(child[1], str):
+                        if child[1] == "Value" and isinstance(child[2], str):
+                            value_text = child[2]
+            if (
+                lib_id_text
+                and lib_id_text.lower().startswith("power:")
+                and value_text
+            ):
+                names.add(value_text)
+        for child in node[1:]:
+            _walk(child)
+
+    _walk(tree)
+    return names
+
+
+def _is_power_not_driven(vtype: str, vmsg: str) -> bool:
+    """Heuristic match for kicad-cli's 'Input Power pin not driven' family."""
+    if not vtype and not vmsg:
+        return False
+    haystack = f"{vtype} {vmsg}".lower()
+    return (
+        "pin_not_driven" in haystack
+        or "power_pin_not_driven" in haystack
+        or ("power" in haystack and "not driven" in haystack)
+    )
+
+
+def _violation_mentions_power_label(vmsg: str, label_names: set) -> bool:
+    """True when the violation text references any of the schematic's labels.
+
+    Also passes when *any* of the conventional power-rail names appears in
+    the message — kicad-cli sometimes omits the net name and just says
+    'Input Power pin', in which case the presence of *some* power label
+    in the schematic is still a strong false-positive signal.
+    """
+    if not vmsg:
+        return False
+    msg = vmsg
+    for name in label_names:
+        if name and name in msg:
+            return True
+    upper = msg.upper()
+    return any(pat in upper for pat in _COMMON_POWER_NET_PATTERNS)
+
+
 def handle_sync_schematic_to_board(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -123,7 +229,10 @@ def handle_sync_schematic_to_board(
                 else:
                     unmatched.append(f"{ref}/{pad_num}")
 
-        board.Save(board_path)
+        # Route through the iface helper so the in-memory signature tracks
+        # the new on-disk hash; otherwise the dispatcher's follow-up
+        # _auto_save_board() sees a mismatch and refuses the next write.
+        iface._save_board_and_record(board, board_path)
 
         # If board was loaded fresh, update internal reference
         if params.get("boardPath"):
@@ -371,8 +480,17 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             for sheet in erc_data.get("sheets", []):
                 all_violations.extend(sheet.get("violations", []))
 
+            # Collect net-label names from the schematic so we can tag
+            # `pin_not_driven` violations that are almost certainly false
+            # positives — power input pins driven only by a label rather than
+            # a PWR_FLAG, which kicad-cli ERC has historically flagged even
+            # though the netlist is correct.
+            power_label_names = _collect_power_label_names(schematic_path)
+
             for v in all_violations:
                 vseverity = v.get("severity", "error")
+                vtype = v.get("type", "unknown")
+                vmsg = v.get("description", "")
                 items = v.get("items", [])
                 loc = {}
                 if items and "pos" in items[0]:
@@ -380,23 +498,42 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                         "x": items[0]["pos"].get("x", 0),
                         "y": items[0]["pos"].get("y", 0),
                     }
-                violations.append(
-                    {
-                        "type": v.get("type", "unknown"),
-                        "severity": vseverity,
-                        "message": v.get("description", ""),
-                        "location": loc,
-                    }
-                )
+                annotated = {
+                    "type": vtype,
+                    "severity": vseverity,
+                    "message": vmsg,
+                    "location": loc,
+                }
+                if _is_power_not_driven(vtype, vmsg) and _violation_mentions_power_label(
+                    vmsg, power_label_names
+                ):
+                    annotated["likely_false_positive"] = True
+                    annotated["reason"] = (
+                        "A power label on this net is the only driver. "
+                        "kicad-cli ERC expects a PWR_FLAG symbol on power "
+                        "inputs even when labels make the netlist correct."
+                    )
+                violations.append(annotated)
                 if vseverity in severity_counts:
                     severity_counts[vseverity] += 1
 
+            tagged_false_positives = sum(
+                1 for v in violations if v.get("likely_false_positive")
+            )
             return {
                 "success": True,
-                "message": f"ERC complete: {len(violations)} violation(s)",
+                "message": (
+                    f"ERC complete: {len(violations)} violation(s)"
+                    + (
+                        f" ({tagged_false_positives} tagged likely_false_positive)"
+                        if tagged_false_positives
+                        else ""
+                    )
+                ),
                 "summary": {
                     "total": len(violations),
                     "by_severity": severity_counts,
+                    "likely_false_positives": tagged_false_positives,
                 },
                 "violations": violations,
             }

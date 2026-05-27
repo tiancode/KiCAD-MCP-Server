@@ -849,6 +849,22 @@ edit_schematic_component and set its value to an empty string.`,
     },
   );
 
+  // One-shot schematic snapshot — components + wires + labels + nets in a
+  // single response. Cuts 3 MCP round-trips out of basic schematic inspection.
+  server.tool(
+    "get_schematic_overview",
+    "One-shot snapshot of a schematic: components, wires, labels, and nets in a single response. Use this instead of calling list_schematic_components + list_schematic_wires + list_schematic_labels + list_schematic_nets separately.",
+    {
+      schematicPath: z.string().describe("Path to the .kicad_sch file"),
+    },
+    async (args: { schematicPath: string }) => {
+      const result = await callKicadScript("get_schematic_overview", args);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    },
+  );
+
   // List all components in schematic
   server.tool(
     "list_schematic_components",

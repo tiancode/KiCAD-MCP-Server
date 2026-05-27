@@ -183,6 +183,7 @@ def test_interactive_move_resolves_and_forwards():
 
 def test_handlers_fail_cleanly_without_ipc():
     iface = _make_iface(ipc_board_api=None, use_ipc=False)
+    iface.ensure_ipc = lambda **kw: (False, "ipc disabled in test")
     for cmd in (
         "get_selection",
         "clear_selection",

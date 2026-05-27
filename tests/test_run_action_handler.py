@@ -70,6 +70,9 @@ def test_run_action_rejects_non_string_action():
 
 def test_run_action_requires_ipc_backend():
     iface = _make_iface(ipc_backend=None, use_ipc=False)
+    # Stub ensure_ipc so the auto-recovery path doesn't connect to a real
+    # KiCAD instance — we want to verify the gating message here.
+    iface.ensure_ipc = lambda **kw: (False, "ipc disabled in test")
     out = iface._handle_run_action({"action": "pcbnew.EditorControl.zoomFitScreen"})
     assert out["success"] is False
     assert "IPC" in out["message"]

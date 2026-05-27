@@ -26,14 +26,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ipc_unavailable() -> Dict[str, Any]:
-    return {
-        "success": False,
-        "message": (
-            "Transaction commands require the IPC backend. Launch KiCAD "
-            "with Preferences > Plugins > Enable IPC API Server, then retry."
-        ),
-    }
+def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
+    base = (
+        "Transaction commands require the IPC backend. Launch KiCAD "
+        "with Preferences > Plugins > Enable IPC API Server, then retry."
+    )
+    return {"success": False, "message": f"{base} ({reason})" if reason else base}
+
+
+def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+    if iface.use_ipc and iface.ipc_board_api:
+        return {}
+    ok, reason = iface.ensure_ipc(allow_launch=True)
+    if ok:
+        return {}
+    return _ipc_unavailable(reason)
 
 
 def handle_begin_transaction(
@@ -45,8 +52,9 @@ def handle_begin_transaction(
     The backend supplies the default label when the key is omitted /
     null; this keeps the "MCP Operation" default in one place.
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     description = params.get("description")
     if description is not None:
         description = str(description)
@@ -61,8 +69,9 @@ def handle_commit_transaction(
     ``description`` overrides the label set at begin_transaction; omit it
     to keep the original label.
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     description = params.get("description")
     if description is not None:
         description = str(description)
@@ -73,8 +82,9 @@ def handle_rollback_transaction(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Discard the open transaction — every change since begin is reverted."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     return iface.ipc_board_api.rollback_transaction()
 
 
@@ -82,6 +92,7 @@ def handle_get_transaction_status(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Report whether a transaction is currently open."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     return iface.ipc_board_api.get_transaction_status()

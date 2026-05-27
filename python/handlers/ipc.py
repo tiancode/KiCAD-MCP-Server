@@ -21,14 +21,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ipc_unavailable() -> Dict[str, Any]:
-    return {"success": False, "message": "IPC backend not available"}
+def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
+    return {
+        "success": False,
+        "message": f"IPC backend not available{(': ' + reason) if reason else ''}",
+    }
+
+
+def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+    """Ensure IPC is reachable, auto-launching KiCAD if needed.
+
+    Returns ``{}`` when IPC is ready, or a `_ipc_unavailable` payload to
+    short-circuit the handler.
+    """
+    if iface.use_ipc and iface.ipc_board_api:
+        return {}
+    ok, reason = iface.ensure_ipc(allow_launch=True)
+    if ok:
+        return {}
+    return _ipc_unavailable(reason)
 
 
 def handle_ipc_add_track(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add a track using IPC backend (real-time)."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         success = iface.ipc_board_api.add_track(
             start_x=params.get("startX", 0),
@@ -51,8 +69,9 @@ def handle_ipc_add_track(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
 
 def handle_ipc_add_via(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add a via using IPC backend (real-time)."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         success = iface.ipc_board_api.add_via(
             x=params.get("x", 0),
@@ -74,8 +93,9 @@ def handle_ipc_add_via(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
 
 def handle_ipc_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add text using IPC backend (real-time)."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         success = iface.ipc_board_api.add_text(
             text=params.get("text", ""),
@@ -97,8 +117,9 @@ def handle_ipc_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
 
 def handle_ipc_list_components(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """List components using IPC backend."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         components = iface.ipc_board_api.list_components()
         return {"success": True, "components": components, "count": len(components)}
@@ -109,8 +130,9 @@ def handle_ipc_list_components(iface: "KiCADInterface", params: Dict[str, Any]) 
 
 def handle_ipc_get_tracks(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Get tracks using IPC backend."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         tracks = iface.ipc_board_api.get_tracks()
         return {"success": True, "tracks": tracks, "count": len(tracks)}
@@ -121,8 +143,9 @@ def handle_ipc_get_tracks(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
 
 def handle_ipc_get_vias(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Get vias using IPC backend."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         vias = iface.ipc_board_api.get_vias()
         return {"success": True, "vias": vias, "count": len(vias)}
@@ -133,8 +156,9 @@ def handle_ipc_get_vias(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
 
 def handle_ipc_save_board(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Save board using IPC backend."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         success = iface.ipc_board_api.save()
         return {

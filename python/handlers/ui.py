@@ -100,14 +100,15 @@ def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
     Requires the IPC backend; SWIG has no equivalent.
     """
     if not iface.use_ipc or not iface.ipc_backend:
-        return {
-            "success": False,
-            "message": (
-                "run_action requires the IPC backend. Launch KiCAD with the "
-                "IPC API server enabled (Preferences > Plugins > Enable IPC "
-                "API Server) and try again."
-            ),
-        }
+        ok, reason = iface.ensure_ipc(allow_launch=True)
+        if not ok:
+            return {
+                "success": False,
+                "message": (
+                    "run_action requires the IPC backend. "
+                    + reason
+                ),
+            }
     action = params.get("action")
     if not isinstance(action, str) or not action:
         return {"success": False, "message": "'action' parameter is required (string)"}

@@ -175,8 +175,16 @@ class SymbolLibraryManager:
 
     def _load_libraries(self) -> None:
         """Load libraries from sym-lib-table files"""
+        # Track which sym-lib-table files were consulted so callers (the
+        # signature check in SymbolLibraryCommands) can detect external
+        # edits and rebuild the manager.  Includes the project table even
+        # when it's missing, so creating one later triggers a rebuild.
+        self._table_paths: List[Path] = []
+
         # Load global libraries
         global_table = self._get_global_sym_lib_table()
+        if global_table:
+            self._table_paths.append(global_table)
         if global_table and global_table.exists():
             logger.info(f"Loading global sym-lib-table from: {global_table}")
             self._parse_sym_lib_table(global_table)
@@ -186,11 +194,70 @@ class SymbolLibraryManager:
         # Load project-specific libraries if project path provided
         if self.project_path:
             project_table = self.project_path / "sym-lib-table"
+            self._table_paths.append(project_table)
             if project_table.exists():
                 logger.info(f"Loading project sym-lib-table from: {project_table}")
                 self._parse_sym_lib_table(project_table)
 
+        # Track which entries came from the table vs the directory-scan
+        # fallback so list_symbol_libraries can flag the latter to callers.
+        self._table_library_nicknames: set[str] = set(self.libraries.keys())
+        self._fallback_library_nicknames: set[str] = set()
+
+        # Fallback: when the sym-lib-table yields zero usable libraries
+        # (typical on Flatpak/bwrap where the default table redirects to a
+        # sandbox-internal /app/... path the host can't see), scan the
+        # known symbol directories directly and surface every .kicad_sym
+        # file as a virtual library entry.  This is what list_symbol_libraries
+        # ends up returning when A1 from MCP_FEEDBACK.md applies.
+        if not self.libraries:
+            discovered = self._discover_libraries_by_scan()
+            if discovered:
+                logger.warning(
+                    "sym-lib-table yielded 0 libraries; falling back to "
+                    "directory scan and discovered %d .kicad_sym files",
+                    len(discovered),
+                )
+                self.libraries.update(discovered)
+                self._fallback_library_nicknames.update(discovered.keys())
+
         logger.info(f"Loaded {len(self.libraries)} symbol libraries")
+
+    def _discover_libraries_by_scan(self) -> Dict[str, str]:
+        """Scan the known symbol directories for .kicad_sym files.
+
+        Used as the fallback when sym-lib-table is empty/unreadable (e.g.
+        Flatpak default config points the table at a sandbox-only path).
+        Nicknames are taken from the file stem; duplicates are suffixed
+        with their parent directory so we don't lose entries.
+        """
+        discovered: Dict[str, str] = {}
+        roots: List[Path] = []
+        for finder in (self._find_kicad_symbol_dir, self._find_3rd_party_dir):
+            try:
+                p = finder()
+            except OSError:
+                p = None
+            if p:
+                roots.append(Path(p))
+
+        if self.project_path:
+            roots.append(self.project_path)
+
+        for root in roots:
+            if not root.is_dir():
+                continue
+            try:
+                for sym_file in sorted(root.rglob("*.kicad_sym")):
+                    nickname = sym_file.stem
+                    if nickname in discovered or nickname in self.libraries:
+                        # Disambiguate by parent dir name when stems collide.
+                        nickname = f"{sym_file.parent.name}__{sym_file.stem}"
+                    discovered[nickname] = str(sym_file)
+            except OSError as e:
+                logger.debug("Symbol scan in %s failed: %s", root, e)
+
+        return discovered
 
     def _get_global_sym_lib_table(self) -> Optional[Path]:
         """Get path to global sym-lib-table file."""
@@ -483,6 +550,22 @@ class SymbolLibraryManager:
         """Get list of available library nicknames"""
         return list(self.libraries.keys())
 
+    def table_signature(self) -> Dict[str, int]:
+        """Return {path: mtime_ns} for every sym-lib-table consulted at load.
+
+        Missing files map to -1 so creating a previously-absent project
+        table also counts as a change.  Callers compare signatures to
+        decide whether to rebuild the manager — see
+        SymbolLibraryCommands._ensure_manager_for.
+        """
+        sig: Dict[str, int] = {}
+        for path in getattr(self, "_table_paths", []):
+            try:
+                sig[str(path)] = path.stat().st_mtime_ns
+            except OSError:
+                sig[str(path)] = -1
+        return sig
+
     def get_library_path(self, nickname: str) -> Optional[str]:
         """Get filesystem path for a library nickname"""
         return self.libraries.get(nickname)
@@ -725,22 +808,113 @@ class SymbolLibraryCommands:
         logger.info(f"Rebuilding SymbolLibraryManager for project: {project_path}")
         self.library_manager = SymbolLibraryManager(project_path=project_path)
 
+    def _table_changed(self) -> bool:
+        """Return True if any consulted sym-lib-table has been edited/created
+        since the current manager loaded it.  This is the cheap-check that
+        lets users edit their sym-lib-table from KiCad's GUI (or by hand)
+        mid-session without restarting the MCP server."""
+        try:
+            current = self.library_manager.table_signature()
+        except AttributeError:
+            return False
+        previous = getattr(self, "_last_table_signature", None)
+        if previous is None:
+            self._last_table_signature = current
+            return False
+        if current != previous:
+            self._last_table_signature = current
+            return True
+        return False
+
     def _ensure_manager_for(self, params: Dict) -> None:
-        """Rebuild the library manager if the caller's project differs."""
-        self.use_project(self._derive_project_path(params))
+        """Rebuild the library manager if the caller's project differs OR
+        any sym-lib-table mtime has moved since the last load."""
+        project = self._derive_project_path(params)
+        if project is not None:
+            self.use_project(project)
+        if self._table_changed():
+            logger.info(
+                "sym-lib-table mtime changed; rebuilding SymbolLibraryManager"
+            )
+            self.library_manager = SymbolLibraryManager(
+                project_path=self.library_manager.project_path
+            )
+            self._last_table_signature = self.library_manager.table_signature()
+
+    def refresh_symbol_libraries(self, params: Dict) -> Dict:
+        """Force-rebuild the SymbolLibraryManager, re-reading every
+        sym-lib-table from disk.  Use this after editing the table outside
+        the MCP server (e.g. from KiCad's GUI, or by hand to work around
+        Flatpak's default template-redirection table)."""
+        try:
+            project = self._derive_project_path(params) or self.library_manager.project_path
+            self.library_manager = SymbolLibraryManager(project_path=project)
+            self._last_table_signature = self.library_manager.table_signature()
+            libraries = self.library_manager.list_libraries()
+            fallback = sorted(
+                getattr(self.library_manager, "_fallback_library_nicknames", set())
+            )
+            result: Dict = {
+                "success": True,
+                "message": f"Rebuilt symbol library index ({len(libraries)} libraries)",
+                "count": len(libraries),
+                "libraries": libraries,
+            }
+            if fallback:
+                result["source"] = "directory_scan_fallback"
+                result["fallback_libraries"] = fallback
+            return result
+        except (OSError, ValueError) as e:
+            logger.exception(f"Error refreshing symbol libraries: {e}")
+            return {
+                "success": False,
+                "message": "Failed to refresh symbol libraries",
+                "errorDetails": str(e),
+            }
 
     def list_symbol_libraries(self, params: Dict) -> Dict:
         """List all available symbol libraries"""
         try:
             self._ensure_manager_for(params)
             libraries = self.library_manager.list_libraries()
-            return {"success": True, "libraries": libraries, "count": len(libraries)}
-        except (OSError, ValueError) as e:
+            fallback = sorted(
+                getattr(self.library_manager, "_fallback_library_nicknames", set())
+            )
+            result: Dict = {
+                "success": True,
+                "libraries": libraries,
+                "count": len(libraries),
+            }
+            if fallback:
+                # Signal to the caller that the sym-lib-table was unusable
+                # and these names came from a filesystem scan; the URIs
+                # won't be in any project's lib-table so symbol references
+                # can't be inserted by `add_schematic_component` directly.
+                result["source"] = "directory_scan_fallback"
+                result["fallback_libraries"] = fallback
+                result["warning"] = (
+                    "sym-lib-table was empty or unreachable (typical on "
+                    "Flatpak/bwrap installs); these libraries were "
+                    "auto-discovered by scanning the symbol directory. "
+                    "Add them to your sym-lib-table or call "
+                    "refresh_symbol_libraries after fixing the table to "
+                    "make them addressable from add_schematic_component."
+                )
+            return result
+        except Exception as e:
+            # Catch broad so the surfaced error tells the agent *what* failed
+            # — earlier (OSError, ValueError) let KeyError/AttributeError/etc.
+            # propagate and bubble up as the dispatcher's generic
+            # "Error handling command" message, which the TS layer then
+            # rendered as "Unknown error".
+            import traceback as _tb
+
             logger.exception(f"Error listing symbol libraries: {e}")
             return {
                 "success": False,
-                "message": "Failed to list symbol libraries",
-                "errorDetails": str(e),
+                "message": f"Failed to list symbol libraries: {type(e).__name__}: {e}",
+                "errorDetails": _tb.format_exc(),
+                "exceptionType": type(e).__name__,
             }
 
     def search_symbols(self, params: Dict) -> Dict:
@@ -763,9 +937,16 @@ class SymbolLibraryCommands:
                 "count": len(results),
                 "query": query,
             }
-        except (OSError, ValueError) as e:
+        except Exception as e:
+            import traceback as _tb
+
             logger.exception(f"Error searching symbols: {e}")
-            return {"success": False, "message": "Failed to search symbols", "errorDetails": str(e)}
+            return {
+                "success": False,
+                "message": f"Failed to search symbols: {type(e).__name__}: {e}",
+                "errorDetails": _tb.format_exc(),
+                "exceptionType": type(e).__name__,
+            }
 
     def list_library_symbols(self, params: Dict) -> Dict:
         """List all symbols in a specific library"""
@@ -797,12 +978,15 @@ class SymbolLibraryCommands:
                 "symbols": [asdict(s) for s in symbols],
                 "count": len(symbols),
             }
-        except (OSError, ValueError) as e:
+        except Exception as e:
+            import traceback as _tb
+
             logger.exception(f"Error listing library symbols: {e}")
             return {
                 "success": False,
-                "message": "Failed to list library symbols",
-                "errorDetails": str(e),
+                "message": f"Failed to list library symbols: {type(e).__name__}: {e}",
+                "errorDetails": _tb.format_exc(),
+                "exceptionType": type(e).__name__,
             }
 
     def get_symbol_info(self, params: Dict) -> Dict:

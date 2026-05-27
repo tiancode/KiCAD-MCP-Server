@@ -35,7 +35,7 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: F
         content: [
           {
             type: "text",
-            text: `Failed to list symbol libraries: ${result.message || "Unknown error"}`,
+            text: `Failed to list symbol libraries: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
       };
@@ -102,7 +102,7 @@ Returns symbol references that can be used directly in schematics.`,
         content: [
           {
             type: "text",
-            text: `Failed to search symbols: ${result.message || "Unknown error"}`,
+            text: `Failed to search symbols: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
       };
@@ -146,7 +146,7 @@ Returns symbol references that can be used directly in schematics.`,
         content: [
           {
             type: "text",
-            text: `Failed to list symbols in library ${args.library}: ${result.message || "Unknown error"}`,
+            text: `Failed to list symbols in library ${args.library}: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
       };
@@ -201,7 +201,50 @@ Returns symbol references that can be used directly in schematics.`,
         content: [
           {
             type: "text",
-            text: `Failed to get symbol info: ${result.message || "Unknown error"}`,
+            text: `Failed to get symbol info: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
+          },
+        ],
+      };
+    },
+  );
+
+  // Force-refresh the symbol library index after editing sym-lib-table
+  // outside the MCP process (e.g. from KiCad's GUI).  Mid-session edits to
+  // the table are normally picked up automatically on the next list/search
+  // call via an mtime check; this tool is the explicit escape hatch when
+  // automatic detection doesn't fire (atime-only filesystems, table
+  // rewrites that preserve mtime, manual cache invalidation).
+  server.tool(
+    "refresh_symbol_libraries",
+    "Force-rebuild the symbol library index from sym-lib-table on disk. Use after editing the global or project sym-lib-table (e.g. to fix the Flatpak default that points to a sandbox-only path) when the automatic mtime-based refresh hasn't picked up the change.",
+    {
+      projectPath: z
+        .string()
+        .optional()
+        .describe(
+          "Optional: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path. Defaults to the currently-open project's directory.",
+        ),
+    },
+    async (args: { projectPath?: string }) => {
+      const result = await callKicadScript("refresh_symbol_libraries", args);
+      if (result.success) {
+        const lines = [
+          `Rebuilt symbol library index: ${result.count} libraries`,
+        ];
+        if (result.source === "directory_scan_fallback") {
+          lines.push(
+            `Note: sym-lib-table yielded 0 usable libraries; ${
+              result.fallback_libraries?.length ?? 0
+            } entries came from a directory scan and aren't addressable by sym-lib-table nickname yet.`,
+          );
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to refresh symbol libraries: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
       };

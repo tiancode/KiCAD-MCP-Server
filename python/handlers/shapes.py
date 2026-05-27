@@ -25,14 +25,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ipc_unavailable() -> Dict[str, Any]:
-    return {
-        "success": False,
-        "message": (
-            "Shape commands require the IPC backend. Launch KiCAD with "
-            "Preferences > Plugins > Enable IPC API Server, then retry."
-        ),
-    }
+def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
+    base = (
+        "Shape commands require the IPC backend. Launch KiCAD with "
+        "Preferences > Plugins > Enable IPC API Server, then retry."
+    )
+    return {"success": False, "message": f"{base} ({reason})" if reason else base}
+
+
+def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+    if iface.use_ipc and iface.ipc_board_api:
+        return {}
+    ok, reason = iface.ensure_ipc(allow_launch=True)
+    if ok:
+        return {}
+    return _ipc_unavailable(reason)
 
 
 def _xy(params: Dict[str, Any], key: str, fallback_x: str, fallback_y: str) -> tuple:
@@ -45,8 +52,9 @@ def _xy(params: Dict[str, Any], key: str, fallback_x: str, fallback_y: str) -> t
 
 def handle_add_segment(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Graphic line. Accepts {start:{x,y}, end:{x,y}} or flat startX/startY/endX/endY."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     sx, sy = _xy(params, "start", "startX", "startY")
     ex, ey = _xy(params, "end", "endX", "endY")
     return iface.ipc_board_api.add_segment(
@@ -61,8 +69,9 @@ def handle_add_segment(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
 
 def handle_add_arc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Graphic arc through three points: start → mid → end."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     sx, sy = _xy(params, "start", "startX", "startY")
     mx, my = _xy(params, "mid", "midX", "midY")
     ex, ey = _xy(params, "end", "endX", "endY")
@@ -80,8 +89,9 @@ def handle_add_arc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
 
 def handle_add_circle(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Graphic circle. Accepts {center:{x,y}, radius, ...} or flat centerX/centerY."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     cx, cy = _xy(params, "center", "centerX", "centerY")
     return iface.ipc_board_api.add_circle(
         center_x=cx,
@@ -95,8 +105,9 @@ def handle_add_circle(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
 
 def handle_add_rectangle(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Graphic axis-aligned rectangle. Accepts {topLeft, bottomRight} or flat coords."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     tlx, tly = _xy(params, "topLeft", "topLeftX", "topLeftY")
     brx, bry = _xy(params, "bottomRight", "bottomRightX", "bottomRightY")
     return iface.ipc_board_api.add_rectangle(
@@ -112,8 +123,9 @@ def handle_add_rectangle(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
 
 def handle_add_polygon(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Closed graphic polygon. ``points`` must be a list of {x, y} (≥3)."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     points: List[Dict[str, float]] = params.get("points") or []
     if not isinstance(points, list):
         return {"success": False, "message": "'points' must be a list of {x, y} dicts"}

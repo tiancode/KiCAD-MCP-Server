@@ -154,6 +154,21 @@ class RoutingCommands:
             if not net:
                 net = start_pad.GetNetname() or end_pad.GetNetname() or ""
 
+            # Pick netclass-aware default width when caller didn't specify.
+            # GetCurrentTrackWidth() returns whatever happens to be selected
+            # in design settings, which is usually 0.2mm on a fresh board —
+            # too thin for THT power nets and was the user's main complaint.
+            if width is None:
+                width = self._netclass_track_width_mm(start_pad)
+
+            # Warn if the proposed segment crosses any other pad — this
+            # routine draws a direct trace and does not avoid obstacles, so
+            # the only way to surface that fact non-destructively is to
+            # report it instead of silently producing a short.
+            obstacle_warnings = self._pads_intersecting_segment(
+                start_pos, end_pos, exclude=(start_pad, end_pad)
+            )
+
             # Detect if pads are on different copper layers → need via.
             # SMD pad.GetLayer() reports F.Cu even on flipped B.Cu footprints in
             # KiCAD 9 SWIG. Use footprint.GetLayer() instead — it always reflects
@@ -238,6 +253,9 @@ class RoutingCommands:
                     "x": end_pos.x / scale,
                     "y": end_pos.y / scale,
                 }
+                if obstacle_warnings:
+                    result.setdefault("warnings", []).extend(obstacle_warnings)
+                    result["obstaclesCrossed"] = obstacle_warnings
 
             return result
 
@@ -248,6 +266,107 @@ class RoutingCommands:
                 "message": "Failed to route pad to pad",
                 "errorDetails": str(e),
             }
+
+    def _netclass_track_width_mm(self, pad: Any) -> Optional[float]:
+        """Return the netclass-suggested track width in mm for ``pad``'s net.
+
+        Falls back to the board's current default track width when no
+        netclass is set (or kicad's design-settings API doesn't expose
+        a netclass-specific track width on the running SWIG build).
+        Returning ``None`` lets the caller leave width unset and have
+        route_trace pick GetCurrentTrackWidth() itself.
+        """
+        try:
+            net = pad.GetNet()
+            if net is None:
+                return None
+            nc = net.GetNetClass()
+            if nc is None:
+                return None
+            getter = getattr(nc, "GetTrackWidth", None)
+            if not callable(getter):
+                return None
+            width_nm = int(getter())
+            if width_nm > 0:
+                return width_nm / 1_000_000.0
+        except Exception:
+            # SWIG can raise on dehydrated proxies; route_trace falls back
+            # to GetCurrentTrackWidth() when width is None.
+            return None
+        return None
+
+    def _pads_intersecting_segment(
+        self,
+        start_pos: Any,
+        end_pos: Any,
+        exclude: Tuple[Any, ...] = (),
+    ) -> List[str]:
+        """Return a list of warnings naming pads the segment would cross.
+
+        Uses an axis-aligned bbox vs. segment intersection test — coarse but
+        cheap, and good enough to flag the "trace goes straight through
+        another pad" case the user reported.
+        """
+        warnings: List[str] = []
+        try:
+            exclude_ids = {id(p) for p in exclude}
+            sx, sy = float(start_pos.x), float(start_pos.y)
+            ex, ey = float(end_pos.x), float(end_pos.y)
+            # Quick reject for zero-length segment
+            if sx == ex and sy == ey:
+                return warnings
+            for fp in self.board.GetFootprints():
+                ref = fp.GetReference()
+                for pad in fp.Pads():
+                    if id(pad) in exclude_ids:
+                        continue
+                    try:
+                        bbox = pad.GetBoundingBox()
+                    except Exception:
+                        continue
+                    if self._segment_intersects_bbox(sx, sy, ex, ey, bbox):
+                        warnings.append(
+                            f"Trace segment passes through {ref}.{pad.GetNumber()} "
+                            f"— consider routing around or via a different layer"
+                        )
+        except Exception:
+            # Pad iteration can raise on partial board state; treat the
+            # warning step as best-effort.
+            return warnings
+        return warnings
+
+    @staticmethod
+    def _segment_intersects_bbox(
+        sx: float, sy: float, ex: float, ey: float, bbox: Any
+    ) -> bool:
+        """Liang-Barsky-ish clip: does segment (sx,sy)-(ex,ey) touch bbox?"""
+        try:
+            x_min = float(bbox.GetLeft())
+            x_max = float(bbox.GetRight())
+            y_min = float(bbox.GetTop())
+            y_max = float(bbox.GetBottom())
+        except Exception:
+            return False
+        dx = ex - sx
+        dy = ey - sy
+        t_min, t_max = 0.0, 1.0
+        for p, q in ((-dx, sx - x_min), (dx, x_max - sx), (-dy, sy - y_min), (dy, y_max - sy)):
+            if p == 0:
+                if q < 0:
+                    return False
+                continue
+            r = q / p
+            if p < 0:
+                if r > t_max:
+                    return False
+                if r > t_min:
+                    t_min = r
+            else:
+                if r < t_min:
+                    return False
+                if r < t_max:
+                    t_max = r
+        return True
 
     def route_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Route a trace between two points or pads"""

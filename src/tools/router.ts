@@ -12,6 +12,7 @@ import {
   getCategory,
   searchTools as registrySearchTools,
   getRegistryStats,
+  WORKFLOWS,
 } from "./registry.js";
 
 // Command function type for KiCAD script calls
@@ -176,6 +177,66 @@ export function registerRouterTools(server: McpServer, callKicadScript: CommandF
       const result = await callKicadScript(tool_name, params ?? {});
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    },
+  );
+
+  // ============================================================================
+  // get_workflow_tools
+  // ============================================================================
+  server.tool(
+    "get_workflow_tools",
+    "Return the ordered list of MCP tool names that make up a named workflow (e.g. create_simple_pcb, design_schematic, export_for_fab, edit_pcb). Each tool is already registered as an MCP tool — this list just tells you which subset to use and in what order.",
+    {
+      workflow: z
+        .enum(
+          Object.keys(WORKFLOWS) as [string, ...string[]],
+        )
+        .describe(
+          "Workflow name. Use without argument to discover available workflows via list_tool_categories.",
+        ),
+    },
+    async ({ workflow }) => {
+      logger.debug(`get_workflow_tools: ${workflow}`);
+      const wf = WORKFLOWS[workflow];
+      if (!wf) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  success: false,
+                  message: `Unknown workflow: ${workflow}`,
+                  available: Object.keys(WORKFLOWS),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                success: true,
+                workflow,
+                description: wf.description,
+                tools: wf.tools,
+                count: wf.tools.length,
+                hint:
+                  "Each tool name is a regular MCP tool — call them directly in the listed order. " +
+                  "Use list_tool_categories / search_tools to discover tools outside the workflow.",
+              },
+              null,
+              2,
+            ),
+          },
+        ],
       };
     },
   );

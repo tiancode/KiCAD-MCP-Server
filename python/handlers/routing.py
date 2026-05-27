@@ -50,7 +50,7 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                 "success": False,
                 "message": "Board has no file path — save first",
             }
-        iface.board.Save(board_path)
+        iface._save_board_and_record(iface.board, board_path)
 
         zone_count = iface.board.GetAreaCount() if hasattr(iface.board, "GetAreaCount") else 0
 
@@ -84,6 +84,9 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                     }
                 iface.board = reloaded
                 iface._update_command_handlers()
+                # Subprocess rewrote the file; align in-memory expectation
+                # so the dispatcher's auto-save doesn't refuse the next write.
+                iface._record_board_signature(board_path)
                 logger.info("Zone fill subprocess succeeded")
                 return {
                     "success": True,

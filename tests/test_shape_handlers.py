@@ -149,6 +149,7 @@ def test_add_polygon_rejects_non_list():
 
 def test_handlers_fail_without_ipc():
     iface = _make_iface(api=None, use_ipc=False)
+    iface.ensure_ipc = lambda **kw: (False, "ipc disabled in test")
     for cmd in ("add_segment", "add_arc", "add_circle", "add_rectangle", "add_polygon"):
         out = getattr(iface, f"_handle_{cmd}")({})
         assert out["success"] is False

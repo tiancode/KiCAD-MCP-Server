@@ -50,6 +50,25 @@ class ComponentCommands:
                     "errorDetails": "componentId and position are required",
                 }
 
+            # Refuse to silently duplicate an existing reference — the
+            # original behaviour was to add a second footprint with the
+            # same designator on top of the first, which scrambled DRC
+            # output and net assignment.  Callers that meant to move the
+            # part should use move_component instead.
+            if reference:
+                existing = self.board.FindFootprintByReference(reference)
+                if existing is not None:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Reference '{reference}' already exists on the board. "
+                            f"Use move_component to relocate it, or pass a different "
+                            f"reference to add a new footprint."
+                        ),
+                        "errorDetails": "place_component creates new footprints; it never overwrites.",
+                        "existingReference": reference,
+                    }
+
             # Find footprint using library manager
             # component_id can be "Library:Footprint" or just "Footprint"
             footprint_result = self.library_manager.find_footprint(component_id)

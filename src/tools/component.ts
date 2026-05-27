@@ -21,56 +21,73 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   // Place Component Tool
   // ------------------------------------------------------
+  // Shared schema/handler so place_component and the add_footprint alias
+  // both dispatch to the same Python command without duplicating fields.
+  const placeComponentSchema = {
+    componentId: z
+      .string()
+      .describe("Footprint library ID, e.g. 'Package_DIP:DIP-8_W7.62mm' or 'R_0603_10k'."),
+    position: z
+      .object({
+        x: z.number().describe("X coordinate"),
+        y: z.number().describe("Y coordinate"),
+        unit: z.enum(["mm", "inch", "mil"]).describe("Unit of measurement"),
+      })
+      .describe("Position coordinates and unit"),
+    reference: z.string().optional().describe("Optional desired reference (e.g., 'R5')"),
+    value: z.string().optional().describe("Optional component value (e.g., '10k')"),
+    footprint: z.string().optional().describe("Optional specific footprint name"),
+    rotation: z.number().optional().describe("Optional rotation in degrees"),
+    layer: z.string().optional().describe("Optional layer (e.g., 'F.Cu', 'B.SilkS')"),
+    boardPath: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the .kicad_pcb file – required when using project-local footprint libraries",
+      ),
+  } as const;
+
+  type PlaceComponentArgs = {
+    componentId: string;
+    position: { x: number; y: number; unit: "mm" | "inch" | "mil" };
+    reference?: string;
+    value?: string;
+    footprint?: string;
+    rotation?: number;
+    layer?: string;
+    boardPath?: string;
+  };
+
+  const placeComponentHandler = async (args: PlaceComponentArgs) => {
+    logger.debug(
+      `Placing component: ${args.componentId} at ${args.position.x},${args.position.y} ${args.position.unit}`,
+    );
+    const result = await callKicadScript("place_component", args);
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(result),
+        },
+      ],
+    };
+  };
+
   server.tool(
     "place_component",
-    "Place a footprint component onto the PCB at the specified position. Optionally set reference, value, footprint, rotation and layer.",
-    {
-      componentId: z
-        .string()
-        .describe("Identifier for the component to place (e.g., 'R_0603_10k')"),
-      position: z
-        .object({
-          x: z.number().describe("X coordinate"),
-          y: z.number().describe("Y coordinate"),
-          unit: z.enum(["mm", "inch", "mil"]).describe("Unit of measurement"),
-        })
-        .describe("Position coordinates and unit"),
-      reference: z.string().optional().describe("Optional desired reference (e.g., 'R5')"),
-      value: z.string().optional().describe("Optional component value (e.g., '10k')"),
-      footprint: z.string().optional().describe("Optional specific footprint name"),
-      rotation: z.number().optional().describe("Optional rotation in degrees"),
-      layer: z.string().optional().describe("Optional layer (e.g., 'F.Cu', 'B.SilkS')"),
-      boardPath: z
-        .string()
-        .optional()
-        .describe(
-          "Path to the .kicad_pcb file – required when using project-local footprint libraries",
-        ),
-    },
-    async ({ componentId, position, reference, value, footprint, rotation, layer, boardPath }) => {
-      logger.debug(
-        `Placing component: ${componentId} at ${position.x},${position.y} ${position.unit}`,
-      );
-      const result = await callKicadScript("place_component", {
-        componentId,
-        position,
-        reference,
-        value,
-        footprint,
-        rotation,
-        layer,
-        boardPath,
-      });
+    "Add a NEW footprint instance to the PCB at the given position. Errors if the reference already exists — use move_component to relocate an existing part. Optionally set reference, value, footprint, rotation and layer.",
+    placeComponentSchema,
+    placeComponentHandler,
+  );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
-    },
+  // Alias so the "add" intent is unambiguous; place_component is misleading
+  // because it sounds like "place this existing part somewhere" rather than
+  // "add a fresh instance from the library".
+  server.tool(
+    "add_footprint",
+    "Add a new footprint to the PCB by library ID (alias of place_component). Same schema; this name reflects what the operation actually does.",
+    placeComponentSchema,
+    placeComponentHandler,
   );
 
   // ------------------------------------------------------

@@ -26,18 +26,25 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // ------------------------------------------------------
   server.tool(
     "set_board_size",
-    "Set the PCB board dimensions (width and height) in the specified unit.",
+    "Set the PCB board dimensions by drawing a rectangular Edge.Cuts outline. Replaces any existing Edge.Cuts geometry by default — pass clearExisting=false to append instead.",
     {
       width: z.number().describe("Board width"),
       height: z.number().describe("Board height"),
       unit: z.enum(["mm", "mil", "inch"]).describe("Unit of measurement"),
+      clearExisting: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true (default), remove existing Edge.Cuts shapes first to avoid overlapping outlines. Set to false to keep current outline and add a new rectangle on top.",
+        ),
     },
-    async ({ width, height, unit }) => {
+    async ({ width, height, unit, clearExisting }) => {
       logger.debug(`Setting board size to ${width}x${height} ${unit}`);
       const result = await callKicadScript("set_board_size", {
         width,
         height,
         unit,
+        clearExisting,
       });
 
       return {
@@ -381,8 +388,18 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         .describe(
           'How to return the image: "inline" (default) returns base64 imageData; "file" writes to disk and returns filePath',
         ),
+      cropToBoard: z
+        .boolean()
+        .optional()
+        .describe(
+          "Crop the rendered image to the actual board content + margin (default true). Set false to keep the full plot canvas — useful when isolating a stray outline you want to see.",
+        ),
+      cropMarginPx: z
+        .number()
+        .optional()
+        .describe("Margin in pixels around the cropped board content (default 20)."),
     },
-    async ({ layers, width, height, format, responseMode }) => {
+    async ({ layers, width, height, format, responseMode, cropToBoard, cropMarginPx }) => {
       logger.debug("Getting 2D board view");
       const result = await callKicadScript("get_board_2d_view", {
         layers,
@@ -390,6 +407,8 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         height,
         format,
         responseMode,
+        cropToBoard,
+        cropMarginPx,
       });
 
       return {
@@ -473,6 +492,15 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // ------------------------------------------------------
   const passthrough = (command: string) =>
     passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
+
+  // get_pcb_overview: aggregator that fans out to multiple list_ queries
+  // server-side and returns a single response — saves 3-4 MCP round-trips.
+  server.tool(
+    "get_pcb_overview",
+    "One-shot snapshot of the loaded PCB: components, tracks, zones, nets, layers in a single response. Use this instead of calling get_component_list + query_traces + query_zones + get_nets_list separately.",
+    {},
+    passthrough("get_pcb_overview"),
+  );
 
   const originTypeSchema = z
     .enum(["grid", "drill", "aux"])

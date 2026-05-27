@@ -26,14 +26,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ipc_unavailable() -> Dict[str, Any]:
-    return {
-        "success": False,
-        "message": (
-            "Selection commands require the IPC backend. Launch KiCAD with "
-            "Preferences > Plugins > Enable IPC API Server, then retry."
-        ),
-    }
+def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
+    base = (
+        "Selection commands require the IPC backend. Launch KiCAD with "
+        "Preferences > Plugins > Enable IPC API Server, then retry."
+    )
+    return {"success": False, "message": f"{base} ({reason})" if reason else base}
+
+
+def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+    if iface.use_ipc and iface.ipc_board_api:
+        return {}
+    ok, reason = iface.ensure_ipc(allow_launch=True)
+    if ok:
+        return {}
+    return _ipc_unavailable(reason)
 
 
 def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
@@ -77,8 +84,9 @@ def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
 
 def handle_get_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Return whatever is currently selected in the KiCAD board editor."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         items = iface.ipc_board_api.get_selection()
         return {"success": True, "items": items, "count": len(items)}
@@ -89,8 +97,9 @@ def handle_get_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
 
 def handle_clear_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Deselect everything in the editor."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     try:
         ok = iface.ipc_board_api.clear_selection()
         return {"success": bool(ok), "message": "Selection cleared" if ok else "Failed"}
@@ -101,8 +110,9 @@ def handle_clear_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> D
 
 def handle_add_to_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add items to the selection by KIID and/or footprint reference."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     ids = _resolve_ids(iface, params)
     if not ids:
         return {
@@ -116,8 +126,9 @@ def handle_remove_from_selection(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Remove items from the selection by KIID and/or footprint reference."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     ids = _resolve_ids(iface, params)
     if not ids:
         return {
@@ -136,8 +147,9 @@ def handle_hit_test(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str
         {"position": {...}, "id": "<KIID>"}    # test only this item
         {"position": {...}, "reference": "R1"} # test only this footprint
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
 
     position = params.get("position")
     if isinstance(position, dict):
@@ -172,8 +184,9 @@ def handle_interactive_move(
     meantime.  Pure handoff: don't chain another MCP call before the
     user releases.
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     ids = _resolve_ids(iface, params)
     if not ids:
         return {

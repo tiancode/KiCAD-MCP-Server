@@ -137,7 +137,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Add copper pour tool
   server.tool(
     "add_copper_pour",
-    "Add a copper pour (ground/power plane) to the PCB",
+    "Add a copper pour (ground/power plane) to the PCB. By default refills zones immediately so gerber export captures the fill — pass autoRefill=false to skip and call refill_zones explicitly later.",
     {
       layer: z.string().describe("PCB layer"),
       net: z.string().describe("Net name"),
@@ -147,6 +147,12 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe(
           "Array of {x, y} points defining the pour boundary. If omitted, the board outline is used.",
+        ),
+      autoRefill: z
+        .boolean()
+        .optional()
+        .describe(
+          "Run refill_zones after creating the pour (default true). Set false for batch mode — multiple add_copper_pour calls followed by a single refill_zones at the end.",
         ),
     },
     async (args: any) => {
@@ -477,7 +483,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Route pad to pad tool
   server.tool(
     "route_pad_to_pad",
-    "PREFERRED tool for pad-to-pad routing. Looks up pad positions automatically, detects the net from the pad, and — critically — if the two pads are on different copper layers (e.g. J1 on F.Cu and J2 on B.Cu) automatically inserts a via at the midpoint so the connection is complete. Always use this instead of route_trace when routing between named component pads.",
+    "Add a DIRECT trace segment between two named component pads (auto-via on layer change). Looks up pad positions, detects the net from the source pad, and inserts a via if the pads are on different copper layers. NOT an autorouter — does NOT avoid obstacles; emits warnings if the segment crosses another pad. Default trace width comes from the source net's netclass (falling back to the board's current track width).",
     {
       fromRef: z.string().describe("Reference of the source component (e.g. 'U2')"),
       fromPad: z
@@ -488,7 +494,12 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .union([z.string(), z.number()])
         .describe("Pad number on the target component (e.g. '15' or 15)"),
       layer: z.string().optional().describe("PCB layer (default: F.Cu)"),
-      width: z.number().optional().describe("Trace width in mm (default: board default)"),
+      width: z
+        .number()
+        .optional()
+        .describe(
+          "Trace width in mm (default: netclass of the source net's track width, then board default).",
+        ),
       net: z.string().optional().describe("Net name override (default: auto-detected from pad)"),
     },
     async (args: any) => {

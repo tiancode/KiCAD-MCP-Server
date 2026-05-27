@@ -93,6 +93,11 @@ class BoardViewCommands:
             format = params.get("format", "png")
             layers = params.get("layers", [])
             response_mode = params.get("responseMode", "inline")
+            # Auto-fit to the Edge.Cuts bbox + margin so stray objects outside
+            # the board outline don't squash the actual PCB into a corner.
+            # Default on — was the user's #8 complaint.
+            crop_to_board = bool(params.get("cropToBoard", True))
+            crop_margin_px = int(params.get("cropMarginPx", 20))
 
             # Create plot controller
             plotter = pcbnew.PLOT_CONTROLLER(self.board)
@@ -145,6 +150,31 @@ class BoardViewCommands:
 
                 image_bytes = svg2png(url=temp_svg, output_width=width, output_height=height)
                 os.remove(temp_svg)
+
+                # Auto-crop: KiCAD's plot canvas spans the full sheet; if
+                # the Edge.Cuts outline occupies only a corner, the raster
+                # has the actual board crammed into a fraction of the
+                # output. Use PIL's alpha-channel bbox to crop to actual
+                # content + margin. Works for any KiCAD SVG variant since
+                # we crop on rendered pixels, not on SVG coordinates.
+                if crop_to_board:
+                    try:
+                        img = Image.open(io.BytesIO(image_bytes))
+                        bbox = img.getbbox()
+                        if bbox is not None:
+                            x0, y0, x1, y1 = bbox
+                            m = crop_margin_px
+                            x0 = max(0, x0 - m)
+                            y0 = max(0, y0 - m)
+                            x1 = min(img.width, x1 + m)
+                            y1 = min(img.height, y1 + m)
+                            if (x1 - x0) > 10 and (y1 - y0) > 10:
+                                img = img.crop((x0, y0, x1, y1))
+                                buf = io.BytesIO()
+                                img.save(buf, format="PNG")
+                                image_bytes = buf.getvalue()
+                    except Exception as crop_err:
+                        logger.debug(f"Auto-crop to board failed (continuing): {crop_err}")
 
                 if format == "jpg":
                     img = Image.open(io.BytesIO(image_bytes))

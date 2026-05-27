@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -396,6 +397,8 @@ class KiCADInterface:
         "commit_transaction": "transactions",
         "get_transaction_status": "transactions",
         "rollback_transaction": "transactions",
+        "get_schematic_overview": "overview",
+        "get_pcb_overview": "overview",
     }
 
     def __getattr__(self, name: str):
@@ -476,7 +479,9 @@ class KiCADInterface:
         self.board_commands = BoardCommands(self.board)
         self.component_commands = ComponentCommands(self.board, self.footprint_library)
         self.routing_commands = RoutingCommands(self.board)
-        self.freerouting_commands = FreeroutingCommands(self.board)
+        self.freerouting_commands = FreeroutingCommands(
+            self.board, signature_callback=self._record_board_signature
+        )
         self.design_rule_commands = DesignRuleCommands(self.board)
         self.export_commands = ExportCommands(self.board)
         self.library_commands = LibraryCommands(self.footprint_library)
@@ -547,7 +552,7 @@ class KiCADInterface:
             "copy_routing_pattern": self.routing_commands.copy_routing_pattern,
             "get_nets_list": self.routing_commands.get_nets_list,
             "create_netclass": self.routing_commands.create_netclass,
-            "add_copper_pour": self.routing_commands.add_copper_pour,
+            "add_copper_pour": self._add_copper_pour_with_optional_refill,
             "route_differential_pair": self.routing_commands.route_differential_pair,
             # Design rule commands
             "set_design_rules": self.design_rule_commands.set_design_rules,
@@ -570,6 +575,7 @@ class KiCADInterface:
             "search_symbols": self.symbol_library_commands.search_symbols,
             "list_library_symbols": self.symbol_library_commands.list_library_symbols,
             "get_symbol_info": self.symbol_library_commands.get_symbol_info,
+            "refresh_symbol_libraries": self.symbol_library_commands.refresh_symbol_libraries,
             # Internal warm-up (pays wxApp init cost during startup).
             # _handle_warmup is a real method on this class, not synthesised
             # from _HANDLER_MAP, so it has to be registered explicitly.
@@ -680,15 +686,135 @@ class KiCADInterface:
             logger.info(f"Runtime IPC connection not available: {e}")
             return False
 
+    def ensure_ipc(
+        self, *, allow_launch: bool = True, timeout_s: float = 30.0
+    ) -> Tuple[bool, str]:
+        """Make IPC available for the calling handler, auto-launching KiCAD if needed.
+
+        Sequence:
+          1. Already connected → return immediately.
+          2. KiCAD is running but we never connected → try to attach.
+          3. KiCAD not running and ``allow_launch`` (gated by KICAD_AUTO_LAUNCH
+             ≠ "false") → launch the project manager and poll for the socket.
+
+        Returns ``(True, "")`` on success, ``(False, reason)`` otherwise. The
+        reason text is meant to be surfaced to the agent so it can decide
+        whether to retry or fall back.
+        """
+        if KICAD_BACKEND == "swig":
+            return (False, "KICAD_BACKEND=swig; IPC is disabled by configuration")
+
+        # Already connected?
+        if self.use_ipc and self.ipc_board_api:
+            return (True, "")
+        if self._try_enable_ipc_backend(force=True):
+            if self.use_ipc and self.ipc_board_api:
+                return (True, "")
+
+        # Honor KICAD_AUTO_LAUNCH=false as an explicit opt-out.
+        env_optout = os.environ.get("KICAD_AUTO_LAUNCH", "").strip().lower() == "false"
+        if not allow_launch or env_optout:
+            if KiCADProcessManager.is_running():
+                return (
+                    False,
+                    "KiCAD is running but the IPC API server is not reachable. "
+                    "Enable it in Preferences > Plugins > Enable IPC API Server.",
+                )
+            return (
+                False,
+                "KiCAD is not running and auto-launch is disabled "
+                "(KICAD_AUTO_LAUNCH=false). Start KiCAD manually or call launch_kicad_ui.",
+            )
+
+        # Launch KiCAD and poll for the socket.
+        if not KiCADProcessManager.is_running():
+            logger.info("Auto-launching KiCAD UI to satisfy IPC requirement")
+            launched = KiCADProcessManager.launch(wait_for_start=True)
+            if not launched:
+                return (
+                    False,
+                    "KiCAD executable not found or failed to launch. "
+                    "Install KiCAD or set its location on PATH.",
+                )
+
+        deadline = time.monotonic() + max(1.0, timeout_s)
+        while time.monotonic() < deadline:
+            if self._try_enable_ipc_backend(force=True):
+                if self.use_ipc and self.ipc_board_api:
+                    return (True, "")
+            time.sleep(0.5)
+
+        return (
+            False,
+            f"KiCAD launched but the IPC API server did not become reachable "
+            f"within {int(timeout_s)}s. Open Preferences > Plugins > Enable "
+            f"IPC API Server and try again.",
+        )
+
+    # Commands that require IPC; surfaced via get_backend_info so agents
+    # can tell which tools are unavailable on the current backend without
+    # trial-and-error.
+    IPC_REQUIRED_COMMANDS: Tuple[str, ...] = (
+        # Real-time IPC mutations
+        "ipc_add_track",
+        "ipc_add_via",
+        "ipc_add_text",
+        "ipc_list_components",
+        "ipc_get_tracks",
+        "ipc_get_vias",
+        "ipc_save_board",
+        # Board metadata (origins + title block)
+        "get_origin",
+        "set_origin",
+        "get_title_block_info",
+        "set_title_block_info",
+        # IPC selection + transactions
+        "get_selection",
+        "clear_selection",
+        "add_to_selection",
+        "remove_from_selection",
+        "hit_test",
+        "begin_transaction",
+        "commit_transaction",
+        "rollback_transaction",
+        "get_transaction_status",
+        # Graphic primitives via kipy
+        "add_segment",
+        "add_arc",
+        "add_circle",
+        "add_rectangle",
+        "add_polygon",
+        # KiCad TOOL_ACTION dispatch
+        "run_action",
+    )
+
     def _backend_status(self) -> Dict[str, Any]:
-        """Return backend status fields for command responses."""
+        """Return backend status fields for command responses.
+
+        Includes a ``capabilities`` snapshot and ``unavailable_tools`` list so
+        agents can see at a glance which IPC-only tools the current backend
+        cannot reach — avoids 8-deep trial-and-error chains that the user
+        called out as the worst UX of the SWIG fallback.
+        """
         ipc_backend = getattr(self, "ipc_backend", None)
         ipc_connected = ipc_backend.is_connected() if ipc_backend else False
-        return {
-            "backend": "ipc" if self.use_ipc and ipc_connected else "swig",
-            "realtime_sync": self.use_ipc and ipc_connected,
+        is_ipc = self.use_ipc and ipc_connected
+        status = {
+            "backend": "ipc" if is_ipc else "swig",
+            "realtime_sync": is_ipc,
             "ipc_connected": ipc_connected,
+            "capabilities": {
+                "realtime_ui_sync": is_ipc,
+                "transactions": is_ipc,
+                "selection": is_ipc,
+                "board_metadata": is_ipc,
+                "run_action": is_ipc,
+                "graphic_primitives": is_ipc,
+            },
         }
+        if not is_ipc:
+            status["unavailable_tools"] = list(self.IPC_REQUIRED_COMMANDS)
+        return status
 
     @staticmethod
     def _normalize_ipc_layer_name(layer: Any) -> str:
@@ -895,21 +1021,81 @@ class KiCADInterface:
         except OSError:
             return None
 
-    def _record_board_signature(self) -> None:
-        """Record the current on-disk signature of self.board's file.
+    def _record_board_signature(self, path: Optional[str] = None) -> None:
+        """Record the current on-disk signature of the board file.
 
         Call this after a fresh load (open_project / create_project) or after
         any save we perform ourselves, so that _auto_save_board() can detect
         when an external actor has modified the file in between.
+
+        Handlers that write the board file directly (board.Save, kicad-cli
+        subprocess) MUST call this with the file's path before returning —
+        otherwise the next mutation will see the post-write hash and refuse
+        the auto-save thinking the file was touched externally.
         """
-        if not self.board:
-            self._board_disk_signature = None
-            return
-        try:
-            path = self.board.GetFileName()
-        except Exception:
-            path = None
+        if path is None:
+            if not self.board:
+                self._board_disk_signature = None
+                return
+            try:
+                path = self.board.GetFileName()
+            except Exception:
+                path = None
         self._board_disk_signature = self._disk_signature(path) if path else None
+
+    def _save_board_and_record(self, board: Any, board_path: str) -> None:
+        """Save a SWIG board to disk and align the in-memory signature.
+
+        Single choke-point for handlers that need to persist board changes
+        outside the dispatcher's auto-save flow. Without recording the new
+        signature after the write, the dispatcher's follow-up auto-save
+        sees a hash mismatch and refuses with a false 'changed externally'
+        warning — the exact bug that broke add_board_outline →
+        sync_schematic_to_board → place_component chains.
+        """
+        board.Save(board_path)
+        self._record_board_signature(board_path)
+
+    def _add_copper_pour_with_optional_refill(
+        self, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Add a copper pour, then optionally refill so gerber export captures it.
+
+        Without refill, the .gbr layer file is generated from an unfilled zone
+        and looks blank when fab houses load it — a footgun the user hit in
+        practice. autoRefill defaults to True; pass False to keep the legacy
+        deferred-fill behaviour (suitable for batch zone setup followed by a
+        single explicit refill_zones at the end).
+        """
+        auto_refill = bool(params.get("autoRefill", True))
+        # The routing command itself doesn't know about autoRefill; strip
+        # the key before forwarding to avoid spurious "unknown param" noise.
+        passthrough = {k: v for k, v in params.items() if k != "autoRefill"}
+        result = self.routing_commands.add_copper_pour(passthrough)
+        if not result.get("success") or not auto_refill:
+            if not auto_refill:
+                result["refillStatus"] = (
+                    "deferred — zone defined but not filled; "
+                    "call refill_zones before export_gerber"
+                )
+            return result
+
+        # Lazy import to avoid a hard handler-module import cycle.
+        from handlers.routing import handle_refill_zones
+
+        # Refill in the existing subprocess-isolated path so a SWIG SIGSEGV
+        # can't kill the whole MCP process.
+        refill_result = handle_refill_zones(self, {})
+        if refill_result.get("success"):
+            result["refillStatus"] = "filled"
+            result["zoneCount"] = refill_result.get("zoneCount")
+        else:
+            result.setdefault("warnings", []).append(
+                f"Auto-refill failed: {refill_result.get('message', 'unknown')}. "
+                f"Zones are defined and will fill when opened in KiCAD (press B)."
+            )
+            result["refillStatus"] = "deferred_after_failure"
+        return result
 
     def _current_board_path(self) -> Optional[str]:
         """Return the current board file path, if a healthy board is loaded.

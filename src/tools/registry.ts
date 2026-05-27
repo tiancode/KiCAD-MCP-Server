@@ -209,7 +209,87 @@ export const directToolNames = [
   // UI management
   "get_backend_state",
   "check_kicad_ui",
+
+  // Overview / workflow discovery (one-shot summaries reduce token churn)
+  "get_schematic_overview",
+  "get_pcb_overview",
+  "get_workflow_tools",
+
+  // Misnamed-place_component fix: explicit "add" alias
+  "add_footprint",
 ];
+
+/**
+ * Named workflows: ordered tool lists for common end-to-end tasks.
+ *
+ * Surfaced via the `get_workflow_tools` meta-tool so agents can pull a
+ * coherent slice of the ~170-tool surface in one call instead of paging
+ * categories. Each tool name here must resolve to a registered MCP tool;
+ * the meta-tool just returns the names + descriptions, the agent calls
+ * each as usual.
+ */
+export const WORKFLOWS: Record<string, { description: string; tools: string[] }> = {
+  create_simple_pcb: {
+    description:
+      "Create a small standalone PCB end-to-end: project, outline, parts, routing, copper pour, DRC, gerber.",
+    tools: [
+      "create_project",
+      "set_board_size",
+      "add_board_outline",
+      "add_footprint",
+      "move_component",
+      "add_net",
+      "route_pad_to_pad",
+      "add_copper_pour",
+      "refill_zones",
+      "run_drc",
+      "get_pcb_overview",
+      "export_gerber",
+    ],
+  },
+  design_schematic: {
+    description:
+      "Build a schematic from scratch: create, add components, wire, add labels, ERC, summary.",
+    tools: [
+      "create_schematic",
+      "add_schematic_component",
+      "add_schematic_wire",
+      "add_schematic_net_label",
+      "connect_to_net",
+      "connect_passthrough",
+      "annotate_schematic",
+      "run_erc",
+      "get_schematic_overview",
+    ],
+  },
+  export_for_fab: {
+    description:
+      "Generate manufacturing outputs: refill copper, DRC, then gerber / PDF / 3D.",
+    tools: [
+      "refill_zones",
+      "run_drc",
+      "export_gerber",
+      "export_pdf",
+      "export_3d",
+      "snapshot_project",
+    ],
+  },
+  edit_pcb: {
+    description:
+      "Iterate on an existing PCB: inspect, place, route, refill, DRC, view.",
+    tools: [
+      "open_project",
+      "get_pcb_overview",
+      "add_footprint",
+      "move_component",
+      "route_pad_to_pad",
+      "add_copper_pour",
+      "refill_zones",
+      "run_drc",
+      "get_board_2d_view",
+    ],
+  },
+};
 
 // Build lookup maps at module load time
 const categoryMap = new Map<string, ToolCategory>();

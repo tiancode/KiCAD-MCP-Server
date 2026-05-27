@@ -117,6 +117,7 @@ def test_get_transaction_status_forwards():
 
 def test_transaction_handlers_require_ipc():
     iface = _make_iface(ipc_board_api=None, use_ipc=False)
+    iface.ensure_ipc = lambda **kw: (False, "ipc disabled in test")
     for cmd in (
         "begin_transaction",
         "commit_transaction",

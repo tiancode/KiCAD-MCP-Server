@@ -232,6 +232,12 @@ def test_set_title_block_info_explicit_empty_string_passes_through():
 
 def test_handlers_fail_cleanly_without_ipc():
     iface = _make_iface(api=None, use_ipc=False)
+    # ensure_ipc was added so handlers can auto-launch KiCAD; stub it out
+    # here because the point of this test is the "no IPC available" message
+    # path, not the recovery path. Without the stub the test machine's live
+    # KiCAD (or a stale socket) can satisfy ensure_ipc and the handler then
+    # returns an IPC-layer error instead of our gating message.
+    iface.ensure_ipc = lambda **kw: (False, "ipc disabled in test")
     for cmd in (
         "get_origin",
         "set_origin",

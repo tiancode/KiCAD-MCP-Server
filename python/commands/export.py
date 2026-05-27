@@ -61,22 +61,60 @@ class ExportCommands:
             plot_opts.SetCreateGerberJobFile(generate_map_file)
             plot_opts.SetSubtractMaskFromSilk(True)
 
-            # Plot specified layers or all copper layers
-            plotted_layers = []
+            # Build list of (layer_name, layer_id) to plot
+            target_layers: List[Tuple[str, int]] = []
             if layers:
                 for layer_name in layers:
                     layer_id = self.board.GetLayerID(layer_name)
-                    if layer_id >= 0:
-                        plotter.SetLayer(layer_id)
-                        plotter.PlotLayer()
-                        plotted_layers.append(layer_name)
+                    if layer_id < 0:
+                        return {
+                            "success": False,
+                            "message": "Unknown layer",
+                            "errorDetails": f"Layer '{layer_name}' not found on this board",
+                        }
+                    target_layers.append((layer_name, layer_id))
             else:
                 for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
                     if self.board.IsLayerEnabled(layer_id):
-                        layer_name = self.board.GetLayerName(layer_id)
-                        plotter.SetLayer(layer_id)
-                        plotter.PlotLayer()
-                        plotted_layers.append(layer_name)
+                        target_layers.append((self.board.GetLayerName(layer_id), layer_id))
+
+            # PLOT_CONTROLLER requires OpenPlotfile() before PlotLayer() — without it
+            # PlotLayer() silently returns False and no file is written. After plotting,
+            # GetPlotFileName() returns the actual path KiCAD wrote.
+            written_files: List[Dict[str, Any]] = []
+            missing_layers: List[Dict[str, Any]] = []
+            for layer_name, layer_id in target_layers:
+                plotter.SetLayer(layer_id)
+                # Safe-ify layer name for filename suffix (e.g. "F.Cu" -> "F_Cu")
+                suffix = layer_name.replace(".", "_")
+                opened = plotter.OpenPlotfile(suffix, pcbnew.PLOT_FORMAT_GERBER, layer_name)
+                if not opened:
+                    missing_layers.append(
+                        {"layer": layer_name, "reason": "OpenPlotfile returned False"}
+                    )
+                    continue
+                plot_ok = plotter.PlotLayer()
+                expected_path = plotter.GetPlotFileName()
+                plotter.ClosePlot()
+                if not plot_ok or not expected_path or not os.path.exists(expected_path):
+                    missing_layers.append(
+                        {
+                            "layer": layer_name,
+                            "reason": (
+                                "PlotLayer returned False"
+                                if not plot_ok
+                                else f"file not written to {expected_path}"
+                            ),
+                        }
+                    )
+                    continue
+                try:
+                    size_bytes = os.path.getsize(expected_path)
+                except OSError:
+                    size_bytes = 0
+                written_files.append(
+                    {"layer": layer_name, "path": expected_path, "size_bytes": size_bytes}
+                )
 
             # Generate drill files if requested
             drill_files = []
@@ -126,16 +164,42 @@ class ExportCommands:
                 except Exception as dev_err:
                     logger.warning(f"[DEV] Could not copy MCP log: {dev_err}")
 
-            return {
-                "success": True,
-                "message": "Exported Gerber files",
+            # Verify gerber job file if requested
+            job_files: List[str] = []
+            if generate_map_file:
+                for file in os.listdir(output_dir):
+                    if file.endswith(".gbrjob"):
+                        job_files.append(os.path.join(output_dir, file))
+
+            requested_count = len(target_layers)
+            written_count = len(written_files)
+
+            if written_count == 0 and requested_count > 0:
+                return {
+                    "success": False,
+                    "message": f"Gerber export wrote 0 of {requested_count} requested layers",
+                    "errorDetails": "No gerber files were created on disk",
+                    "missing": missing_layers,
+                    "outputDir": output_dir,
+                }
+
+            payload = {
+                "success": len(missing_layers) == 0,
+                "message": (
+                    f"Exported {written_count} of {requested_count} gerber layers"
+                    if missing_layers
+                    else "Exported Gerber files"
+                ),
                 "files": {
-                    "gerber": plotted_layers,
+                    "gerber": written_files,
                     "drill": drill_files,
-                    "map": ["job.gbrjob"] if generate_map_file else [],
+                    "map": job_files,
                 },
                 "outputDir": output_dir,
             }
+            if missing_layers:
+                payload["missing"] = missing_layers
+            return payload
 
         except Exception as e:
             logger.error(f"Error exporting Gerber files: {str(e)}")
@@ -233,6 +297,31 @@ class ExportCommands:
             actual_filename = f"{board_name}-{base_name}.pdf"
             actual_output_path = os.path.join(os.path.dirname(output_path), actual_filename)
 
+            # Verify file actually landed on disk
+            if not os.path.exists(actual_output_path):
+                # Try the path KiCAD's plotter reports, in case naming changed
+                reported = plotter.GetPlotFileName() if hasattr(plotter, "GetPlotFileName") else ""
+                if reported and os.path.exists(reported):
+                    actual_output_path = reported
+                else:
+                    return {
+                        "success": False,
+                        "message": "PDF export reported success but no file on disk",
+                        "errorDetails": f"Expected file at {actual_output_path}",
+                        "requestedPath": output_path,
+                    }
+
+            try:
+                size_bytes = os.path.getsize(actual_output_path)
+            except OSError:
+                size_bytes = 0
+            if size_bytes == 0:
+                return {
+                    "success": False,
+                    "message": "PDF export produced an empty file",
+                    "errorDetails": f"{actual_output_path} is zero bytes",
+                }
+
             return {
                 "success": True,
                 "message": "Exported PDF file",
@@ -240,6 +329,7 @@ class ExportCommands:
                     "path": actual_output_path,
                     "requestedPath": output_path,
                     "layers": plotted_layers,
+                    "size_bytes": size_bytes,
                     "pageSize": page_size if page_size == "A4" else "auto-scaled",
                 },
             }
@@ -289,28 +379,78 @@ class ExportCommands:
             plot_opts.SetPlotReference(include_components)
             plot_opts.SetBlackAndWhite(black_and_white)
 
-            # Plot specified layers or all enabled layers
-            plotted_layers = []
+            # Build list of (layer_name, layer_id) to plot
+            target_layers: List[Tuple[str, int]] = []
             if layers:
                 for layer_name in layers:
                     layer_id = self.board.GetLayerID(layer_name)
-                    if layer_id >= 0:
-                        plotter.SetLayer(layer_id)
-                        plotter.PlotLayer()
-                        plotted_layers.append(layer_name)
+                    if layer_id < 0:
+                        return {
+                            "success": False,
+                            "message": "Unknown layer",
+                            "errorDetails": f"Layer '{layer_name}' not found on this board",
+                        }
+                    target_layers.append((layer_name, layer_id))
             else:
                 for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
                     if self.board.IsLayerEnabled(layer_id):
-                        layer_name = self.board.GetLayerName(layer_id)
-                        plotter.SetLayer(layer_id)
-                        plotter.PlotLayer()
-                        plotted_layers.append(layer_name)
+                        target_layers.append((self.board.GetLayerName(layer_id), layer_id))
 
-            return {
-                "success": True,
-                "message": "Exported SVG file",
-                "file": {"path": output_path, "layers": plotted_layers},
+            written_files: List[Dict[str, Any]] = []
+            missing_layers: List[Dict[str, Any]] = []
+            for layer_name, layer_id in target_layers:
+                plotter.SetLayer(layer_id)
+                suffix = layer_name.replace(".", "_")
+                opened = plotter.OpenPlotfile(suffix, pcbnew.PLOT_FORMAT_SVG, layer_name)
+                if not opened:
+                    missing_layers.append(
+                        {"layer": layer_name, "reason": "OpenPlotfile returned False"}
+                    )
+                    continue
+                plot_ok = plotter.PlotLayer()
+                produced = plotter.GetPlotFileName()
+                plotter.ClosePlot()
+                if not plot_ok or not produced or not os.path.exists(produced):
+                    missing_layers.append(
+                        {
+                            "layer": layer_name,
+                            "reason": (
+                                "PlotLayer returned False"
+                                if not plot_ok
+                                else f"file not written to {produced}"
+                            ),
+                        }
+                    )
+                    continue
+                try:
+                    size_bytes = os.path.getsize(produced)
+                except OSError:
+                    size_bytes = 0
+                written_files.append(
+                    {"layer": layer_name, "path": produced, "size_bytes": size_bytes}
+                )
+
+            requested_count = len(target_layers)
+            if not written_files and requested_count > 0:
+                return {
+                    "success": False,
+                    "message": f"SVG export wrote 0 of {requested_count} requested layers",
+                    "errorDetails": "No SVG files were created on disk",
+                    "missing": missing_layers,
+                }
+
+            payload = {
+                "success": len(missing_layers) == 0,
+                "message": (
+                    f"Exported {len(written_files)} of {requested_count} SVG layers"
+                    if missing_layers
+                    else "Exported SVG file"
+                ),
+                "file": {"layers": written_files, "outputDir": os.path.dirname(output_path)},
             }
+            if missing_layers:
+                payload["missing"] = missing_layers
+            return payload
 
         except Exception as e:
             logger.error(f"Error exporting SVG file: {str(e)}")
@@ -441,10 +581,30 @@ class ExportCommands:
                     "errorDetails": result.stderr,
                 }
 
+            if not os.path.exists(output_path):
+                return {
+                    "success": False,
+                    "message": "3D export reported success but no file on disk",
+                    "errorDetails": (
+                        f"kicad-cli exit 0 but {output_path} is missing. "
+                        f"stderr: {result.stderr.strip() or '(empty)'}"
+                    ),
+                }
+            try:
+                size_bytes = os.path.getsize(output_path)
+            except OSError:
+                size_bytes = 0
+            if size_bytes == 0:
+                return {
+                    "success": False,
+                    "message": "3D export produced an empty file",
+                    "errorDetails": f"{output_path} is zero bytes",
+                }
+
             return {
                 "success": True,
                 "message": f"Exported {format_upper} file",
-                "file": {"path": output_path, "format": format_upper},
+                "file": {"path": output_path, "format": format_upper, "size_bytes": size_bytes},
             }
 
         except subprocess.TimeoutExpired:

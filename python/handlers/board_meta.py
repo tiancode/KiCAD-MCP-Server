@@ -23,14 +23,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ipc_unavailable() -> Dict[str, Any]:
+def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
+    base = (
+        "Board metadata commands require the IPC backend. Launch KiCAD "
+        "with Preferences > Plugins > Enable IPC API Server, then retry."
+    )
     return {
         "success": False,
-        "message": (
-            "Board metadata commands require the IPC backend. Launch KiCAD "
-            "with Preferences > Plugins > Enable IPC API Server, then retry."
-        ),
+        "message": f"{base} ({reason})" if reason else base,
     }
+
+
+def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+    if iface.use_ipc and iface.ipc_board_api:
+        return {}
+    ok, reason = iface.ensure_ipc(allow_launch=True)
+    if ok:
+        return {}
+    return _ipc_unavailable(reason)
 
 
 def _xy_from_params(params: Dict[str, Any]) -> tuple:
@@ -76,8 +86,9 @@ def handle_get_origin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
         type: "grid" | "drill" (default "drill" — the one Gerber / PnP use)
         unit: "mm" | "inch" (default "mm")
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     origin_type = str(params.get("type", "drill"))
     unit = str(params.get("unit", "mm"))
     return iface.ipc_board_api.get_origin(origin_type=origin_type, unit=unit)
@@ -94,8 +105,9 @@ def handle_set_origin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
     a missing-arg mistake would invalidate every Gerber/PnP the user
     exports next.
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     origin_type = params.get("type")
     if not isinstance(origin_type, str) or not origin_type:
         return {
@@ -119,8 +131,9 @@ def handle_get_title_block_info(
 ) -> Dict[str, Any]:
     """Return the board title block (title / company / revision / date /
     comments dict keyed '1'..'9')."""
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     return iface.ipc_board_api.get_title_block_info()
 
 
@@ -169,8 +182,9 @@ def handle_set_title_block_info(
     Pass an explicit empty string to *clear* a field/slot.  Null / JSON
     ``null`` is treated as "leave unchanged" — same as omitting the key.
     """
-    if not iface.use_ipc or not iface.ipc_board_api:
-        return _ipc_unavailable()
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
     comments = _normalize_comments(params.get("comments"))
     return iface.ipc_board_api.set_title_block_info(
         title=params.get("title"),

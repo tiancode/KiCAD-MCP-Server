@@ -219,8 +219,27 @@ def _score_ses(ses_text: str, target_nets: Iterable[str]) -> Dict[str, Any]:
 class FreeroutingCommands:
     """Handles Freerouting autoroute operations."""
 
-    def __init__(self, board: Any = None) -> None:
+    def __init__(self, board: Any = None, signature_callback: Any = None) -> None:
         self.board = board
+        # Optional callback `fn(path)` invoked after this class saves the
+        # board directly, so the parent KiCADInterface can keep its
+        # in-memory disk signature in sync. Without it, _auto_save_board()
+        # on the next mutation would see a stale hash and refuse.
+        self._signature_callback = signature_callback
+
+    def _save_and_record(self, board_path: str) -> None:
+        """Save the board and notify the parent interface (if any).
+
+        Uses ``getattr`` so test fixtures that bypass ``__init__`` via
+        ``__new__`` don't AttributeError — they simply skip the callback.
+        """
+        self.board.Save(board_path)
+        cb = getattr(self, "_signature_callback", None)
+        if cb is not None:
+            try:
+                cb(board_path)
+            except Exception:
+                logger.debug("Signature callback raised; ignoring", exc_info=True)
 
     def _resolve_execution_mode(self, jar_path: str) -> Dict[str, Any]:
         """Determine how to run Freerouting: direct or docker.
@@ -571,7 +590,7 @@ class FreeroutingCommands:
 
         # Step 4: Save board
         try:
-            self.board.Save(board_path)
+            self._save_and_record(board_path)
         except (OSError, RuntimeError) as e:
             # OSError on filesystem failure, RuntimeError from pcbnew on
             # board-state issues.  Non-fatal — autoroute is already done and
@@ -715,7 +734,7 @@ class FreeroutingCommands:
         board_path = params.get("boardPath") or self.board.GetFileName()
         if board_path:
             try:
-                self.board.Save(board_path)
+                self._save_and_record(board_path)
             except (OSError, RuntimeError) as e:
                 logger.warning(f"Board save after SES import failed: {e}")
 

@@ -785,6 +785,11 @@ export class KiCADMcpServer {
         "list_schematic_nets",
         "list_schematic_labels",
         "get_schematic_view",
+        // Symbol library queries: cold-parse of all .kicad_sym can exceed 30s
+        // on Flatpak/NFS the very first time, then is fast forever after.
+        "search_symbols",
+        "list_symbol_libraries",
+        "list_symbols",
       ];
       if (longRunningCommands.includes(command)) {
         commandTimeout = 600000; // 10 minutes for long operations
