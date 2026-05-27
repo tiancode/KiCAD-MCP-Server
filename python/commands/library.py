@@ -382,39 +382,97 @@ class LibraryManager:
 
     def search_footprints(self, pattern: str, limit: int = 20) -> List[Dict[str, str]]:
         """
-        Search for footprints matching a pattern
+        Search for footprints matching a pattern, ranked so the exact /
+        most-relevant matches come first.
 
         Args:
-            pattern: Search pattern (supports wildcards *, case-insensitive)
-            limit: Maximum number of results to return
+            pattern: Search pattern (supports ``*`` wildcards; other
+                regex metacharacters in the input are escaped so a
+                pattern like ``LED_D5.0mm`` matches the literal dot).
+                Case-insensitive.
+            limit: Maximum number of results to return after ranking.
 
         Returns:
-            List of dicts with 'library', 'footprint', and 'full_name' keys
+            List of dicts with 'library', 'footprint', and 'full_name'
+            keys, ordered:
+              1. Exact case-insensitive match (whole footprint name).
+              2. Prefix match (footprint starts with the pattern stem).
+              3. Substring match.
+              ``Lib:Name`` style patterns rank the matching library
+              higher when both library and name align.
+            Within each band, shorter names come first — the user
+            reported that ``LED_D5.0mm`` was buried under
+            ``LED_D5.0mm-3``, ``LED_D5.0mm-3_Horizontal`` etc. precisely
+            because the previous implementation returned matches in
+            dict-iteration order and cut at ``limit`` before reaching
+            the exact entry.
         """
-        results = []
-        pattern_lower = pattern.lower()
+        if not pattern:
+            return []
 
-        # Convert wildcards to regex
-        regex_pattern = pattern_lower.replace("*", ".*")
-        regex = re.compile(regex_pattern)
+        # Split "Lib:Name" prefix when given; the library scope becomes
+        # a soft hint (still searches all, but boosts hits in the named
+        # library).  Wildcards inside the library scope work too.
+        lib_scope: Optional[str] = None
+        name_pattern = pattern
+        if ":" in pattern:
+            lib_scope, name_pattern = pattern.split(":", 1)
+            lib_scope = lib_scope.strip().lower() or None
+            name_pattern = name_pattern.strip() or pattern
 
+        # Escape regex metachars in the pattern, then re-enable ``*``
+        # as the user-facing wildcard.  Previously ``.`` was treated as
+        # "any char" so ``LED_D5.0mm`` also matched ``LED_D5X0mm``.
+        name_lower = name_pattern.lower()
+        escaped = re.escape(name_lower).replace(r"\*", ".*")
+        try:
+            regex = re.compile(escaped)
+        except re.error:
+            # Defensive: malformed pattern → no matches rather than crash.
+            return []
+
+        # Stem for prefix/exact comparison: the same input with wildcards
+        # stripped so e.g. ``LED_D5.0mm*`` still recognises ``LED_D5.0mm``
+        # as an exact match.
+        stem = name_lower.replace("*", "")
+
+        scored: List[Tuple[Tuple[int, int, int, str], Dict[str, str]]] = []
         for library_nickname in self.libraries.keys():
-            footprints = self.list_footprints(library_nickname)
-
-            for footprint in footprints:
-                if regex.search(footprint.lower()):
-                    results.append(
+            lib_lower = library_nickname.lower()
+            for footprint in self.list_footprints(library_nickname):
+                fp_lower = footprint.lower()
+                if not regex.search(fp_lower):
+                    continue
+                # Score band: exact (3) > prefix (2) > substring (1).
+                # Higher score sorts first via negation in the key tuple.
+                if fp_lower == stem:
+                    band = 3
+                elif fp_lower.startswith(stem):
+                    band = 2
+                else:
+                    band = 1
+                # Library-scope boost: when the caller used Lib:Name, hits
+                # in the matching library outrank hits in other libraries
+                # within the same band.
+                lib_boost = (
+                    1 if lib_scope is None or lib_scope in lib_lower else 0
+                )
+                # Sort key: lower tuple sorts first; we negate the bands
+                # so larger-is-better becomes smaller-is-first.
+                key = (-band, -lib_boost, len(footprint), fp_lower)
+                scored.append(
+                    (
+                        key,
                         {
                             "library": library_nickname,
                             "footprint": footprint,
                             "full_name": f"{library_nickname}:{footprint}",
-                        }
+                        },
                     )
+                )
 
-                    if len(results) >= limit:
-                        return results
-
-        return results
+        scored.sort(key=lambda pair: pair[0])
+        return [entry for _, entry in scored[:limit]]
 
     def get_footprint_info(
         self, library_nickname: str, footprint_name: str
