@@ -861,6 +861,83 @@ class SymbolLibraryManager:
 
         return None
 
+    def get_symbol_pins(
+        self, library_nickname: str, symbol_name: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Return the pin definitions of one library symbol in LOCAL coords.
+
+        Locates the named symbol's block in ``library_nickname``'s
+        ``.kicad_sym`` file, parses just that block with sexpdata, and
+        runs ``PinLocator.parse_symbol_definition`` over it.  Each pin
+        carries ``{number, name, x, y, angle, length, type}`` where
+        ``(x, y)`` is the pin endpoint in the symbol's own coordinate
+        frame (the symbol anchor passed to ``add_schematic_component``
+        is added on top, and the symbol's rotation rotates these
+        offsets) — this is what callers need to plan placement before
+        the symbol is on the schematic.
+
+        Returns ``None`` when the library or symbol can't be located.
+        Reuses the regex-slice approach from ``_parse_kicad_sym_file``
+        so pin extraction doesn't pay the full-library parse cost.
+        """
+        library_path = self.libraries.get(library_nickname)
+        if not library_path:
+            return None
+        try:
+            with open(library_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError as e:
+            logger.warning(f"Could not read {library_path}: {e}")
+            return None
+
+        # Locate "(symbol \"<name>\" " and walk paren depth to the closing ).
+        needle = f'(symbol "{symbol_name}"'
+        start_pos = content.find(needle)
+        if start_pos == -1:
+            return None
+        depth = 0
+        end_pos = start_pos
+        i = start_pos
+        while i < len(content):
+            ch = content[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    end_pos = i + 1
+                    break
+            i += 1
+        if end_pos == start_pos:
+            logger.warning(
+                f"Malformed symbol block for '{symbol_name}' in {library_path}"
+            )
+            return None
+
+        try:
+            import sexpdata
+
+            from commands.pin_locator import PinLocator
+
+            sexp = sexpdata.loads(content[start_pos:end_pos])
+        except Exception as e:
+            logger.warning(f"Could not parse symbol block for {symbol_name}: {e}")
+            return None
+
+        pins_dict = PinLocator.parse_symbol_definition(sexp)
+
+        # Return as a list sorted by pin number for stable output.  Try
+        # numeric sort first; fall back to lexicographic for alphanumeric
+        # pins (e.g. ``A1`` / ``B12`` on BGAs).
+        def _sort_key(p: Dict[str, Any]) -> Tuple[int, Any]:
+            num = p.get("number", "")
+            try:
+                return (0, int(num))
+            except (TypeError, ValueError):
+                return (1, str(num))
+
+        return sorted(pins_dict.values(), key=_sort_key)
+
     def find_symbol(self, symbol_spec: str) -> Optional[SymbolInfo]:
         """
         Find a symbol by specification
@@ -1159,7 +1236,7 @@ class SymbolLibraryCommands:
             }
 
     def get_symbol_info(self, params: Dict) -> Dict:
-        """Get information about a specific symbol"""
+        """Get information about a specific symbol — properties + pin list."""
         try:
             symbol_spec = params.get("symbol")
             if not symbol_spec:
@@ -1169,10 +1246,39 @@ class SymbolLibraryCommands:
 
             result = self.library_manager.find_symbol(symbol_spec)
 
-            if result:
-                return {"success": True, "symbol_info": asdict(result)}
-            else:
+            if not result:
                 return {"success": False, "message": f"Symbol not found: {symbol_spec}"}
+
+            info = asdict(result)
+            # Inline pins so the caller can plan placement without a
+            # round-trip via add_schematic_component → get_schematic_pin_locations.
+            # Each pin's (x, y) is in the symbol's own coordinate frame;
+            # after add_schematic_component(x=ax, y=ay, rotation=r), the
+            # world-space pin position is the local pin (x, y) rotated
+            # by ``r`` around (0, 0) and translated by (ax, ay).
+            try:
+                pins = self.library_manager.get_symbol_pins(result.library, result.name)
+            except Exception as e:
+                logger.debug(f"Could not extract pins for {result.full_ref}: {e}")
+                pins = None
+            if pins is not None:
+                info["pins"] = pins
+                info["pin_count"] = len(pins)
+                # Local-coord bounding box of the pin endpoints — a quick
+                # planning heuristic for collision avoidance before the
+                # symbol is even on the schematic.
+                if pins:
+                    xs = [p.get("x", 0) for p in pins]
+                    ys = [p.get("y", 0) for p in pins]
+                    info["pin_bounding_box"] = {
+                        "min_x": min(xs),
+                        "min_y": min(ys),
+                        "max_x": max(xs),
+                        "max_y": max(ys),
+                        "unit": "mm",
+                    }
+
+            return {"success": True, "symbol_info": info}
 
         except (OSError, ValueError) as e:
             logger.exception(f"Error getting symbol info: {e}")

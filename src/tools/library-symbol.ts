@@ -176,7 +176,7 @@ Returns symbol references that can be used directly in schematics.`,
   // Get detailed information about a specific symbol
   server.tool(
     "get_symbol_info",
-    "Get detailed information about a specific symbol (global or project-scope when projectPath is supplied or a project has been opened).",
+    "Get detailed information about a specific symbol (global or project-scope when projectPath is supplied or a project has been opened).  The response includes the pin list in the symbol's local coordinate frame (.pins[] with number/name/x/y/angle/length/type), and the pin bounding box.  This lets a caller plan placement coordinates BEFORE running add_schematic_component, without the round-trip through get_schematic_pin_locations.",
     {
       symbol: z
         .string()
@@ -204,15 +204,30 @@ Returns symbol references that can be used directly in schematics.`,
           info.lib_class ? `Class: ${info.lib_class}` : "",
           info.datasheet ? `Datasheet: ${info.datasheet}` : "",
           info.sim_pins ? `Sim.Pins: ${info.sim_pins}` : "",
+          info.pin_count !== undefined ? `Pins: ${info.pin_count}` : "",
         ]
           .filter((line) => line)
           .join("\n");
+
+        // Inline a compact pin table when present.
+        const pins: any[] = info.pins || [];
+        const pinTable =
+          pins.length > 0
+            ? "\nPins (local coords, mm):\n" +
+              pins
+                .map(
+                  (p: any) =>
+                    `  ${p.number}  ${p.name ?? ""}  @ (${p.x}, ${p.y})  angle=${p.angle ?? 0}  ${p.type ?? ""}`,
+                )
+                .join("\n")
+            : "";
+        const fullDetails = details + pinTable;
 
         return {
           content: [
             {
               type: "text",
-              text: details,
+              text: fullDetails,
             },
           ],
         };
