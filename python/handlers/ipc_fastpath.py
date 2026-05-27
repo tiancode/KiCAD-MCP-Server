@@ -558,23 +558,18 @@ def handle_delete_component(iface: "KiCADInterface", params: Dict[str, Any]) -> 
 
 
 def handle_get_component_list(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """IPC handler for get_component_list."""
+    """IPC handler for get_component_list.
+
+    Every field in a returned component comes from the live IPC view of the
+    board — never from the SWIG on-disk copy.  An earlier version patched
+    missing ``boundingBox`` values from ``iface.board`` (SWIG), but SWIG
+    holds the pre-IPC-mutation positions, so a component that just moved via
+    ``move_component`` came back with a fresh ``position`` and a stale
+    ``boundingBox`` pointing at where it used to be.  When IPC can't supply
+    a box, leave it ``null`` rather than mix two sources in one record.
+    """
     try:
         components = iface.ipc_board_api.list_components()
-
-        # If IPC didn't provide bounding boxes, enrich from SWIG backend
-        if iface.board and components and not components[0].get("boundingBox"):
-            try:
-                swig_result = iface.component_commands.get_component_list(params)
-                if swig_result.get("success"):
-                    swig_map = {c["reference"]: c for c in swig_result.get("components", [])}
-                    for comp in components:
-                        swig_comp = swig_map.get(comp.get("reference"))
-                        if swig_comp and swig_comp.get("boundingBox"):
-                            comp["boundingBox"] = swig_comp["boundingBox"]
-            except Exception:
-                pass
-
         return {"success": True, "components": components, "count": len(components)}
     except Exception as e:
         logger.error(f"IPC get_component_list error: {e}")
@@ -853,7 +848,15 @@ def handle_rotate_component(iface: "KiCADInterface", params: Dict[str, Any]) -> 
 def handle_get_component_properties(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """IPC handler for get_component_properties — gets detailed component info."""
+    """IPC handler for get_component_properties — gets detailed component info.
+
+    Like ``handle_get_component_list``, this returns a pure IPC view.  The
+    earlier SWIG-fallback for ``boundingBox`` / ``courtyard`` mixed live
+    positions with on-disk geometry — a component that just moved via
+    ``move_component`` came back with the new ``position`` and the old
+    ``boundingBox``.  When IPC doesn't have the box, leave it ``null``
+    rather than serve two coordinate frames in one record.
+    """
     try:
         reference = params.get("reference", params.get("componentId", ""))
 
@@ -866,17 +869,6 @@ def handle_get_component_properties(
 
         if not target:
             return {"success": False, "message": f"Component {reference} not found"}
-
-        # If IPC didn't provide bounding box, try SWIG backend as fallback
-        if not target.get("boundingBox") and iface.board:
-            try:
-                swig_result = iface.component_commands.get_component_properties(params)
-                if swig_result.get("success"):
-                    swig_comp = swig_result.get("component", {})
-                    target["boundingBox"] = swig_comp.get("boundingBox")
-                    target["courtyard"] = swig_comp.get("courtyard")
-            except Exception:
-                pass
 
         return {"success": True, "component": target}
     except Exception as e:

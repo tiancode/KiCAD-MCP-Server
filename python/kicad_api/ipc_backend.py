@@ -696,6 +696,21 @@ class IPCBoardAPI(BoardAPI):
                         except Exception as e:
                             logger.debug(f"Could not compute bbox from pads: {e}")
 
+                    # kipy returns ``fp.layer`` as a ``BoardLayer`` enum.  On
+                    # some kipy versions ``str(enum)`` is the enum *name*
+                    # (``"BL_F_Cu"``) which we can strip to ``"F.Cu"``; on
+                    # others it's the raw int value (``"3"``).  Prefer
+                    # ``.name`` when present so the user sees a layer name
+                    # instead of an opaque integer.
+                    raw_layer = getattr(fp, "layer", None)
+                    if raw_layer is None:
+                        layer_str = "F.Cu"
+                    else:
+                        layer_name = getattr(raw_layer, "name", None) or str(raw_layer)
+                        if layer_name.startswith("BL_"):
+                            layer_name = layer_name[3:].replace("_", ".")
+                        layer_str = layer_name
+
                     components.append(
                         {
                             "reference": (
@@ -717,7 +732,7 @@ class IPCBoardAPI(BoardAPI):
                                 "unit": "mm",
                             },
                             "rotation": fp.orientation.degrees if fp.orientation else 0,
-                            "layer": str(fp.layer) if hasattr(fp, "layer") else "F.Cu",
+                            "layer": layer_str,
                             "id": str(fp.id) if hasattr(fp, "id") else "",
                             "boundingBox": bbox_data,
                         }
