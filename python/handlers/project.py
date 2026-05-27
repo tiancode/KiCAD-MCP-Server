@@ -209,17 +209,57 @@ def _autolaunch_for_project(
         base["pcbDocumentOpen"] = bool(iface._ipc_has_open_board_document())
     except Exception:
         base["pcbDocumentOpen"] = False
+
+    # Best-effort: ask the project manager to open the PCB editor frame
+    # via the IPC TOOL_ACTION API.  Action names are KiCad-internal and
+    # not guaranteed stable, so we try a handful in order and stop on
+    # the first ``RAS_OK``.  If none succeed (RAS_INVALID across the
+    # board, older/newer KiCad with renamed actions), we fall through to
+    # the manual-steps warning below — no harm done.
     if not base["pcbDocumentOpen"]:
-        # Auto-launching `kicad <project.kicad_pro>` opens the project
-        # manager but not the PCB editor frame.  The IPC socket attaches
-        # immediately, which used to make ipcAttached:true look like
-        # "everything's ready" — but the very next move_component etc.
-        # would fail because no board doc is loaded.  Spell it out.
+        base["pcbEditorAutoOpenAttempted"] = True
+        ipc_backend = getattr(iface, "ipc_backend", None)
+        if ipc_backend is not None and getattr(ipc_backend, "is_connected", lambda: False)():
+            _action_candidates = (
+                "kicadManager.Control.editPCB",
+                "kicadManager.Control.editPcbnew",
+                "common.Control.openPcbnew",
+                "pcbnew.EditorControl.openBoardEditor",
+            )
+            for action in _action_candidates:
+                try:
+                    result = ipc_backend.run_action(action)
+                except Exception as exc:  # pragma: no cover - best-effort
+                    logger.debug(f"PCB-editor auto-open via {action!r} raised: {exc}")
+                    continue
+                if isinstance(result, dict) and result.get("success"):
+                    logger.info(f"Opened PCB editor via run_action({action!r})")
+                    try:
+                        base["pcbDocumentOpen"] = bool(iface._ipc_has_open_board_document())
+                    except Exception:
+                        pass
+                    if base["pcbDocumentOpen"]:
+                        base["pcbEditorAutoOpened"] = action
+                        break
+
+    if not base["pcbDocumentOpen"]:
+        # Auto-launching ``kicad <project.kicad_pro>`` opens the project
+        # manager but not the PCB editor frame, and the run_action
+        # attempts above didn't land either (action name drift or KiCad
+        # refusing the request).  Tell the user what's actually
+        # required — DON'T repeat "call open_project with .kicad_pcb"
+        # since that's the call that got us here in the first place.
         base["warning"] = (
-            "IPC is attached but KiCad has no .kicad_pcb document open. "
-            "Subsequent board ops will be refused with needs_pcb_editor:true "
-            "until the user opens the PCB editor in KiCad (or you call "
-            "open_project with the .kicad_pcb path)."
+            "IPC is attached but KiCad has no .kicad_pcb document open.  "
+            "The MCP attempted to open the PCB editor frame via run_action "
+            "but no candidate action name was accepted by this KiCad version "
+            "(action names are KiCad-internal and unstable across releases).  "
+            "Manual recovery: in the KiCad project manager window, "
+            "double-click the PCB editor icon (top of the left sidebar) — "
+            "or double-click the .kicad_pcb file in the project tree.  "
+            "After that, every IPC board op (move_component, get_board_info, "
+            "…) will see the open document and stop refusing with "
+            "needs_pcb_editor: true."
         )
     return base
 
