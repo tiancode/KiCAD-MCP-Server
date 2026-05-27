@@ -715,7 +715,15 @@ class ComponentCommands:
                 }
 
             reference = params.get("reference")
-            pad_name = params.get("padName") or params.get("padNumber")
+            # The TS schema names this argument ``pad`` (and that's what
+            # MCP clients send); the SWIG handler originally read
+            # ``padName`` / ``padNumber``.  Accept all three so the
+            # documented name works and legacy callers don't break.
+            pad_name = (
+                params.get("pad")
+                or params.get("padName")
+                or params.get("padNumber")
+            )
 
             if not reference:
                 return {
@@ -727,7 +735,7 @@ class ComponentCommands:
                 return {
                     "success": False,
                     "message": "Missing pad identifier",
-                    "errorDetails": "padName or padNumber parameter is required",
+                    "errorDetails": "pad (or padName / padNumber) parameter is required",
                 }
 
             # Find the component
