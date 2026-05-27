@@ -519,6 +519,15 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # though the netlist is correct.
             power_label_names = _collect_power_label_names(schematic_path)
 
+            # KiCad-CLI ERC JSON unit bug (observed on 10.0.3): the header
+            # claims ``coordinate_units: "mm"`` but ``items[].pos`` is
+            # actually serialised as schematic internal-units / 10000 — a
+            # symbol at (129.84, 94.92) mm comes back as (1.2984, 0.9492).
+            # Re-scale to mm here so the location lines up with the
+            # schematic coordinate system the caller queried with.  Drop
+            # this multiplier when kicad upstream fixes the writer.
+            _ERC_POS_TO_MM = 100.0
+
             for v in all_violations:
                 vseverity = v.get("severity", "error")
                 vtype = v.get("type", "unknown")
@@ -527,8 +536,9 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 loc = {}
                 if items and "pos" in items[0]:
                     loc = {
-                        "x": items[0]["pos"].get("x", 0),
-                        "y": items[0]["pos"].get("y", 0),
+                        "x": items[0]["pos"].get("x", 0) * _ERC_POS_TO_MM,
+                        "y": items[0]["pos"].get("y", 0) * _ERC_POS_TO_MM,
+                        "unit": "mm",
                     }
                 annotated = {
                     "type": vtype,
