@@ -3,6 +3,7 @@
 import sys
 import types
 from pathlib import Path
+from typing import Any, Dict
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
@@ -603,3 +604,399 @@ def test_ipc_board_size_keeps_min_max_box2_compatibility(monkeypatch):
     result = board_api.get_size()
 
     assert result == {"width": 3.0, "height": 3.0, "unit": "mm"}
+
+
+def test_get_backend_info_on_swig_carries_actionable_recommendation(monkeypatch):
+    """SWIG-mode get_backend_info must tell the agent exactly what to do,
+    not just describe the state.  The previous "requires manual reload"
+    text gave no next step; we now point at launch_kicad_ui and list the
+    capabilities being given up."""
+    import kicad_interface
+
+    monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_running", lambda: False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.command_routes["get_backend_info"] = iface._handle_get_backend_info
+
+    result = iface.handle_command("get_backend_info", {})
+
+    assert result["success"] is True
+    assert result["backend"] == "swig"
+    assert "launch_kicad_ui" in result["message"]
+    assert "launch_kicad_ui" in result["recommendation"]
+    # The recommendation cites the concrete capabilities lost so the
+    # agent can weigh "is this worth a launch" against its current task.
+    assert "realtime" in result["recommendation"].lower()
+    assert "transactions" in result["recommendation"].lower()
+    assert "unavailable_tools" in result["recommendation"]
+    # And the unavailable_tools list is actually present.
+    assert isinstance(result.get("unavailable_tools"), list)
+    assert len(result["unavailable_tools"]) > 0
+
+
+def test_get_backend_info_on_ipc_has_no_recommendation(monkeypatch):
+    """When already on IPC the message should be celebratory, not advisory."""
+    import kicad_interface
+
+    monkeypatch.setattr(kicad_interface, "KICAD_BACKEND", "auto")
+    monkeypatch.setattr(kicad_interface.KiCADProcessManager, "is_running", lambda: True)
+    monkeypatch.setitem(
+        sys.modules,
+        "kicad_api.ipc_backend",
+        types.SimpleNamespace(IPCBackend=_FakeIPCBackend),
+    )
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.ipc_backend = _FakeIPCBackend()
+    iface.command_routes["get_backend_info"] = iface._handle_get_backend_info
+
+    result = iface.handle_command("get_backend_info", {})
+
+    assert result["backend"] == "ipc"
+    assert "real-time" in result["message"] or "realtime" in result["message"]
+    assert "recommendation" not in result
+
+
+def test_generic_swig_success_carries_recommendation_to_switch_to_ipc():
+    """Every successful SWIG-backed tool call should nudge the agent toward
+    IPC.  This is the persistent reminder the user explicitly asked for —
+    without it agents do not realize they're on a degraded backend until
+    they hit a missing tool."""
+    iface = _make_iface(
+        {
+            "get_project_info": lambda params: {
+                "success": True,
+                "project": {"name": "demo"},
+            }
+        },
+        use_ipc=False,
+    )
+
+    result = iface.handle_command("get_project_info", {})
+
+    assert result["_backend"] == "swig"
+    assert "launch_kicad_ui" in result["_recommendation"]
+
+
+def test_swig_recommendation_not_added_for_failed_results():
+    """The error is the signal on failure — don't bury it under a generic
+    recommendation that may not be relevant to the failure."""
+    iface = _make_iface(
+        {
+            "get_project_info": lambda params: {
+                "success": False,
+                "message": "no project open",
+            }
+        },
+        use_ipc=False,
+    )
+
+    result = iface.handle_command("get_project_info", {})
+
+    assert result["_backend"] == "swig"
+    assert "_recommendation" not in result
+
+
+def test_swig_recommendation_not_added_for_backend_meta_commands():
+    """get_backend_info has its own (richer) recommendation; the dispatcher
+    must not stomp on it with the generic stamp."""
+    iface = _make_iface(
+        {
+            "get_backend_info": lambda params: {
+                "success": True,
+                "backend": "swig",
+                "recommendation": "rich custom recommendation",
+            }
+        },
+        use_ipc=False,
+    )
+
+    result = iface.handle_command("get_backend_info", {})
+
+    assert result["_backend"] == "swig"
+    assert result["recommendation"] == "rich custom recommendation"
+    assert "_recommendation" not in result
+
+
+def test_swig_recommendation_not_added_when_already_on_ipc():
+    """IPC results don't need the nudge."""
+    iface = _make_iface(
+        {
+            "ipc_add_track": lambda params: {
+                "success": True,
+                "message": "Track added",
+                "realtime": True,
+            }
+        },
+        use_ipc=True,
+    )
+
+    result = iface.handle_command("ipc_add_track", {})
+
+    assert result["_backend"] == "ipc"
+    assert "_recommendation" not in result
+
+
+def test_create_project_default_auto_launches_kicad_ui(monkeypatch, tmp_path):
+    """Default behavior must launch KiCAD so the IPC backend can attach —
+    this is the flip the user asked for.  Previously create_project was
+    pure file I/O, which left the agent stuck on SWIG by default.
+
+    Critically: we must hand KiCAD the .kicad_pro FILE, not its parent
+    directory.  The previous version of this test stubbed
+    _project_path_from_filename with an identity lambda and masked the
+    fact that the real method returns p.parent — so production passed a
+    directory to `kicad <path>` and the project never actually opened.
+    This test now uses the real launch-file resolver and asserts on the
+    .kicad_pro path.
+    """
+    from handlers import project as project_handler
+
+    calls: Dict[str, Any] = {}
+    project_file = tmp_path / "demo.kicad_pro"
+    project_file.write_text("(kicad_project)\n", encoding="utf-8")
+    (tmp_path / "demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
+
+    def fake_check_and_launch(project_path, auto_launch=True):
+        calls["project_path"] = project_path
+        calls["auto_launch"] = auto_launch
+        return {
+            "running": True,
+            "launched": True,
+            "processes": [],
+            "message": "KiCAD launched successfully",
+        }
+
+    monkeypatch.setattr(project_handler, "check_and_launch_kicad", fake_check_and_launch)
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        create_project=lambda params: {
+            "success": True,
+            "project": {"path": str(project_file)},
+        }
+    )
+    # Use the REAL _project_path_from_filename so we test the production
+    # path, not a stub.  It returns the parent dir — which is fine for
+    # symbol library refresh, but the launcher must still get the file.
+    from kicad_interface import KiCADInterface
+
+    iface._project_path_from_filename = KiCADInterface._project_path_from_filename.__get__(iface)
+    iface._refresh_symbol_library_for_project = lambda p: None
+    iface._try_enable_ipc_backend = lambda force=False: True
+    # Make the mismatch check pass — IPC reports the expected board.
+    iface._current_board_path = lambda: str(tmp_path / "demo.kicad_pcb")
+
+    result = project_handler.handle_create_project(iface, {"path": str(tmp_path), "name": "demo"})
+
+    assert result["success"] is True
+    assert calls["auto_launch"] is True
+    # The .kicad_pro FILE must be passed to KiCAD, not the parent dir.
+    assert (
+        calls["project_path"] == project_file
+    ), f"KiCAD should be launched with the .kicad_pro file, got {calls['project_path']}"
+    assert result["kicadUi"]["attempted"] is True
+    assert result["kicadUi"]["launched"] is True
+    assert result["kicadUi"]["running"] is True
+    assert result["kicadUi"]["ipcAttached"] is True
+    assert result["kicadUi"]["projectMismatch"] is None
+
+
+def test_create_project_honors_explicit_auto_launch_false(monkeypatch, tmp_path):
+    """The opt-out must work without env vars — pure param control."""
+    import kicad_interface
+    from handlers import project as project_handler
+
+    monkeypatch.setattr(
+        project_handler,
+        "check_and_launch_kicad",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not launch")),
+    )
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        create_project=lambda params: {
+            "success": True,
+            "project": {"path": str(tmp_path / "demo.kicad_pro")},
+        }
+    )
+    iface._project_path_from_filename = lambda p: Path(p) if p else None
+    iface._refresh_symbol_library_for_project = lambda p: None
+
+    result = project_handler.handle_create_project(
+        iface, {"path": str(tmp_path), "name": "demo", "autoLaunch": False}
+    )
+
+    assert result["success"] is True
+    assert result["kicadUi"]["skipped"] is True
+    assert "autoLaunch=false" in result["kicadUi"]["reason"]
+
+
+def test_create_project_honors_env_opt_out(monkeypatch, tmp_path):
+    """Operators who set KICAD_AUTO_LAUNCH=false should not get launches."""
+    import kicad_interface
+    from handlers import project as project_handler
+
+    monkeypatch.setattr(
+        project_handler,
+        "check_and_launch_kicad",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not launch")),
+    )
+    monkeypatch.setenv("KICAD_AUTO_LAUNCH", "false")
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        create_project=lambda params: {
+            "success": True,
+            "project": {"path": str(tmp_path / "demo.kicad_pro")},
+        }
+    )
+    iface._project_path_from_filename = lambda p: Path(p) if p else None
+    iface._refresh_symbol_library_for_project = lambda p: None
+
+    result = project_handler.handle_create_project(iface, {"path": str(tmp_path), "name": "demo"})
+
+    assert result["kicadUi"]["skipped"] is True
+    assert "KICAD_AUTO_LAUNCH" in result["kicadUi"]["reason"]
+
+
+def test_open_project_launches_with_kicad_pro_file_not_parent_dir(monkeypatch, tmp_path):
+    """Regression for the directory-vs-file bug found in code review.
+
+    open_project passes the value from the result/params through
+    _project_path_from_filename (which returns the PARENT directory)
+    for symbol-library refresh, but the auto-launcher needs the
+    .kicad_pro FILE — otherwise KiCAD opens to a directory and the
+    project never actually loads in the UI.
+    """
+    from handlers import project as project_handler
+
+    calls: Dict[str, Any] = {}
+    project_file = tmp_path / "demo.kicad_pro"
+    project_file.write_text("(kicad_project)\n", encoding="utf-8")
+    (tmp_path / "demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
+
+    def fake_check_and_launch(project_path, auto_launch=True):
+        calls["project_path"] = project_path
+        return {
+            "running": True,
+            "launched": True,
+            "processes": [],
+            "message": "KiCAD launched successfully",
+        }
+
+    monkeypatch.setattr(project_handler, "check_and_launch_kicad", fake_check_and_launch)
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        open_project=lambda params: {
+            "success": True,
+            "project": {"path": str(project_file)},
+        }
+    )
+    from kicad_interface import KiCADInterface
+
+    iface._project_path_from_filename = KiCADInterface._project_path_from_filename.__get__(iface)
+    iface._refresh_symbol_library_for_project = lambda p: None
+    iface._try_enable_ipc_backend = lambda force=False: False  # IPC attach fails, fine.
+
+    result = project_handler.handle_open_project(iface, {"filename": str(project_file)})
+
+    assert result["success"] is True
+    assert (
+        calls["project_path"] == project_file
+    ), f"open_project should launch with the .kicad_pro file, got {calls['project_path']}"
+
+
+def test_autolaunch_detects_cross_project_ipc_mismatch_and_disengages(monkeypatch, tmp_path):
+    """If KiCAD already has a DIFFERENT project open, IPC attaching to it
+    would silently route this session's mutations to the wrong board.
+    The auto-launch must detect the mismatch, tear the IPC attach back
+    down, and surface a loud warning rather than corrupt user data."""
+    from handlers import project as project_handler
+
+    project_file = tmp_path / "demoB.kicad_pro"
+    project_file.write_text("(kicad_project)\n", encoding="utf-8")
+    other_pcb = tmp_path / "demoA.kicad_pcb"
+    other_pcb.write_text("(kicad_pcb)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        project_handler,
+        "check_and_launch_kicad",
+        lambda *a, **k: {
+            "running": True,
+            "launched": False,  # already running
+            "processes": [],
+            "message": "KiCAD is already running",
+        },
+    )
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        open_project=lambda params: {
+            "success": True,
+            "project": {"path": str(project_file)},
+        }
+    )
+    from kicad_interface import KiCADInterface
+
+    iface._project_path_from_filename = KiCADInterface._project_path_from_filename.__get__(iface)
+    iface._refresh_symbol_library_for_project = lambda p: None
+    # Simulate a successful IPC attach...
+    attach_state = {"ipc_attached": False}
+
+    def fake_attach(force=False):
+        iface.use_ipc = True
+        iface.ipc_board_api = object()
+        attach_state["ipc_attached"] = True
+        return True
+
+    iface._try_enable_ipc_backend = fake_attach
+    # ...but IPC reports KiCAD has demoA open, not demoB.
+    iface._current_board_path = lambda: str(other_pcb)
+
+    result = project_handler.handle_open_project(iface, {"filename": str(project_file)})
+
+    assert result["success"] is True
+    ui = result["kicadUi"]
+    # IPC must be disengaged so the dispatcher falls back to SWIG.
+    assert ui["ipcAttached"] is False
+    assert iface.use_ipc is False
+    assert iface.ipc_board_api is None
+    assert ui["projectMismatch"] is not None
+    assert ui["projectMismatch"]["ipcBoardPath"] == str(other_pcb)
+    assert "demoB.kicad_pcb" in ui["projectMismatch"]["expectedBoardPath"]
+    assert ui["warning"] and "DIFFERENT project" in ui["warning"]
+
+
+def test_create_project_skips_launch_on_failed_create(monkeypatch, tmp_path):
+    """If project creation failed, don't launch the UI to a non-existent project."""
+    import kicad_interface
+    from handlers import project as project_handler
+
+    monkeypatch.setattr(
+        project_handler,
+        "check_and_launch_kicad",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not launch")),
+    )
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        create_project=lambda params: {"success": False, "message": "bad path"}
+    )
+    iface._project_path_from_filename = lambda p: Path(p) if p else None
+    iface._refresh_symbol_library_for_project = lambda p: None
+
+    result = project_handler.handle_create_project(iface, {"path": str(tmp_path), "name": "demo"})
+
+    assert result["success"] is False
+    assert "kicadUi" not in result

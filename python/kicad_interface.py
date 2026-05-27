@@ -686,9 +686,7 @@ class KiCADInterface:
             logger.info(f"Runtime IPC connection not available: {e}")
             return False
 
-    def ensure_ipc(
-        self, *, allow_launch: bool = True, timeout_s: float = 30.0
-    ) -> Tuple[bool, str]:
+    def ensure_ipc(self, *, allow_launch: bool = True, timeout_s: float = 30.0) -> Tuple[bool, str]:
         """Make IPC available for the calling handler, auto-launching KiCAD if needed.
 
         Sequence:
@@ -824,14 +822,18 @@ class KiCADInterface:
             return layer_name[3:].replace("_", ".")
         return layer_name
 
+    # Backend/state meta-tools: they describe the backend themselves, so the
+    # generic SWIG _recommendation stamp would just duplicate their own message.
+    _BACKEND_META_COMMANDS: Tuple[str, ...] = (
+        "get_backend_info",
+        "get_backend_state",
+        "check_kicad_ui",
+        "launch_kicad_ui",
+    )
+
     def _result_backend_for_command(self, command: str, result: Dict[str, Any]) -> str:
         """Return the backend label for a command result."""
-        if command in {
-            "get_backend_info",
-            "get_backend_state",
-            "check_kicad_ui",
-            "launch_kicad_ui",
-        }:
+        if command in self._BACKEND_META_COMMANDS:
             return result.get("backend", "ipc" if self.use_ipc else "swig")
 
         if command in self.IPC_DIRECT_COMMANDS:
@@ -886,6 +888,25 @@ class KiCADInterface:
                     result["_realtime"] = bool(
                         backend == "ipc" and result.get("realtime", self.use_ipc)
                     )
+                    # Persistent nudge: every SWIG-backed success tells the
+                    # agent the one action that unlocks IPC.  Skip on the
+                    # backend meta-tools (they already say it themselves)
+                    # and on failures (the error is the signal).  Use the
+                    # same truthy `.get(..., False)` shape as the autosave
+                    # guard four lines below so both branches agree on what
+                    # "successful" means.
+                    if (
+                        backend == "swig"
+                        and command not in self._BACKEND_META_COMMANDS
+                        and result.get("success", False)
+                        and "_recommendation" not in result
+                    ):
+                        result["_recommendation"] = (
+                            "On SWIG backend — call launch_kicad_ui for "
+                            "realtime UI sync, transactions, and IPC-only "
+                            "tools. Without it, changes won't appear in "
+                            "KiCAD until the file is reloaded."
+                        )
 
                 # Update board reference if command was successful
                 if result.get("success", False):
@@ -1056,9 +1077,7 @@ class KiCADInterface:
         board.Save(board_path)
         self._record_board_signature(board_path)
 
-    def _add_copper_pour_with_optional_refill(
-        self, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _add_copper_pour_with_optional_refill(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Add a copper pour, then optionally refill so gerber export captures it.
 
         Without refill, the .gbr layer file is generated from an unfilled zone

@@ -9,12 +9,18 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
   // Create project tool
   server.tool(
     "create_project",
-    "Create a new KiCAD project",
+    "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (unlocks realtime sync + transactions). Pass autoLaunch=false to skip.",
     {
       path: z.string().describe("Project directory path"),
       name: z.string().describe("Project name"),
+      autoLaunch: z
+        .boolean()
+        .optional()
+        .describe(
+          "Launch the KiCAD UI for this project after creation so the IPC backend can attach. Defaults to true. Set false for headless / CI runs.",
+        ),
     },
-    async (args: { path: string; name: string }) => {
+    async (args: { path: string; name: string; autoLaunch?: boolean }) => {
       const result = await callKicadScript("create_project", args);
       return {
         content: [
@@ -30,11 +36,17 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
   // Open project tool
   server.tool(
     "open_project",
-    "Open an existing KiCAD project",
+    "Open an existing KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (unlocks realtime sync + transactions). Pass autoLaunch=false to skip.",
     {
       filename: z.string().describe("Path to .kicad_pro or .kicad_pcb file"),
+      autoLaunch: z
+        .boolean()
+        .optional()
+        .describe(
+          "Launch the KiCAD UI for this project after opening so the IPC backend can attach. Defaults to true. Set false for headless / CI runs.",
+        ),
     },
-    async (args: { filename: string }) => {
+    async (args: { filename: string; autoLaunch?: boolean }) => {
       const result = await callKicadScript("open_project", args);
       return {
         content: [

@@ -74,21 +74,39 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
 
 
 def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Get information about the current backend (IPC vs. SWIG, version)."""
+    """Get information about the current backend (IPC vs. SWIG, version).
+
+    On SWIG the response is *prescriptive*, not descriptive — the agent
+    gets a concrete next step (`launch_kicad_ui`) plus the concrete
+    capabilities it's giving up by staying on SWIG, so it doesn't
+    discover the gap through 8-deep trial-and-error.
+    """
     if KiCADProcessManager.is_running():
         iface._try_enable_ipc_backend()
     status = iface._backend_status()
     ipc_backend = getattr(iface, "ipc_backend", None)
-    return {
+    response: Dict[str, Any] = {
         "success": True,
         **status,
         "version": ipc_backend.get_version() if ipc_backend else "N/A",
-        "message": (
-            "Using IPC backend with real-time UI sync"
-            if status["backend"] == "ipc"
-            else "Using SWIG backend (requires manual reload)"
-        ),
     }
+    if status["backend"] == "ipc":
+        response["message"] = "Using IPC backend with real-time UI sync"
+    else:
+        unavailable_count = len(status.get("unavailable_tools", []))
+        response["message"] = (
+            "On SWIG backend — call launch_kicad_ui to enable IPC "
+            "(unlocks realtime sync, transactions, selection, and "
+            f"{unavailable_count} IPC-only tools)"
+        )
+        response["recommendation"] = (
+            "Call launch_kicad_ui to switch to the IPC backend. Without it "
+            "you lose: realtime UI sync (your changes won't appear until "
+            "KiCAD reloads the file), atomic transactions (no rollback on "
+            "error), the selection API, and "
+            f"{unavailable_count} IPC-only tools (see unavailable_tools)."
+        )
+    return response
 
 
 def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,10 +122,7 @@ def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
         if not ok:
             return {
                 "success": False,
-                "message": (
-                    "run_action requires the IPC backend. "
-                    + reason
-                ),
+                "message": ("run_action requires the IPC backend. " + reason),
             }
     action = params.get("action")
     if not isinstance(action, str) or not action:
