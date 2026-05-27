@@ -1474,7 +1474,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Run Electrical Rules Check (ERC)
   server.tool(
     "run_erc",
-    "Runs the KiCAD Electrical Rules Check (ERC) on a schematic and returns all violations. Use after wiring to verify the schematic before generating a netlist.",
+    "Runs the KiCAD Electrical Rules Check (ERC) on a schematic and returns all violations.  Use after wiring to verify the schematic before generating a netlist.  Common gotcha: KiCad's ERC requires every power-input pin (e.g. NE555 GND/VCC, MCU VDD) to be driven by either an Output Power pin or a power:PWR_FLAG symbol — power LABELS alone (GND / VCC / +3V3 wires) are not enough.  The response's summary.recommendations[] field surfaces an actionable 'add PWR_FLAG' entry whenever those false-positive errors are detected, including the exact net names that need flagging.  summary.real_errors counts ONLY non-PWR_FLAG issues so the headline number reflects genuine wiring problems.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
     },
@@ -1489,6 +1489,17 @@ edit_schematic_component and set its value to an empty string.`,
             `  Errors: ${s.error ?? 0}  Warnings: ${s.warning ?? 0}  Info: ${s.info ?? 0}`,
           );
         }
+        const recs: any[] = result.summary?.recommendations || [];
+        if (recs.length > 0) {
+          lines.push("");
+          lines.push("Recommendations:");
+          recs.forEach((r: any) => {
+            const netList = (r.nets || []).join(", ");
+            lines.push(`  • ${r.message}`);
+            if (netList) lines.push(`    Nets needing the fix: ${netList}`);
+            lines.push(`    ${r.action}`);
+          });
+        }
         if (violations.length > 0) {
           lines.push("");
           violations.slice(0, 30).forEach((v: any, i: number) => {
@@ -1496,7 +1507,8 @@ edit_schematic_component and set its value to an empty string.`,
               v.location && v.location.x !== undefined
                 ? ` @ (${v.location.x}, ${v.location.y})`
                 : "";
-            lines.push(`${i + 1}. [${v.severity}] ${v.message}${loc}`);
+            const fp = v.likely_false_positive ? " [likely PWR_FLAG FP]" : "";
+            lines.push(`${i + 1}. [${v.severity}]${fp} ${v.message}${loc}`);
           });
           if (violations.length > 30) {
             lines.push(`... and ${violations.length - 30} more`);

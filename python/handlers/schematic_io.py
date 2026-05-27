@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -107,6 +108,30 @@ def _is_power_not_driven(vtype: str, vmsg: str) -> bool:
         or "power_pin_not_driven" in haystack
         or ("power" in haystack and "not driven" in haystack)
     )
+
+
+_NET_FROM_DESCRIPTION = re.compile(r"on net\s+([A-Za-z_+\-][\w+\-/]*)", re.IGNORECASE)
+
+
+def _extract_net_from_violation(vmsg: str, items: Optional[list] = None) -> Optional[str]:
+    """Best-effort net-name extraction from a pin_not_driven violation.
+
+    kicad-cli's description usually contains "on net <NAME>"; per-item
+    fields sometimes carry the net under ``netname`` / ``net``.  Returns
+    the first match or None.
+    """
+    if vmsg:
+        m = _NET_FROM_DESCRIPTION.search(vmsg)
+        if m:
+            return m.group(1)
+    for item in items or ():
+        if not isinstance(item, dict):
+            continue
+        for key in ("netname", "net", "net_name"):
+            val = item.get(key)
+            if isinstance(val, str) and val:
+                return val
+    return None
 
 
 def _violation_mentions_power_label(
@@ -528,6 +553,12 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # this multiplier when kicad upstream fixes the writer.
             _ERC_POS_TO_MM = 100.0
 
+            # Collect net names that triggered PWR_FLAG-fixable violations so
+            # the response can surface a single actionable "add PWR_FLAG"
+            # recommendation instead of leaving the agent to interpret each
+            # tagged violation individually.
+            pwrflag_target_nets: set = set()
+
             for v in all_violations:
                 vseverity = v.get("severity", "error")
                 vtype = v.get("type", "unknown")
@@ -555,11 +586,53 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                         "kicad-cli ERC expects a PWR_FLAG symbol on power "
                         "inputs even when labels make the netlist correct."
                     )
+                    extracted_net = _extract_net_from_violation(vmsg, items)
+                    if extracted_net:
+                        annotated["net"] = extracted_net
+                        pwrflag_target_nets.add(extracted_net)
                 violations.append(annotated)
                 if vseverity in severity_counts:
                     severity_counts[vseverity] += 1
 
             tagged_false_positives = sum(1 for v in violations if v.get("likely_false_positive"))
+
+            # Build a single structured recommendation when PWR_FLAG-fixable
+            # violations are present.  The agent gets the affected nets and
+            # a concrete next step instead of having to interpret the
+            # per-violation `reason` strings.  Empty list when there's
+            # nothing to recommend.
+            recommendations: List[Dict[str, Any]] = []
+            if tagged_false_positives > 0:
+                # Fall back to the labels we discovered in the schematic if
+                # extraction didn't produce a net list (older kicad-cli
+                # versions phrase the message differently).
+                nets_for_action = (
+                    sorted(pwrflag_target_nets)
+                    if pwrflag_target_nets
+                    else sorted(name for name in power_label_names if name)
+                )
+                recommendations.append(
+                    {
+                        "kind": "add_pwr_flag",
+                        "nets": nets_for_action,
+                        "message": (
+                            "kicad-cli ERC requires an explicit PWR_FLAG symbol "
+                            "on every power-input net even when a power label "
+                            "(GND / VCC / +3V3 ...) makes the netlist correct. "
+                            f"{tagged_false_positives} violation(s) here are "
+                            "this exact false-positive class."
+                        ),
+                        "action": (
+                            "Add one power:PWR_FLAG symbol per net listed in "
+                            "'nets', wire each flag to its rail, and re-run "
+                            "run_erc.  Example tool call: "
+                            "add_schematic_component(schematicPath=..., "
+                            "component={library:'power', type:'PWR_FLAG', "
+                            "reference:'#FLG?', x:..., y:...}) then "
+                            "add_schematic_wire to connect it to the net."
+                        ),
+                    }
+                )
             # Demote tagged FPs out of the headline severity buckets so
             # `by_severity.error` reflects real errors only — otherwise
             # the agent sees "2 errors" even when both are pedantic
@@ -595,6 +668,10 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     "raw_by_severity": severity_counts,
                     "likely_false_positives": tagged_false_positives,
                     "real_errors": real_by_severity.get("error", 0),
+                    # Top-level remediation hints: one entry per known
+                    # fix-class.  Currently only PWR_FLAG.  Empty list
+                    # means "no auto-actionable suggestion".
+                    "recommendations": recommendations,
                 },
                 "violations": violations,
             }
