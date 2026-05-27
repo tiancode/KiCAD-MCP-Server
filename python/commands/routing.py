@@ -177,15 +177,17 @@ class RoutingCommands:
                 and start_layer != end_layer
             )
 
-            # Endpoint pads to exclude from obstacle reporting.  Identify by
-            # (ref, pad_num) — `id(pad)` of the SWIG proxy does NOT work
-            # because every fp.Pads() iteration creates fresh Python proxies
-            # for the same underlying C++ pads, so the IDs we collected from
-            # find_pad would never match the IDs the obstacle scanner sees.
-            # That's why every trace previously reported its own start/end
-            # pads as obstacles, drowning out the real crossings the user
-            # actually needed to see.
-            endpoint_keys = {(from_ref, from_pad), (to_ref, to_pad)}
+            # Endpoint pads are excluded from obstacle reporting by
+            # (ref, pad_num).  `id(pad)` of the SWIG proxy does NOT
+            # work because every fp.Pads() iteration creates fresh
+            # Python proxies for the same underlying C++ pads, so the
+            # IDs we collected from find_pad would never match the IDs
+            # the obstacle scanner sees — that's why every trace
+            # previously reported its own start/end pads as obstacles,
+            # drowning out the real crossings the user actually needed
+            # to see.  The via and same-layer branches build their own
+            # exclude sets because the via case excludes only ONE
+            # endpoint from each leg.
 
             if needs_via:
                 # Place via directly below the start pad (same X).
@@ -250,7 +252,9 @@ class RoutingCommands:
                 # Same layer — direct trace.  Exclude both endpoints; only
                 # genuinely-crossed third-party pads remain in the warning.
                 obstacle_warnings = self._pads_intersecting_segment(
-                    start_pos, end_pos, exclude_pad_keys=endpoint_keys
+                    start_pos,
+                    end_pos,
+                    exclude_pad_keys={(from_ref, from_pad), (to_ref, to_pad)},
                 )
                 result = self.route_trace(
                     {
@@ -357,6 +361,13 @@ class RoutingCommands:
                 ref = fp.GetReference()
                 for pad in fp.Pads():
                     pad_num = str(pad.GetNumber())
+                    if not pad_num:
+                        # Unnumbered pads (mounting holes, fiducials,
+                        # NPTH) have no electrical role — crossing
+                        # them isn't a routing problem, and the
+                        # generated warning string `"MH1."` (trailing
+                        # dot, empty number) is ugly UX besides.
+                        continue
                     if (ref, pad_num) in exclude:
                         continue
                     try:

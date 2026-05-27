@@ -134,10 +134,12 @@ class TestPadsIntersectingSegment:
         assert len(warnings) == 1
         assert "D1.1" in warnings[0]
 
-    def test_id_based_exclusion_would_have_failed_here(self):
-        """Demonstrates the failure mode of the old code by NOT
-        excluding anything — should report the start pad too.  This
-        proves the test setup actually exercises the bug scenario."""
+    def test_endpoint_pads_appear_when_no_exclude_given(self):
+        """Sanity-check that the fixture actually exercises the bug
+        scenario: without exclusion, both endpoint pads ARE reported.
+        If this test ever started returning [] the SWIG-churn fixture
+        in _stub_footprint would be silently broken and the
+        excludes-endpoints test above would pass for the wrong reason."""
         r1 = _stub_footprint("R1", [("1", (0.0, 0.0, 2.0, 2.0))])
         r2 = _stub_footprint("R2", [("1", (20.0, 0.0, 22.0, 2.0))])
         board = _stub_board([r1, r2])
@@ -164,3 +166,160 @@ class TestPadsIntersectingSegment:
         )
 
         assert warnings == []  # segment doesn't intersect R1.1
+
+    def test_unnumbered_pads_are_skipped(self):
+        """Pads with empty GetNumber() (mounting holes, fiducials, NPTH)
+        have no electrical role — they must NOT appear in the warning
+        list even when geometrically in the segment's path.  Previously
+        the warning text rendered as `"MH1."` (trailing dot, empty
+        number) which agents wouldn't recognise as a pad."""
+        r1 = _stub_footprint("R1", [("1", (0.0, 0.0, 2.0, 2.0))])
+        # MH1 has an unnumbered mounting pad geometrically in the path.
+        mh1 = _stub_footprint("MH1", [("", (9.0, 0.0, 11.0, 2.0))])
+        board = _stub_board([r1, mh1])
+        cmds = _make_routing_commands(board)
+
+        warnings = cmds._pads_intersecting_segment(
+            MagicMock(x=1.0, y=1.0),
+            MagicMock(x=12.0, y=1.0),
+            exclude_pad_keys={("R1", "1")},
+        )
+
+        assert warnings == [], (
+            f"unnumbered (mechanical) pads must be filtered from "
+            f"obstacle warnings; got {warnings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# route_pad_to_pad integration — verifies the new per-leg obstacle check
+# and the obstacleCount field on the response.
+# ---------------------------------------------------------------------------
+
+
+def _stub_pad_for_route(
+    ref: str,
+    num: str,
+    *,
+    pos: tuple[float, float],
+    netname: str = "N$1",
+) -> MagicMock:
+    """A pad with the methods route_pad_to_pad reads at the
+    coarse-grained level (position, netname, number).  Returned from a
+    fresh-each-call Pads() iterator to match SWIG behaviour."""
+    pad = MagicMock(name=f"{ref}.{num}")
+    pad.GetNumber.return_value = num
+    pad.GetNetname.return_value = netname
+    pad.GetPosition.return_value = MagicMock(x=pos[0], y=pos[1])
+    bb = MagicMock()
+    bb.GetLeft.return_value = pos[0] - 1
+    bb.GetTop.return_value = pos[1] - 1
+    bb.GetRight.return_value = pos[0] + 1
+    bb.GetBottom.return_value = pos[1] + 1
+    pad.GetBoundingBox.return_value = bb
+    return pad
+
+
+def _stub_footprint_for_route(
+    ref: str,
+    layer_id: int,
+    pads_spec: list[tuple[str, tuple[float, float]]],
+) -> MagicMock:
+    fp = MagicMock(name=f"fp_{ref}")
+    fp.GetReference.return_value = ref
+    fp.GetLayer.return_value = layer_id
+
+    def fresh_pads():
+        return [_stub_pad_for_route(ref, num, pos=pos) for num, pos in pads_spec]
+
+    fp.Pads.side_effect = fresh_pads
+    return fp
+
+
+@pytest.mark.unit
+class TestRoutePadToPadObstacleResponse:
+    def _make_cmds(self, footprints: list[MagicMock]) -> Any:
+        from commands.routing import RoutingCommands
+
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = footprints
+
+        # Layer id → name lookup (0=F.Cu, 31=B.Cu in real pcbnew, but
+        # any consistent mapping works for the stub).
+        def layer_name(layer_id):
+            return {0: "F.Cu", 31: "B.Cu"}.get(layer_id, "F.Cu")
+
+        board.GetLayerName.side_effect = layer_name
+
+        cmds = RoutingCommands.__new__(RoutingCommands)
+        cmds.board = board
+        # Bypass netclass lookup so we don't have to mock GetDesignSettings.
+        cmds._netclass_track_width_mm = lambda pad: 0.25  # type: ignore[method-assign]
+        # Stub the trace/via writers — we only care about the obstacle
+        # bookkeeping, not the actual board mutations.
+        cmds.route_trace = lambda params: {"success": True}  # type: ignore[method-assign]
+        cmds.add_via = lambda params: {"success": True}  # type: ignore[method-assign]
+        return cmds
+
+    def test_response_obstacle_count_matches_warnings_length(self):
+        """The obstacleCount field promised in the tool description
+        must equal len(obstaclesCrossed); the agent uses the count to
+        decide whether to bother scanning the array."""
+        # R1.1 → R2.1 on same layer, with D1.1 in the path.
+        r1 = _stub_footprint_for_route("R1", 0, [("1", (0.0, 0.0))])
+        r2 = _stub_footprint_for_route("R2", 0, [("1", (20.0, 0.0))])
+        d1 = _stub_footprint_for_route("D1", 0, [("1", (10.0, 0.0))])
+        cmds = self._make_cmds([r1, r2, d1])
+
+        result = cmds.route_pad_to_pad(
+            {"fromRef": "R1", "fromPad": "1", "toRef": "R2", "toPad": "1"}
+        )
+
+        assert result["success"] is True
+        assert "obstacleCount" in result
+        assert result["obstacleCount"] == len(result["obstaclesCrossed"])
+        assert result["obstacleCount"] >= 1
+        # D1.1 must show up; neither R1.1 nor R2.1 (the endpoints) can.
+        joined = " ".join(result["obstaclesCrossed"])
+        assert "D1.1" in joined
+        assert "R1.1" not in joined
+        assert "R2.1" not in joined
+
+    def test_via_case_runs_obstacle_scanner_per_leg(self, monkeypatch):
+        """Cross-layer route → the scanner must be called TWICE (once
+        per actual leg), each time excluding ONLY the endpoint pad on
+        that leg.  This contract is what makes the per-leg check
+        correct: leg 1's endpoint is start_pad (on start_layer), leg
+        2's is end_pad (on end_layer); excluding both from both legs
+        would silently hide a real "trace passes through start pad on
+        the OTHER leg" obstacle."""
+        # U1 on F.Cu, U2 on B.Cu → cross-layer → via inserted.
+        u1 = _stub_footprint_for_route("U1", 0, [("1", (0.0, 0.0))])
+        u2 = _stub_footprint_for_route("U2", 31, [("1", (0.0, 20.0))])
+        cmds = self._make_cmds([u1, u2])
+
+        calls: list[tuple[Any, Any, set]] = []
+
+        def spy(start, end, *, exclude_pad_keys=None):
+            calls.append((start, end, exclude_pad_keys or set()))
+            return []
+
+        cmds._pads_intersecting_segment = spy  # type: ignore[method-assign]
+
+        result = cmds.route_pad_to_pad(
+            {"fromRef": "U1", "fromPad": "1", "toRef": "U2", "toPad": "1"}
+        )
+
+        assert result["success"] is True
+        assert result.get("via_added") is True
+        assert (
+            len(calls) == 2
+        ), f"via case must invoke the obstacle scanner once per leg; got {len(calls)}"
+        # Leg 1: start_pad → via.  Excludes ONLY (U1, 1).
+        assert calls[0][2] == {
+            ("U1", "1")
+        }, f"leg 1 must exclude only the start pad; got {calls[0][2]}"
+        # Leg 2: via → end_pad.  Excludes ONLY (U2, 1).
+        assert calls[1][2] == {
+            ("U2", "1")
+        }, f"leg 2 must exclude only the end pad; got {calls[1][2]}"
