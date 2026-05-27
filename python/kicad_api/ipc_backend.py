@@ -1825,6 +1825,206 @@ class IPCBoardAPI(BoardAPI):
             return {"success": False, "message": str(e)}
 
     # ------------------------------------------------------------------
+    # Board metadata: origins + title block
+    # ------------------------------------------------------------------
+    def get_origin(self, origin_type: str = "drill", unit: str = "mm") -> Dict[str, Any]:
+        """Return the requested board origin in user units.
+
+        ``origin_type`` is ``"grid"`` (the user grid origin) or
+        ``"drill"`` (the drill/place a.k.a. aux origin — what Gerber and
+        pick-and-place files use as their coordinate zero).
+        ``unit`` is ``"mm"`` or ``"inch"``; anything else is rejected
+        (silent fallback would mis-label inch values as mm or vice versa).
+        """
+        try:
+            from kipy.util.units import to_mm
+
+            self._require_unit(unit)
+            board = self._get_board()
+            type_int = self._origin_name_to_enum(origin_type)
+            origin = board.get_origin(type_int)
+            x_nm = int(origin.x)
+            y_nm = int(origin.y)
+            if unit == "inch":
+                x = x_nm / INCH_TO_NM
+                y = y_nm / INCH_TO_NM
+            else:
+                x = to_mm(x_nm)
+                y = to_mm(y_nm)
+            return {
+                "success": True,
+                "type": origin_type,
+                "x": x,
+                "y": y,
+                "unit": unit,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get origin: {e}")
+            return {"success": False, "message": str(e)}
+
+    def set_origin(
+        self,
+        origin_type: str,
+        x: float,
+        y: float,
+        unit: str = "mm",
+    ) -> Dict[str, Any]:
+        """Set the grid or drill/place origin to ``(x, y)`` in user units.
+
+        ``unit`` must be ``"mm"`` or ``"inch"`` — unknown units are
+        rejected rather than silently treated as mm.
+        """
+        try:
+            from kipy.geometry import Vector2
+            from kipy.util.units import from_mm
+
+            self._require_unit(unit)
+            board = self._get_board()
+            type_int = self._origin_name_to_enum(origin_type)
+            if unit == "inch":
+                x_nm = int(x * INCH_TO_NM)
+                y_nm = int(y * INCH_TO_NM)
+            else:
+                x_nm = from_mm(x)
+                y_nm = from_mm(y)
+            board.set_origin(type_int, Vector2.from_xy(x_nm, y_nm))
+            self._notify(
+                "origin_set",
+                {"type": origin_type, "x": x, "y": y, "unit": unit},
+            )
+            return {
+                "success": True,
+                "type": origin_type,
+                "x": x,
+                "y": y,
+                "unit": unit,
+            }
+        except Exception as e:
+            logger.error(f"Failed to set origin: {e}")
+            return {"success": False, "message": str(e)}
+
+    def get_title_block_info(self) -> Dict[str, Any]:
+        """Return the board title block — title / date / revision / company /
+        comments (a dict keyed 1..9, KiCad's fixed nine comment slots)."""
+        try:
+            board = self._get_board()
+            tb = board.get_title_block_info()
+            return {
+                "success": True,
+                "title": tb.title,
+                "date": tb.date,
+                "revision": tb.revision,
+                "company": tb.company,
+                # Materialise as a string-keyed dict so it survives JSON
+                # round-trips without integer-key coercion surprises.
+                "comments": {str(k): v for k, v in tb.comments.items()},
+            }
+        except Exception as e:
+            logger.error(f"Failed to get title block: {e}")
+            return {"success": False, "message": str(e)}
+
+    def set_title_block_info(
+        self,
+        title: Optional[str] = None,
+        date: Optional[str] = None,
+        revision: Optional[str] = None,
+        company: Optional[str] = None,
+        comments: Optional[Dict[int, str]] = None,
+    ) -> Dict[str, Any]:
+        """Update title block — any field left ``None`` is preserved.
+
+        ``comments`` is a partial dict ``{slot: text}`` where ``slot`` is
+        1..9.  Only listed slots are overwritten; the rest stay put.  Pass
+        an explicit empty string to clear a slot.
+
+        kipy's ``set_title_block_info`` replaces the whole block, so we
+        fetch the current one, merge the incoming partial update, and send
+        the result back.  This makes partial updates safe — without the
+        get-merge-set dance a single missing field would erase the rest.
+        """
+        try:
+            from kipy.common_types import TitleBlockInfo
+
+            board = self._get_board()
+            current = board.get_title_block_info()
+            merged = TitleBlockInfo()
+            merged.title = title if title is not None else current.title
+            merged.date = date if date is not None else current.date
+            merged.revision = revision if revision is not None else current.revision
+            merged.company = company if company is not None else current.company
+            # Comments are read-only via the wrapper's .comments property
+            # (it constructs a fresh dict each call), so write through the
+            # proto fields comment1..comment9 directly.  Source-of-truth
+            # for unchanged slots is the *current* board state, not the
+            # default-zero proto.
+            for idx in range(1, 10):
+                field = f"comment{idx}"
+                setattr(merged._proto, field, getattr(current._proto, field))
+            if comments:
+                for k, v in comments.items():
+                    try:
+                        slot = int(k)
+                    except (TypeError, ValueError):
+                        logger.warning(f"Ignoring non-integer comment slot {k!r}")
+                        continue
+                    if 1 <= slot <= 9:
+                        setattr(merged._proto, f"comment{slot}", str(v))
+                    else:
+                        logger.warning(
+                            f"Comment slot {slot} out of range 1..9; ignored"
+                        )
+            board.set_title_block_info(merged)
+            self._notify(
+                "title_block_set",
+                {
+                    "title": merged.title,
+                    "date": merged.date,
+                    "revision": merged.revision,
+                    "company": merged.company,
+                },
+            )
+            return {
+                "success": True,
+                "title": merged.title,
+                "date": merged.date,
+                "revision": merged.revision,
+                "company": merged.company,
+                "comments": {str(k): v for k, v in merged.comments.items()},
+            }
+        except Exception as e:
+            logger.error(f"Failed to set title block: {e}")
+            return {"success": False, "message": str(e)}
+
+    @staticmethod
+    def _require_unit(unit: str) -> None:
+        """Reject any unit other than ``mm``/``inch``. Silent fallback would
+        let a ``unit="mil"`` request walk through the mm code path and label
+        the result as ``mil`` while the math used mm — wrong by 25.4×."""
+        if unit not in ("mm", "inch"):
+            raise ValueError(
+                f"Unknown unit {unit!r}; expected 'mm' or 'inch'"
+            )
+
+    @staticmethod
+    def _origin_name_to_enum(name: str) -> int:
+        """Resolve ``"grid"`` / ``"drill"`` / ``"aux"`` (alias for drill) to
+        the ``BoardOriginType`` enum value.  Raises ``ValueError`` for
+        anything else so callers see a clean error rather than silently
+        falling back to ``BOT_UNKNOWN`` which kipy rejects."""
+        from kipy.proto.board.board_commands_pb2 import BoardOriginType
+
+        canonical = name.strip().lower()
+        # "aux" is what the KiCad UI labels the drill/place origin as in
+        # plot/export dialogs — accept it as a synonym.
+        if canonical in ("drill", "aux", "drill/place"):
+            return BoardOriginType.BOT_DRILL
+        if canonical == "grid":
+            return BoardOriginType.BOT_GRID
+        raise ValueError(
+            f"Unknown origin type {name!r}; expected 'grid', 'drill', or 'aux'"
+        )
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
     @staticmethod

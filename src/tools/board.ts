@@ -460,4 +460,85 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       }
     },
   );
+
+  // ------------------------------------------------------
+  // Board metadata: origins + title block (IPC-only)
+  //
+  // Drill/place origin matters for Gerber + PnP coordinate alignment —
+  // without setting it, fab files come out relative to (0,0) of the
+  // KiCad page, which rarely matches what the fab house expects.
+  // Title block is what shows up on the printed PDF: company / rev /
+  // date / nine free-form comment slots.
+  // ------------------------------------------------------
+  const passthrough =
+    (command: string) =>
+    async (args: Record<string, unknown> = {}) => {
+      const result = await callKicadScript(command, args);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    };
+
+  const originTypeSchema = z
+    .enum(["grid", "drill", "aux"])
+    .describe(
+      "'grid' = user grid origin; 'drill' (or 'aux') = drill/place origin used by Gerber and pick-and-place files.",
+    );
+
+  server.tool(
+    "get_origin",
+    "Return the board's grid or drill/place origin (IPC-only). The drill origin is what Gerber and pick-and-place exports use as their coordinate zero — get it wrong and the fab house gets coordinates shifted by the page margin.",
+    {
+      type: originTypeSchema.optional().describe("Default 'drill'."),
+      unit: z.enum(["mm", "inch"]).optional().describe("Coordinate unit (default mm)."),
+    },
+    passthrough("get_origin"),
+  );
+
+  // `position` is required at the schema level so MCP clients can't
+  // accidentally call set_origin with no coordinate and snap the drill
+  // origin to (0, 0) — which would silently invalidate every Gerber/PnP
+  // file the user exports next. The backend also rejects missing coords
+  // as a second line of defence for non-schema callers.
+  server.tool(
+    "set_origin",
+    "Move the board's grid or drill/place origin (IPC-only). Set the drill origin before exporting Gerber / PnP files so fab coordinates align with your reference point (typically a board corner or fiducial). Coordinates are required — calling with no position will be rejected to prevent accidentally snapping to (0,0).",
+    {
+      type: originTypeSchema,
+      position: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "inch"]).optional(),
+        })
+        .describe("Target coordinate in mm (default) or inch."),
+    },
+    passthrough("set_origin"),
+  );
+
+  server.tool(
+    "get_title_block_info",
+    "Read the board's title block — title, date, revision, company, and the nine free-form comment slots that appear on plotted PDF / drawing-sheet output (IPC-only).",
+    {},
+    passthrough("get_title_block_info"),
+  );
+
+  server.tool(
+    "set_title_block_info",
+    "Partial-update the board's title block (IPC-only). Any omitted field is preserved at its current value; pass an explicit empty string to clear a field/slot. `comments` accepts {'1': 'text', '5': 'more'} (slots 1-9) or a positional list ['a','b'] (index 0 → slot 1).",
+    {
+      title: z.string().optional().describe("Drawing title."),
+      date: z.string().optional().describe("Date string (free-form — KiCad doesn't parse it)."),
+      revision: z.string().optional().describe("Revision (e.g. 'A', 'v1.2')."),
+      company: z.string().optional().describe("Company / author name."),
+      comments: z
+        .union([
+          z.record(z.string(), z.string()),
+          z.array(z.string()).max(9),
+        ])
+        .optional()
+        .describe("Comments. Dict keyed '1'..'9' or positional list (max 9)."),
+    },
+    passthrough("set_title_block_info"),
+  );
 }

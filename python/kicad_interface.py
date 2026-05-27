@@ -296,6 +296,10 @@ class KiCADInterface:
     # the appropriate function in python/handlers/<module>.py.
     # Adding a new handler module: add its mapping here.
     _HANDLER_MAP: "Dict[str, str]" = {
+        "get_origin": "board_meta",
+        "get_title_block_info": "board_meta",
+        "set_origin": "board_meta",
+        "set_title_block_info": "board_meta",
         "import_svg_logo": "board",
         "place_component": "board",
         "enrich_datasheets": "datasheet",

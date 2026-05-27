@@ -39,6 +39,10 @@ export const toolCategories: ToolCategory[] = [
       "get_board_2d_view",
       "launch_kicad_ui",
       "run_action",
+      "get_origin",
+      "set_origin",
+      "get_title_block_info",
+      "set_title_block_info",
     ],
   },
   {
