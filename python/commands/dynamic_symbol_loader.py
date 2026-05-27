@@ -12,7 +12,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("kicad_interface")
 
@@ -408,6 +408,171 @@ class DynamicSymbolLoader:
         self.symbol_cache[cache_key] = result
         logger.info(f"Extracted symbol {full_name} ({len(result)} chars)")
         return result
+
+    def refresh_embedded_lib_symbols(self, schematic_path: Path) -> Dict[str, Any]:
+        """Re-inject every ``(symbol "Lib:Name" ...)`` in the schematic's
+        ``lib_symbols`` block with the current copy from disk.
+
+        Silences kicad-cli ERC's ``lib_symbol_mismatch`` warnings when
+        the schematic was created against an older KiCad library and
+        the user has since updated KiCad (or edited a library file).
+        Skips symbols whose library can't be located or whose disk
+        copy matches what's already embedded — both result in
+        ``unchanged`` entries so the agent can see the no-op cases.
+
+        Returns a summary dict ``{success, refreshed: [..], unchanged:
+        [..], missing: [..], message}``.
+        """
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError as e:
+            return {
+                "success": False,
+                "message": f"Could not read schematic: {e}",
+            }
+
+        # Locate the lib_symbols block (paren-depth walk, format-agnostic).
+        lib_sym_start = content.find("(lib_symbols")
+        if lib_sym_start == -1:
+            return {
+                "success": True,
+                "refreshed": [],
+                "unchanged": [],
+                "missing": [],
+                "message": "No lib_symbols section — nothing to refresh.",
+            }
+        depth = 0
+        lib_sym_end = lib_sym_start
+        for i in range(lib_sym_start, len(content)):
+            if content[i] == "(":
+                depth += 1
+            elif content[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    lib_sym_end = i
+                    break
+        if depth != 0:
+            return {
+                "success": False,
+                "message": "Unbalanced parens in lib_symbols block.",
+            }
+
+        # Enumerate the TOP-LEVEL (symbol "Lib:Name" ...) entries inside
+        # lib_symbols — the sub-symbols nested inside (Name_0_1 etc.)
+        # MUST be skipped, since they aren't top-level entries in the
+        # .kicad_sym source.  Walk paren depth from the start of the
+        # lib_symbols body; whenever a "(symbol \"X\"" appears at the
+        # depth where lib_symbols' direct children live, record it as
+        # a candidate.
+        #
+        # We're already positioned at lib_sym_start which points at the
+        # ``(`` of lib_symbols.  The body begins after the next char.
+        entry_header_re = re.compile(r'\(symbol\s+"([^"]+)"')
+        entries = []
+        d = 1  # we're inside the (lib_symbols opening paren
+        body_start = lib_sym_start + 1
+        j = body_start
+        while j < lib_sym_end:
+            ch = content[j]
+            if ch == "(":
+                # Only top-level direct children of lib_symbols are
+                # candidates; they sit at depth 1 *before* their own
+                # opening paren bumps depth to 2.
+                if d == 1:
+                    m = entry_header_re.match(content, j)
+                    if m:
+                        full_name = m.group(1)
+                        # Require Library:Name shape; sub-symbols use
+                        # plain names like ``R_0_1`` without colons.
+                        if ":" in full_name:
+                            # Walk paren depth to find this symbol's end.
+                            sub_d = 0
+                            end = j
+                            for k in range(j, lib_sym_end + 1):
+                                if content[k] == "(":
+                                    sub_d += 1
+                                elif content[k] == ")":
+                                    sub_d -= 1
+                                    if sub_d == 0:
+                                        end = k + 1
+                                        break
+                            entries.append((j, end, full_name))
+                            # Jump j past this entry; we don't want to
+                            # recurse into its sub-symbols.
+                            j = end
+                            continue
+                d += 1
+            elif ch == ")":
+                d -= 1
+                if d <= 0:
+                    break
+            j += 1
+
+        refreshed: List[str] = []
+        unchanged: List[str] = []
+        missing: List[str] = []
+        # Use a clean cache so we always re-read .kicad_sym from disk;
+        # an instance-level cache from earlier sessions would defeat
+        # the purpose of "refresh".
+        self.symbol_cache.clear()
+
+        for start, end, full_name in reversed(entries):
+            try:
+                library_name, symbol_name = full_name.split(":", 1)
+            except ValueError:
+                missing.append(full_name)
+                continue
+            fresh = self.extract_symbol_from_library(library_name, symbol_name)
+            if not fresh:
+                missing.append(full_name)
+                continue
+            old_block = content[start:end]
+            # Strip every line so indentation differences (the embedded
+            # copy carries the schematic's lib_symbols indent, the fresh
+            # copy comes flat from the .kicad_sym) don't masquerade as
+            # real changes — only content drift matters.
+
+            def _normalize(text: str) -> str:
+                return "\n".join(line.strip() for line in text.split("\n") if line.strip())
+
+            if _normalize(fresh) == _normalize(old_block):
+                unchanged.append(full_name)
+                continue
+            # Preserve indent of the original block's opening line so
+            # the replacement keeps the same visual layout.
+            line_start = content.rfind("\n", 0, start) + 1
+            indent = content[line_start:start]
+            indented = "\n".join(
+                (indent + line) if line.strip() else line for line in fresh.split("\n")
+            )
+            content = content[:start] + indented + content[end:]
+            refreshed.append(full_name)
+
+        if refreshed:
+            try:
+                with open(schematic_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except OSError as e:
+                return {
+                    "success": False,
+                    "message": f"Could not write schematic: {e}",
+                    "refreshed": refreshed,
+                    "unchanged": unchanged,
+                    "missing": missing,
+                }
+
+        return {
+            "success": True,
+            "refreshed": sorted(refreshed),
+            "unchanged": sorted(unchanged),
+            "missing": sorted(missing),
+            "message": (
+                f"Refreshed {len(refreshed)} symbol(s); "
+                f"{len(unchanged)} already current; "
+                f"{len(missing)} not found on disk."
+            ),
+        }
 
     def inject_symbol_into_schematic(
         self, schematic_path: Path, library_name: str, symbol_name: str

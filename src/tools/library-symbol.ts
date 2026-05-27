@@ -285,4 +285,46 @@ Returns symbol references that can be used directly in schematics.`,
       };
     },
   );
+
+  // ------------------------------------------------------------------
+  // refresh_schematic_lib_symbols — re-inject embedded lib_symbols
+  // ------------------------------------------------------------------
+  // The .kicad_sch file embeds a snapshot of every used symbol in its
+  // ``lib_symbols`` block.  When the system .kicad_sym library is
+  // updated (KiCad upgrade, hand-edit) the snapshot becomes stale and
+  // kicad-cli ERC fires ``lib_symbol_mismatch`` on every affected
+  // symbol.  This tool re-extracts each entry from the current
+  // ``.kicad_sym`` on disk and rewrites the embedded copy.
+  server.tool(
+    "refresh_schematic_lib_symbols",
+    "Re-inject every embedded ``lib_symbols`` entry in a .kicad_sch from the current on-disk .kicad_sym library.  Silences kicad-cli ERC's ``lib_symbol_mismatch`` warnings caused by stale snapshots after a KiCad library upgrade or hand-edit.  Returns ``refreshed`` / ``unchanged`` / ``missing`` lists by ``Library:Name``.  Different from ``refresh_symbol_libraries``, which only rebuilds the MCP's library index — this one actually rewrites the schematic.",
+    {
+      schematicPath: z.string().describe("Path to the .kicad_sch file to refresh"),
+    },
+    async (args: { schematicPath: string }) => {
+      const result = await callKicadScript("refresh_schematic_lib_symbols", args);
+      if (result.success) {
+        const lines = [
+          result.message ?? "refresh_schematic_lib_symbols completed.",
+        ];
+        if ((result.refreshed ?? []).length > 0) {
+          lines.push(`Refreshed: ${result.refreshed.join(", ")}`);
+        }
+        if ((result.missing ?? []).length > 0) {
+          lines.push(
+            `Not found on disk: ${result.missing.join(", ")} — the library file may be missing or the symbol renamed.`,
+          );
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to refresh schematic lib_symbols: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
+          },
+        ],
+      };
+    },
+  );
 }

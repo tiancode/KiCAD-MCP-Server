@@ -331,6 +331,7 @@ class KiCADInterface:
         "edit_schematic_component": "schematic_component",
         "get_schematic_component": "schematic_component",
         "move_schematic_component": "schematic_component",
+        "refresh_schematic_lib_symbols": "schematic_component",
         "remove_schematic_component_property": "schematic_component",
         "rotate_schematic_component": "schematic_component",
         "set_schematic_component_property": "schematic_component",

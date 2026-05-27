@@ -558,6 +558,11 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # recommendation instead of leaving the agent to interpret each
             # tagged violation individually.
             pwrflag_target_nets: set = set()
+            # Same idea for ``lib_symbol_mismatch`` — every hit means the
+            # schematic's embedded snapshot drifted from the on-disk
+            # .kicad_sym and ``refresh_schematic_lib_symbols`` is the
+            # one-shot fix.
+            lib_symbol_mismatch_count = 0
 
             for v in all_violations:
                 vseverity = v.get("severity", "error")
@@ -590,6 +595,8 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     if extracted_net:
                         annotated["net"] = extracted_net
                         pwrflag_target_nets.add(extracted_net)
+                elif vtype == "lib_symbol_mismatch":
+                    lib_symbol_mismatch_count += 1
                 violations.append(annotated)
                 if vseverity in severity_counts:
                     severity_counts[vseverity] += 1
@@ -630,6 +637,25 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                             "component={library:'power', type:'PWR_FLAG', "
                             "reference:'#FLG?', x:..., y:...}) then "
                             "add_schematic_wire to connect it to the net."
+                        ),
+                    }
+                )
+            if lib_symbol_mismatch_count > 0:
+                recommendations.append(
+                    {
+                        "kind": "refresh_lib_symbols",
+                        "count": lib_symbol_mismatch_count,
+                        "message": (
+                            f"{lib_symbol_mismatch_count} ``lib_symbol_mismatch`` "
+                            "warning(s): the schematic's embedded lib_symbols "
+                            "block drifted from the current .kicad_sym on "
+                            "disk (typical after a KiCad upgrade or hand-edit "
+                            "of a library file)."
+                        ),
+                        "action": (
+                            "Call ``refresh_schematic_lib_symbols(schematicPath=...)`` "
+                            "to re-inject the current library copy into the "
+                            "schematic, then re-run run_erc."
                         ),
                     }
                 )
