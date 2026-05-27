@@ -25,16 +25,64 @@ logger = logging.getLogger(__name__)
 
 
 def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Refill all copper pour zones on the board.
+    """Refuse the SWIG refill path by default; require ``force=True`` to attempt it.
 
-    pcbnew.ZONE_FILLER.Fill() can cause a C++ access violation (0xC0000005)
-    that crashes the entire Python process when called from SWIG outside the
-    KiCAD UI.  To avoid killing the main process we run the fill in an
-    isolated subprocess.  If the subprocess crashes or times out, we return
-    a non-fatal warning so the caller can continue — KiCAD Pcbnew will
-    refill zones automatically when the board is opened (press B).
+    ``pcbnew.ZONE_FILLER.Fill()`` has a long-standing history of C++
+    access violations (Windows 0xC0000005) and silently-wrong fills on
+    SWIG-only KiCad installs — the very class of bug the IPC backend
+    exists to avoid.  Even subprocess isolation prevents the MCP from
+    crashing but doesn't guarantee a correct fill, so the safe default
+    is to refuse and tell the caller how to get a trustworthy result:
+
+      - Open the project in KiCad with IPC enabled.  ``refill_zones``
+        will then route via the IPC fast-path (``handlers/ipc_fastpath
+        .handle_refill_zones``) and reflect the real pcbnew result.
+      - Or just let KiCad fill on open (press B): zones are already
+        defined on disk, gerber export only needs the fill at export
+        time — so do that step via KiCad UI.
+
+    For callers that explicitly accept the risk (CI flow with no GUI,
+    one-off scripts), pass ``force=True`` and we'll fall back to the
+    subprocess-isolated SWIG fill.  Surface that the result may be
+    silently wrong in ``warnings`` so the agent can choose to verify.
     """
-    logger.info("Refilling zones (subprocess isolation)")
+    if not bool(params.get("force", False)):
+        zone_count = (
+            iface.board.GetAreaCount()
+            if iface.board is not None and hasattr(iface.board, "GetAreaCount")
+            else None
+        )
+        return {
+            "success": False,
+            "requires_ipc": True,
+            "message": (
+                "refill_zones refused on the SWIG backend: "
+                "pcbnew.ZONE_FILLER has a known segfault/wrong-fill risk "
+                "when invoked outside KiCAD's own process.  Open the "
+                "project in KiCad with the IPC API server enabled "
+                "(Preferences → Plugins → Enable IPC API Server) and "
+                "retry — refill_zones will then route through the IPC "
+                "fast-path.  Or let KiCad refill on open (press B) — "
+                "the zone definitions are already on disk.  Pass "
+                "force=true here if you accept the SWIG-path risk for a "
+                "headless flow."
+            ),
+            "zoneCount": zone_count,
+            "recommendation": (
+                "Most flows that need a filled board for gerber export "
+                "should call ``launch_kicad_ui`` (or call ipc_save_board "
+                "after opening KiCad) and re-run refill_zones — the IPC "
+                "path is reliable.  If running headless, ``force=true`` "
+                "uses subprocess isolation so the MCP won't crash, but "
+                "the resulting fill may be subtly wrong; verify with "
+                "run_drc or open the gerber to check."
+            ),
+        }
+
+    # force=True path — subprocess-isolated SWIG fill, identical to the
+    # historical behaviour.  We only reach here when the caller has
+    # explicitly opted into the risk.
+    logger.info("Refilling zones (subprocess isolation, force=True)")
     try:
         if not iface.board:
             return {
@@ -92,6 +140,12 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                     "success": True,
                     "message": f"Zones refilled successfully ({zone_count} zones)",
                     "zoneCount": zone_count,
+                    "warnings": [
+                        "force=true was set; this fill ran via SWIG "
+                        "subprocess isolation and may differ from KiCad's "
+                        "own result.  Verify with run_drc or open the "
+                        "gerber to check."
+                    ],
                 }
             else:
                 logger.warning(

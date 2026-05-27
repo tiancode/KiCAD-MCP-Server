@@ -465,8 +465,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Refill zones tool
   server.tool(
     "refill_zones",
-    "Refill all copper zones on the board. WARNING: SWIG path has known segfault risk (see KNOWN_ISSUES.md). Prefer using IPC backend (KiCAD open) or triggering zone fill via KiCAD UI instead.",
-    {},
+    "Refill all copper zones on the board.  Routed through the IPC fast-path when KiCad is running with the IPC API server enabled — reliable, returns the real pcbnew result.  When IPC isn't available the SWIG path is **refused by default** because pcbnew.ZONE_FILLER has a long history of segfaults and silently-wrong fills outside KiCad's own process.  Recommended fallback: let KiCad fill on open (press B) — zones are already defined on disk and gerber export only needs the fill at export time.  Pass force=true to opt into the SWIG subprocess-isolated fill anyway (headless flows that accept the risk); the response then carries a warnings entry pointing at the uncertainty.",
+    {
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Opt into the SWIG subprocess-isolated fill when IPC isn't available.  Default false — refused with success:false, requires_ipc:true and a recovery hint.  Use only when headless flows really need a filled .kicad_pcb on disk and you accept that the fill may be subtly wrong (verify with run_drc / open the gerber).",
+        ),
+    },
     async (args: any) => {
       const result = await callKicadScript("refill_zones", args);
       return {
