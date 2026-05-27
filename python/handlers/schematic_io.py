@@ -472,7 +472,16 @@ def handle_export_netlist(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
 
 
 def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run Electrical Rules Check on a schematic via kicad-cli"""
+    """Run Electrical Rules Check on a schematic via kicad-cli.
+
+    By default ``refresh_schematic_lib_symbols`` runs first so the
+    embedded ``lib_symbols`` block matches the current on-disk
+    ``.kicad_sym`` library — every MCP-placed component otherwise
+    triggers a ``lib_symbol_mismatch`` warning the moment our injection
+    format drifts from KiCad's expected canonical form (which is exactly
+    what the user reported after sync_schematic_to_board).  Pass
+    ``autoRefreshLibSymbols: false`` to skip the pre-refresh.
+    """
     logger.info("Running ERC on schematic")
     import os
     import subprocess
@@ -486,6 +495,40 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 "message": "Schematic file not found",
                 "errorDetails": f"Path does not exist: {schematic_path}",
             }
+
+        # Pre-refresh embedded lib_symbols so kicad-cli ERC compares
+        # against the actual current library, not an older snapshot left
+        # over from earlier placements / a library upgrade.  Failures
+        # here are non-fatal — we still run ERC but surface the refresh
+        # status in the response so the agent can see what happened.
+        lib_symbols_refresh: Optional[Dict[str, Any]] = None
+        if bool(params.get("autoRefreshLibSymbols", True)):
+            try:
+                from pathlib import Path
+
+                from commands.dynamic_symbol_loader import DynamicSymbolLoader
+
+                sch_path_obj = Path(schematic_path)
+                project_dir = sch_path_obj.parent
+                for ancestor in sch_path_obj.parents:
+                    if (ancestor / "sym-lib-table").exists() or list(
+                        ancestor.glob("*.kicad_pro")
+                    ):
+                        project_dir = ancestor
+                        break
+                lib_symbols_refresh = DynamicSymbolLoader(
+                    project_path=project_dir
+                ).refresh_embedded_lib_symbols(sch_path_obj)
+                if lib_symbols_refresh.get("refreshed"):
+                    logger.info(
+                        "Pre-ERC refresh updated %d lib_symbols entry(ies): %s",
+                        len(lib_symbols_refresh["refreshed"]),
+                        ", ".join(lib_symbols_refresh["refreshed"]),
+                    )
+            except Exception as e:
+                # Pre-refresh is best-effort; never let it fail the ERC call.
+                logger.warning("Pre-ERC lib_symbols refresh failed: %s", e)
+                lib_symbols_refresh = {"success": False, "message": str(e)}
 
         kicad_cli = iface.design_rule_commands._find_kicad_cli()
         if not kicad_cli:
@@ -675,7 +718,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # top of the list when the agent scans it.
             violations.sort(key=lambda v: 1 if v.get("likely_false_positive") else 0)
 
-            return {
+            response: Dict[str, Any] = {
                 "success": True,
                 "message": (
                     f"ERC complete: {len(violations)} violation(s)"
@@ -701,6 +744,9 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 },
                 "violations": violations,
             }
+            if lib_symbols_refresh is not None:
+                response["lib_symbols_refresh"] = lib_symbols_refresh
+            return response
 
         finally:
             if os.path.exists(json_output):

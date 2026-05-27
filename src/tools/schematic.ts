@@ -1481,11 +1481,17 @@ edit_schematic_component and set its value to an empty string.`,
   // Run Electrical Rules Check (ERC)
   server.tool(
     "run_erc",
-    "Runs the KiCAD Electrical Rules Check (ERC) on a schematic and returns all violations.  Use after wiring to verify the schematic before generating a netlist.  Common gotcha: KiCad's ERC requires every power-input pin (e.g. NE555 GND/VCC, MCU VDD) to be driven by either an Output Power pin or a power:PWR_FLAG symbol — power LABELS alone (GND / VCC / +3V3 wires) are not enough.  The response's summary.recommendations[] field surfaces an actionable 'add PWR_FLAG' entry whenever those false-positive errors are detected, including the exact net names that need flagging.  summary.real_errors counts ONLY non-PWR_FLAG issues so the headline number reflects genuine wiring problems.",
+    "Runs the KiCAD Electrical Rules Check (ERC) on a schematic and returns all violations.  Use after wiring to verify the schematic before generating a netlist.  Common gotcha: KiCad's ERC requires every power-input pin (e.g. NE555 GND/VCC, MCU VDD) to be driven by either an Output Power pin or a power:PWR_FLAG symbol — power LABELS alone (GND / VCC / +3V3 wires) are not enough.  The response's summary.recommendations[] field surfaces an actionable 'add PWR_FLAG' entry whenever those false-positive errors are detected, including the exact net names that need flagging.  summary.real_errors counts ONLY non-PWR_FLAG issues so the headline number reflects genuine wiring problems.  Auto-refresh: by default the handler re-extracts every lib_symbols entry from the current .kicad_sym on disk before invoking kicad-cli — this silences the 'Symbol X doesn't match copy in library Y' warnings that every MCP-placed component used to emit because our injection format drifts from KiCad's canonical form.  The refresh result is surfaced under response.lib_symbols_refresh.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
+      autoRefreshLibSymbols: z
+        .boolean()
+        .optional()
+        .describe(
+          "Re-inject every embedded lib_symbols entry from the current on-disk .kicad_sym before running ERC.  Default true — silences lib_symbol_mismatch warnings caused by drift between MCP's injection format and KiCad's canonical form.  Pass false to skip when you specifically want to see those warnings (e.g. debugging library drift).",
+        ),
     },
-    async (args: { schematicPath: string }) => {
+    async (args: { schematicPath: string; autoRefreshLibSymbols?: boolean }) => {
       const result = await callKicadScript("run_erc", args);
       if (result.success) {
         const violations: any[] = result.violations || [];
@@ -1494,6 +1500,12 @@ edit_schematic_component and set its value to an empty string.`,
           const s = result.summary.by_severity;
           lines.push(
             `  Errors: ${s.error ?? 0}  Warnings: ${s.warning ?? 0}  Info: ${s.info ?? 0}`,
+          );
+        }
+        const refresh = result.lib_symbols_refresh;
+        if (refresh && refresh.refreshed && refresh.refreshed.length > 0) {
+          lines.push(
+            `  Pre-ERC refresh: ${refresh.refreshed.length} lib_symbols entry(ies) re-aligned with disk (${refresh.refreshed.join(", ")})`,
           );
         }
         const recs: any[] = result.summary?.recommendations || [];

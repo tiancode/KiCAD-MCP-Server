@@ -269,3 +269,149 @@ def test_erc_recommends_refresh_when_lib_symbol_mismatch_present(monkeypatch, tm
     assert refresh_rec is not None
     assert refresh_rec["count"] == 2
     assert "refresh_schematic_lib_symbols" in refresh_rec["action"]
+
+
+# ---------------------------------------------------------------------------
+# run_erc auto-refresh: pre-call to refresh_embedded_lib_symbols
+# ---------------------------------------------------------------------------
+def test_run_erc_auto_refreshes_lib_symbols_by_default(monkeypatch, tmp_path):
+    """The user reported every MCP-placed component triggers
+    lib_symbol_mismatch.  ERC now runs ``refresh_embedded_lib_symbols``
+    before kicad-cli by default so the embedded snapshot is byte-aligned
+    with the on-disk .kicad_sym; the refresh result is surfaced under
+    ``response.lib_symbols_refresh``."""
+    import json as _json
+    from unittest.mock import MagicMock
+
+    from commands import dynamic_symbol_loader
+    from handlers.schematic_io import handle_run_erc
+    from kicad_interface import KiCADInterface
+
+    iface = KiCADInterface.__new__(KiCADInterface)
+    iface.design_rule_commands = MagicMock()
+    iface.design_rule_commands._find_kicad_cli = MagicMock(return_value="/fake/kicad-cli")
+
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text("(kicad_sch)\n", encoding="utf-8")
+
+    # Stub the refresh to a known payload so the test doesn't depend on
+    # a real library file.
+    refresh_called: dict = {}
+
+    def _fake_refresh(self, schematic_path):
+        refresh_called["path"] = str(schematic_path)
+        return {
+            "success": True,
+            "refreshed": ["Device:R", "Device:C"],
+            "unchanged": [],
+            "missing": [],
+            "message": "Refreshed 2 symbol(s)",
+        }
+
+    monkeypatch.setattr(
+        dynamic_symbol_loader.DynamicSymbolLoader,
+        "refresh_embedded_lib_symbols",
+        _fake_refresh,
+    )
+
+    erc = {"sheets": [{"violations": []}]}
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda cmd, **kw: (
+            Path(cmd[cmd.index("--output") + 1]).write_text(_json.dumps(erc), encoding="utf-8"),
+            MagicMock(returncode=0, stderr="", stdout=""),
+        )[1],
+    )
+
+    out = handle_run_erc(iface, {"schematicPath": str(sch)})
+
+    assert out["success"] is True
+    # Pre-refresh fired with the schematic path.
+    assert refresh_called["path"] == str(sch)
+    # Refresh result piggybacks on the ERC response.
+    assert out["lib_symbols_refresh"]["refreshed"] == ["Device:R", "Device:C"]
+
+
+def test_run_erc_opt_out_of_auto_refresh(monkeypatch, tmp_path):
+    """Pass ``autoRefreshLibSymbols: false`` to skip the pre-refresh —
+    useful when the user wants to see drift warnings."""
+    import json as _json
+    from unittest.mock import MagicMock
+
+    from commands import dynamic_symbol_loader
+    from handlers.schematic_io import handle_run_erc
+    from kicad_interface import KiCADInterface
+
+    iface = KiCADInterface.__new__(KiCADInterface)
+    iface.design_rule_commands = MagicMock()
+    iface.design_rule_commands._find_kicad_cli = MagicMock(return_value="/fake/kicad-cli")
+
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text("(kicad_sch)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        dynamic_symbol_loader.DynamicSymbolLoader,
+        "refresh_embedded_lib_symbols",
+        lambda self, p: pytest.fail("refresh must NOT be called when autoRefreshLibSymbols=False"),
+    )
+
+    erc = {"sheets": [{"violations": []}]}
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda cmd, **kw: (
+            Path(cmd[cmd.index("--output") + 1]).write_text(_json.dumps(erc), encoding="utf-8"),
+            MagicMock(returncode=0, stderr="", stdout=""),
+        )[1],
+    )
+
+    out = handle_run_erc(
+        iface, {"schematicPath": str(sch), "autoRefreshLibSymbols": False}
+    )
+
+    assert out["success"] is True
+    assert "lib_symbols_refresh" not in out
+
+
+def test_run_erc_continues_when_pre_refresh_fails(monkeypatch, tmp_path):
+    """Pre-refresh is best-effort — a failure (corrupted schematic,
+    missing library, etc.) must NOT block ERC.  The failure status is
+    surfaced in lib_symbols_refresh for visibility."""
+    import json as _json
+    from unittest.mock import MagicMock
+
+    from commands import dynamic_symbol_loader
+    from handlers.schematic_io import handle_run_erc
+    from kicad_interface import KiCADInterface
+
+    iface = KiCADInterface.__new__(KiCADInterface)
+    iface.design_rule_commands = MagicMock()
+    iface.design_rule_commands._find_kicad_cli = MagicMock(return_value="/fake/kicad-cli")
+
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text("(kicad_sch)\n", encoding="utf-8")
+
+    def _crash_refresh(self, schematic_path):
+        raise RuntimeError("library file unreadable")
+
+    monkeypatch.setattr(
+        dynamic_symbol_loader.DynamicSymbolLoader,
+        "refresh_embedded_lib_symbols",
+        _crash_refresh,
+    )
+
+    erc = {"sheets": [{"violations": []}]}
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda cmd, **kw: (
+            Path(cmd[cmd.index("--output") + 1]).write_text(_json.dumps(erc), encoding="utf-8"),
+            MagicMock(returncode=0, stderr="", stdout=""),
+        )[1],
+    )
+
+    out = handle_run_erc(iface, {"schematicPath": str(sch)})
+
+    # ERC still ran successfully.
+    assert out["success"] is True
+    # Failure surfaced for visibility.
+    assert out["lib_symbols_refresh"]["success"] is False
+    assert "library file unreadable" in out["lib_symbols_refresh"]["message"]
