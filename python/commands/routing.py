@@ -13,6 +13,43 @@ import pcbnew
 logger = logging.getLogger("kicad_interface")
 
 
+def _refuse_with_obstacles(
+    from_ref: str,
+    from_pad: str,
+    to_ref: str,
+    to_pad: str,
+    obstacles: List[str],
+) -> Dict[str, Any]:
+    """Refusal response for ``route_pad_to_pad`` when a straight segment
+    would cross a third-party pad.
+
+    Surfaced as ``success: False`` with ``hasObstacles: True`` so the
+    agent can distinguish this recoverable, geometry-only failure from
+    an "actually broken" error.  Carries the obstacle list and a
+    pointer to the ``force`` opt-out so the caller can either reroute
+    manually or override knowing the cost (DRC violations).
+    """
+    return {
+        "success": False,
+        "hasObstacles": True,
+        "obstacleCount": len(obstacles),
+        "obstaclesCrossed": obstacles,
+        "message": (
+            f"Refused: straight trace from {from_ref}.{from_pad} → "
+            f"{to_ref}.{to_pad} crosses {len(obstacles)} other pad(s). "
+            "Inserting it would short the trace through them and produce "
+            "tracks_crossing / net-shorting DRC violations."
+        ),
+        "hint": (
+            "route_pad_to_pad is a straight-line connector, not an "
+            "autorouter — it has no obstacle avoidance.  Either plan the "
+            "path manually as several route_trace segments that go around "
+            "the obstacles, or call again with force=true to insert "
+            "anyway (you will then need to fix the resulting DRC errors)."
+        ),
+    }
+
+
 class RoutingCommands:
     """Handles routing-related KiCAD operations"""
 
@@ -83,11 +120,18 @@ class RoutingCommands:
             }
 
     def route_pad_to_pad(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Route a trace directly from one component pad to another.
+        """Insert ONE straight trace segment between two component pads.
 
-        Looks up pad positions automatically, then creates a trace.
-        Convenience wrapper around route_trace that eliminates the need
-        for separate get_pad_position calls.
+        Despite the name, this is not an autorouter — it places a single
+        straight line (plus a via when the pads sit on different copper
+        layers).  When that line crosses a third pad (detected here by
+        bbox-vs-segment intersection), the tool refuses to insert the
+        trace by default; pass ``force=True`` to opt into the legacy
+        "insert anyway, return warnings" behaviour.
+
+        Looks up pad positions automatically.  Convenience wrapper around
+        route_trace that eliminates the need for separate
+        get_pad_position calls.
         """
         try:
             if not self.board:
@@ -104,6 +148,7 @@ class RoutingCommands:
             layer = params.get("layer", "F.Cu")
             width = params.get("width")
             net = params.get("net")  # optional override
+            force = bool(params.get("force", False))
 
             if not from_ref or not from_pad or not to_ref or not to_pad:
                 return {
@@ -212,6 +257,15 @@ class RoutingCommands:
                     via_pt, end_pos, exclude_pad_keys={(to_ref, to_pad)}
                 )
 
+                # Refuse before mutating the board if either leg crosses
+                # a third pad — those crossings produce real DRC errors
+                # (tracks_crossing + net-shorting) and the user has no
+                # way to see the warning until they re-export the gerber.
+                if obstacle_warnings and not force:
+                    return _refuse_with_obstacles(
+                        from_ref, from_pad, to_ref, to_pad, obstacle_warnings
+                    )
+
                 # Trace on start layer: start_pad → via
                 r1 = self.route_trace(
                     {
@@ -256,6 +310,10 @@ class RoutingCommands:
                     end_pos,
                     exclude_pad_keys={(from_ref, from_pad), (to_ref, to_pad)},
                 )
+                if obstacle_warnings and not force:
+                    return _refuse_with_obstacles(
+                        from_ref, from_pad, to_ref, to_pad, obstacle_warnings
+                    )
                 result = self.route_trace(
                     {
                         "start": {"x": start_pos.x / scale, "y": start_pos.y / scale, "unit": "mm"},

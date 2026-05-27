@@ -483,25 +483,11 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Route pad to pad tool
   server.tool(
     "route_pad_to_pad",
-    `Place a STRAIGHT-LINE trace segment between two named component pads (auto-via on layer change).
+    `Insert ONE STRAIGHT trace segment between two component pads (plus a via if they're on different copper layers). This is NOT an autorouter — there is no obstacle avoidance, no layer switching mid-trace, no rip-up-and-retry. Despite the "route_" prefix, the tool just commits a single straight line.
 
-This is NOT an autorouter — it is a wire-placement tool. There is no obstacle
-avoidance, no layer-switching mid-trace, no rip-up-and-retry. If the straight
-line between the two pads crosses a third pad, a board edge, or another trace,
-the resulting PCB will have DRC violations (tracks_crossing, solder_mask_bridge,
-or net-shorting).
+If the line between the two pads crosses a third pad, the call NOW REFUSES by default (success: false, hasObstacles: true) with the obstacle list. Plan the path yourself as multiple route_trace segments that go around the obstacles, or pass force: true to override and accept the resulting DRC errors.
 
-Use this when you have planned the routing yourself and just need to commit the
-segments. After placing the traces for a circuit, ALWAYS call run_drc to verify
-— a clean call here does NOT mean the trace is electrically correct, only that
-the API call succeeded. The response includes obstacleCount and obstaclesCrossed
-when a third-party pad's bbox lies on the segment; these warnings are now
-filtered to exclude the trace's own endpoints (previously the start/end pads
-were reported on every trace, drowning out real crossings).
-
-Looks up pad positions, detects the net from the source pad, and inserts a via
-if the pads are on different copper layers. Default trace width comes from the
-source net's netclass (falling back to the board's current track width).`,
+Looks up pad positions, detects the net from the source pad, and inserts a via if the pads are on different copper layers. Default trace width comes from the source net's netclass (falling back to the board's current track width). Still call run_drc after a batch of these to catch crossings against existing traces / zones / board edge (the gate only catches crossings against OTHER PADS).`,
     {
       fromRef: z.string().describe("Reference of the source component (e.g. 'U2')"),
       fromPad: z
@@ -519,6 +505,12 @@ source net's netclass (falling back to the board's current track width).`,
           "Trace width in mm (default: netclass of the source net's track width, then board default).",
         ),
       net: z.string().optional().describe("Net name override (default: auto-detected from pad)"),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Insert the straight segment even when it crosses other pads (default false — the call refuses and returns obstaclesCrossed). Use only when you've decided to accept the resulting DRC errors.",
+        ),
     },
     async (args: any) => {
       const result = await callKicadScript("route_pad_to_pad", args);

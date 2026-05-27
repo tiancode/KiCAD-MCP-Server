@@ -261,10 +261,12 @@ class TestRoutePadToPadObstacleResponse:
         cmds.add_via = lambda params: {"success": True}  # type: ignore[method-assign]
         return cmds
 
-    def test_response_obstacle_count_matches_warnings_length(self):
-        """The obstacleCount field promised in the tool description
-        must equal len(obstaclesCrossed); the agent uses the count to
-        decide whether to bother scanning the array."""
+    def test_obstacle_path_refuses_by_default(self):
+        """The straight segment crosses D1 — default behaviour is now to
+        refuse before mutating the board.  obstaclesCrossed must list
+        the offending pad with its full reference; obstacleCount must
+        match the list length so the agent can branch on it without
+        scanning the array."""
         # R1.1 → R2.1 on same layer, with D1.1 in the path.
         r1 = _stub_footprint_for_route("R1", 0, [("1", (0.0, 0.0))])
         r2 = _stub_footprint_for_route("R2", 0, [("1", (20.0, 0.0))])
@@ -275,8 +277,8 @@ class TestRoutePadToPadObstacleResponse:
             {"fromRef": "R1", "fromPad": "1", "toRef": "R2", "toPad": "1"}
         )
 
-        assert result["success"] is True
-        assert "obstacleCount" in result
+        assert result["success"] is False
+        assert result["hasObstacles"] is True
         assert result["obstacleCount"] == len(result["obstaclesCrossed"])
         assert result["obstacleCount"] >= 1
         # D1.1 must show up; neither R1.1 nor R2.1 (the endpoints) can.
@@ -284,6 +286,34 @@ class TestRoutePadToPadObstacleResponse:
         assert "D1.1" in joined
         assert "R1.1" not in joined
         assert "R2.1" not in joined
+        # The agent reads `hint` to know about `force` — make sure it's there.
+        assert "force" in result["hint"]
+
+    def test_obstacle_path_inserts_when_force_true(self):
+        """``force=True`` opts back into the legacy behaviour: insert the
+        trace, return warnings alongside ``success: True`` so the agent
+        knows to run DRC."""
+        r1 = _stub_footprint_for_route("R1", 0, [("1", (0.0, 0.0))])
+        r2 = _stub_footprint_for_route("R2", 0, [("1", (20.0, 0.0))])
+        d1 = _stub_footprint_for_route("D1", 0, [("1", (10.0, 0.0))])
+        cmds = self._make_cmds([r1, r2, d1])
+
+        result = cmds.route_pad_to_pad(
+            {
+                "fromRef": "R1",
+                "fromPad": "1",
+                "toRef": "R2",
+                "toPad": "1",
+                "force": True,
+            }
+        )
+
+        assert result["success"] is True
+        assert "obstacleCount" in result
+        assert result["obstacleCount"] >= 1
+        # D1.1 still surfaced so the caller can see what they accepted.
+        joined = " ".join(result["obstaclesCrossed"])
+        assert "D1.1" in joined
 
     def test_via_case_runs_obstacle_scanner_per_leg(self, monkeypatch):
         """Cross-layer route → the scanner must be called TWICE (once
@@ -323,3 +353,38 @@ class TestRoutePadToPadObstacleResponse:
         assert calls[1][2] == {
             ("U2", "1")
         }, f"leg 2 must exclude only the end pad; got {calls[1][2]}"
+
+    def test_via_case_refuses_when_either_leg_crosses_a_pad(self):
+        """If leg 1 or leg 2 of a via path crosses a third pad, the call
+        must refuse before any of route_trace / add_via runs — a partial
+        insert (leg 1 OK, leg 2 blocked) would leave the board with an
+        orphan stub.  Refusal happens before any mutation."""
+        u1 = _stub_footprint_for_route("U1", 0, [("1", (0.0, 0.0))])
+        u2 = _stub_footprint_for_route("U2", 31, [("1", (0.0, 20.0))])
+        cmds = self._make_cmds([u1, u2])
+
+        # Stub scanner: leg 2 (via → end_pad) reports a crossing.
+        leg_count = {"n": 0}
+
+        def fake_scanner(start, end, *, exclude_pad_keys=None):
+            leg_count["n"] += 1
+            return ["Trace segment passes through D1.1 — consider routing around"] if leg_count["n"] == 2 else []
+
+        cmds._pads_intersecting_segment = fake_scanner  # type: ignore[method-assign]
+
+        # Sentinels so the test fails loudly if the partial insert sneaks through.
+        cmds.route_trace = lambda params: pytest.fail(  # type: ignore[method-assign]
+            "route_trace must not be called when an obstacle is detected"
+        )
+        cmds.add_via = lambda params: pytest.fail(  # type: ignore[method-assign]
+            "add_via must not be called when an obstacle is detected"
+        )
+
+        result = cmds.route_pad_to_pad(
+            {"fromRef": "U1", "fromPad": "1", "toRef": "U2", "toPad": "1"}
+        )
+
+        assert result["success"] is False
+        assert result["hasObstacles"] is True
+        assert result["obstacleCount"] == 1
+        assert "D1.1" in " ".join(result["obstaclesCrossed"])
