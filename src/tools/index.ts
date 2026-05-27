@@ -18,3 +18,4 @@ export { registerFootprintTools } from "./footprint.js";
 export { registerSymbolCreatorTools } from "./symbol-creator.js";
 export { registerFreeroutingTools } from "./freerouting.js";
 export { registerShapesTools } from "./shapes.js";
+export { registerTransactionTools } from "./transactions.js";

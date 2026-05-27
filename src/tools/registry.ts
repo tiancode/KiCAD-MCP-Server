@@ -71,6 +71,17 @@ export const toolCategories: ToolCategory[] = [
     ],
   },
   {
+    name: "transactions",
+    description:
+      "Group mutating calls into one undo step (IPC-only). Use begin_transaction before a multi-step refactor and commit_transaction after — the human gets a single Ctrl-Z to bail out, not one per call. Property mutations (set_origin, set_title_block_info) bypass transactions.",
+    tools: [
+      "begin_transaction",
+      "commit_transaction",
+      "rollback_transaction",
+      "get_transaction_status",
+    ],
+  },
+  {
     name: "component",
     description: "Advanced component operations: edit, delete, search, group, annotate",
     tools: [

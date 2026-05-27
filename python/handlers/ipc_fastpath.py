@@ -365,7 +365,28 @@ def handle_get_board_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
 
 
 def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """IPC handler for place_component — places component with real-time UI update."""
+    """IPC handler for place_component — places component with real-time UI update.
+
+    Refuses to run inside an open IPC transaction.  ``place_component``
+    loads library footprints through pcbnew SWIG, which writes the
+    placement directly to the .kicad_pcb file and then calls
+    ``board.revert()`` to re-sync the IPC view.  That revert invalidates
+    the open commit handle, *and* the placement is already persisted to
+    disk — so a subsequent ``rollback_transaction`` can't undo it.  The
+    atomicity contract would silently break, so fail fast instead.
+    """
+    api = iface.ipc_board_api
+    if api is not None and getattr(api, "_current_commit", None) is not None:
+        return {
+            "success": False,
+            "message": (
+                "place_component cannot run inside an IPC transaction: it "
+                "uses a SWIG fallback to load library footprints which writes "
+                "directly to disk and reloads the in-memory board, "
+                "invalidating the open commit. Commit or rollback the "
+                "transaction first, then place the component."
+            ),
+        }
     try:
         reference = params.get("reference", params.get("componentId", ""))
         footprint = params.get("footprint", "")

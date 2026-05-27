@@ -52,6 +52,10 @@ def _make_iface() -> Any:
     iface.use_ipc = True
     iface.board = None
     iface.ipc_board_api = MagicMock()
+    # See note in test_ipc_position_inch_conversion: MagicMock would
+    # otherwise auto-create _current_commit as a truthy Mock and trip
+    # the place_component transaction guard.
+    iface.ipc_board_api._current_commit = None
     iface.ipc_board_api.place_component.return_value = True
     iface.ipc_board_api.move_component.return_value = True
     return iface

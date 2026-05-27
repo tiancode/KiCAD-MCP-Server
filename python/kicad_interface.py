@@ -392,6 +392,10 @@ class KiCADInterface:
         "add_polygon": "shapes",
         "add_rectangle": "shapes",
         "add_segment": "shapes",
+        "begin_transaction": "transactions",
+        "commit_transaction": "transactions",
+        "get_transaction_status": "transactions",
+        "rollback_transaction": "transactions",
     }
 
     def __getattr__(self, name: str):

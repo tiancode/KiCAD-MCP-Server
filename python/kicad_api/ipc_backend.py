@@ -348,7 +348,12 @@ class IPCBoardAPI(BoardAPI):
         self._kicad = kicad_instance
         self._board = None
         self._notify = notify_callback
-        self._current_commit = None
+        # Active transaction state. When _current_commit is set, every
+        # _apply_create/update/remove call piggy-backs on it instead of
+        # opening its own per-call commit, so the whole sequence lands
+        # as one undo step in KiCad.
+        self._current_commit: Optional[Any] = None
+        self._current_commit_description: Optional[str] = None
 
     def _get_board(self) -> Any:
         """Get board instance, connecting if needed."""
@@ -360,27 +365,156 @@ class IPCBoardAPI(BoardAPI):
                 raise ConnectionError(f"No board open in KiCAD: {e}")
         return self._board
 
-    def begin_transaction(self, description: str = "MCP Operation") -> None:
-        """Begin a transaction for grouping operations into a single undo step."""
-        board = self._get_board()
-        self._current_commit = board.begin_commit()
-        logger.debug(f"Started transaction: {description}")
+    #: Default label shown in KiCad's undo history when the caller didn't
+    #: supply one.  Single source of truth — handlers pass through
+    #: ``None`` rather than copy-substituting their own default.
+    _DEFAULT_COMMIT_LABEL = "MCP Operation"
 
-    def commit_transaction(self, description: str = "MCP Operation") -> None:
-        """Commit the current transaction."""
-        if self._current_commit:
+    def begin_transaction(
+        self, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Open a transaction. Subsequent mutating calls fold into one undo step.
+
+        Refuses to nest — a second begin without an intervening commit /
+        rollback would leak the original commit handle and orphan the
+        first batch of changes.  Callers should commit or rollback the
+        existing transaction first.
+
+        ``description`` of ``None`` (or key omitted) gets the default
+        label.  An explicit empty string is preserved — KiCad will show
+        a blank undo entry, but that's the caller's choice.
+
+        Note: only mutations that go through ``_apply_create / update /
+        remove`` participate.  Property mutations like ``set_origin`` and
+        ``set_title_block_info`` are sent as direct kipy commands and are
+        NOT part of the undo step (kipy treats them as out-of-band).
+        """
+        if self._current_commit is not None:
+            return {
+                "success": False,
+                "message": (
+                    "A transaction is already open — commit or rollback it "
+                    "before starting a new one."
+                ),
+            }
+        label = description if description is not None else self._DEFAULT_COMMIT_LABEL
+        try:
             board = self._get_board()
-            board.push_commit(self._current_commit, description)
-            self._current_commit = None
-            logger.debug(f"Committed transaction: {description}")
+            self._current_commit = board.begin_commit()
+            self._current_commit_description = label
+            logger.debug(f"Started transaction: {label}")
+            return {"success": True, "description": label}
+        except Exception as e:
+            logger.error(f"Failed to begin transaction: {e}")
+            return {"success": False, "message": str(e)}
 
-    def rollback_transaction(self) -> None:
-        """Roll back the current transaction."""
-        if self._current_commit:
+    def commit_transaction(
+        self, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Push the open transaction as one undo step. ``description`` of
+        ``None`` keeps the label set at ``begin_transaction``; an explicit
+        empty string overrides to blank."""
+        if self._current_commit is None:
+            return {
+                "success": False,
+                "message": "No open transaction to commit.",
+            }
+        # Three-state precedence: explicit override (incl. "") > begin label > default.
+        if description is not None:
+            msg = description
+        elif self._current_commit_description is not None:
+            msg = self._current_commit_description
+        else:
+            msg = self._DEFAULT_COMMIT_LABEL
+        try:
+            board = self._get_board()
+            board.push_commit(self._current_commit, msg)
+            self._current_commit = None
+            self._current_commit_description = None
+            logger.debug(f"Committed transaction: {msg}")
+            return {"success": True, "description": msg}
+        except Exception as e:
+            logger.error(f"Failed to commit transaction: {e}")
+            # Leave _current_commit set — caller may want to retry or
+            # rollback explicitly rather than us silently clearing state.
+            return {"success": False, "message": str(e)}
+
+    def rollback_transaction(self) -> Dict[str, Any]:
+        """Drop the open transaction — everything done since begin is undone."""
+        if self._current_commit is None:
+            return {
+                "success": False,
+                "message": "No open transaction to roll back.",
+            }
+        try:
             board = self._get_board()
             board.drop_commit(self._current_commit)
             self._current_commit = None
+            self._current_commit_description = None
             logger.debug("Rolled back transaction")
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Failed to rollback transaction: {e}")
+            return {"success": False, "message": str(e)}
+
+    def get_transaction_status(self) -> Dict[str, Any]:
+        """Whether a transaction is currently open and its description."""
+        return {
+            "success": True,
+            "open": self._current_commit is not None,
+            "description": self._current_commit_description,
+        }
+
+    # ------------------------------------------------------------------
+    # Mutation helpers — every mutator funnels through these so that an
+    # open transaction (via begin_transaction) catches the change instead
+    # of opening its own commit.
+    # ------------------------------------------------------------------
+    def _apply_create(self, board: Any, item: Any, description: str) -> str:
+        """Create one item, respecting any open transaction.
+
+        Returns the new item's KIID string. kipy's ``create_items``
+        returns fresh wrappers with the server-assigned IDs; the input
+        wrapper is *not* mutated, so we must read the id from the
+        return value (not from the local ``item``).
+        """
+        if self._current_commit is not None:
+            created = board.create_items(item)
+        else:
+            commit = board.begin_commit()
+            created = board.create_items(item)
+            board.push_commit(commit, description)
+        # create_items returns a list (or None from older stubs). Take
+        # the first entry's id; fall back to the input item if the
+        # backend gave us nothing useful (defensive — real kipy always
+        # returns the created wrapper list, but tests / stubs vary).
+        if created:
+            first = created[0]
+            if hasattr(first, "id"):
+                return str(first.id)
+        return str(item.id) if hasattr(item, "id") else ""
+
+    def _apply_update(
+        self, board: Any, items: List[Any], description: str
+    ) -> None:
+        """Update items, respecting any open transaction."""
+        if self._current_commit is not None:
+            board.update_items(items)
+        else:
+            commit = board.begin_commit()
+            board.update_items(items)
+            board.push_commit(commit, description)
+
+    def _apply_remove(
+        self, board: Any, items: List[Any], description: str
+    ) -> None:
+        """Remove items, respecting any open transaction."""
+        if self._current_commit is not None:
+            board.remove_items(items)
+        else:
+            commit = board.begin_commit()
+            board.remove_items(items)
+            board.push_commit(commit, description)
 
     def save(self) -> bool:
         """Save the board immediately."""
@@ -424,10 +558,7 @@ class IPCBoardAPI(BoardAPI):
             rect.layer = BoardLayer.BL_Edge_Cuts
             rect.width = from_mm(0.1)  # Standard edge cut width
 
-            # Begin transaction for undo support
-            commit = board.begin_commit()
-            board.create_items(rect)
-            board.push_commit(commit, f"Set board size to {width}x{height} {unit}")
+            self._apply_create(board, rect, f"Set board size to {width}x{height} {unit}")
 
             self._notify("board_size", {"width": width, "height": height, "unit": unit})
 
@@ -855,10 +986,7 @@ class IPCBoardAPI(BoardAPI):
             if fp.value_field:
                 fp.value_field.text.value = value if value else footprint
 
-            # Begin transaction
-            commit = board.begin_commit()
-            board.create_items(fp)
-            board.push_commit(commit, f"Placed component {reference}")
+            self._apply_create(board, fp, f"Placed component {reference}")
 
             self._notify(
                 "component_placed",
@@ -908,10 +1036,7 @@ class IPCBoardAPI(BoardAPI):
             if rotation is not None:
                 target_fp.orientation = Angle.from_degrees(rotation)
 
-            # Apply changes
-            commit = board.begin_commit()
-            board.update_items([target_fp])
-            board.push_commit(commit, f"Moved component {reference}")
+            self._apply_update(board, [target_fp], f"Moved component {reference}")
 
             self._notify(
                 "component_moved",
@@ -941,10 +1066,7 @@ class IPCBoardAPI(BoardAPI):
                 logger.error(f"Component not found: {reference}")
                 return False
 
-            # Remove component
-            commit = board.begin_commit()
-            board.remove_items([target_fp])
-            board.push_commit(commit, f"Deleted component {reference}")
+            self._apply_remove(board, [target_fp], f"Deleted component {reference}")
 
             self._notify("component_deleted", {"reference": reference})
 
@@ -1000,10 +1122,7 @@ class IPCBoardAPI(BoardAPI):
                         track.net = net
                         break
 
-            # Add track with transaction
-            commit = board.begin_commit()
-            board.create_items(track)
-            board.push_commit(commit, "Added track")
+            self._apply_create(board, track, "Added track")
 
             self._notify(
                 "track_added",
@@ -1065,9 +1184,7 @@ class IPCBoardAPI(BoardAPI):
                         arc.net = net
                         break
 
-            commit = board.begin_commit()
-            board.create_items(arc)
-            board.push_commit(commit, "Added arc track")
+            self._apply_create(board, arc, "Added arc track")
 
             self._notify(
                 "arc_track_added",
@@ -1132,10 +1249,7 @@ class IPCBoardAPI(BoardAPI):
                         via.net = net
                         break
 
-            # Add via with transaction
-            commit = board.begin_commit()
-            board.create_items(via)
-            board.push_commit(commit, "Added via")
+            self._apply_create(board, via, "Added via")
 
             self._notify(
                 "via_added",
@@ -1188,10 +1302,7 @@ class IPCBoardAPI(BoardAPI):
             }
             board_text.layer = layer_map.get(layer, BoardLayer.BL_F_SilkS)
 
-            # Add text with transaction
-            commit = board.begin_commit()
-            board.create_items(board_text)
-            board.push_commit(commit, f"Added text: {text}")
+            self._apply_create(board, board_text, f"Added text: {text}")
 
             self._notify("text_added", {"text": text, "position": {"x": x, "y": y}, "layer": layer})
 
@@ -1376,10 +1487,7 @@ class IPCBoardAPI(BoardAPI):
             zone._proto.outline.polygons.add()
             zone._proto.outline.polygons[0].outline.CopyFrom(outline._proto)
 
-            # Add zone with transaction
-            commit = board.begin_commit()
-            board.create_items(zone)
-            board.push_commit(commit, f"Added copper zone on {layer}")
+            self._apply_create(board, zone, f"Added copper zone on {layer}")
 
             self._notify(
                 "zone_added",
@@ -1630,7 +1738,7 @@ class IPCBoardAPI(BoardAPI):
             seg.end = Vector2.from_xy(from_mm(end_x), from_mm(end_y))
             seg.layer = self._layer_to_enum(layer)
             seg.attributes.stroke.width = from_mm(width)
-            created_id = self._commit_create(board, seg, f"Added segment on {layer}")
+            created_id = self._apply_create(board, seg, f"Added segment on {layer}")
             self._notify(
                 "shape_added",
                 {
@@ -1669,7 +1777,7 @@ class IPCBoardAPI(BoardAPI):
             arc.end = Vector2.from_xy(from_mm(end_x), from_mm(end_y))
             arc.layer = self._layer_to_enum(layer)
             arc.attributes.stroke.width = from_mm(width)
-            created_id = self._commit_create(board, arc, f"Added arc on {layer}")
+            created_id = self._apply_create(board, arc, f"Added arc on {layer}")
             self._notify(
                 "shape_added",
                 {
@@ -1715,7 +1823,7 @@ class IPCBoardAPI(BoardAPI):
             circle.layer = self._layer_to_enum(layer)
             circle.attributes.stroke.width = from_mm(width)
             circle.attributes.fill.filled = bool(filled)
-            created_id = self._commit_create(board, circle, f"Added circle on {layer}")
+            created_id = self._apply_create(board, circle, f"Added circle on {layer}")
             self._notify(
                 "shape_added",
                 {
@@ -1756,7 +1864,7 @@ class IPCBoardAPI(BoardAPI):
             rect.layer = self._layer_to_enum(layer)
             rect.attributes.stroke.width = from_mm(width)
             rect.attributes.fill.filled = bool(filled)
-            created_id = self._commit_create(board, rect, f"Added rectangle on {layer}")
+            created_id = self._apply_create(board, rect, f"Added rectangle on {layer}")
             self._notify(
                 "shape_added",
                 {
@@ -1809,7 +1917,7 @@ class IPCBoardAPI(BoardAPI):
             poly.layer = self._layer_to_enum(layer)
             poly.attributes.stroke.width = from_mm(width)
             poly.attributes.fill.filled = bool(filled)
-            created_id = self._commit_create(board, poly, f"Added polygon on {layer}")
+            created_id = self._apply_create(board, poly, f"Added polygon on {layer}")
             self._notify(
                 "shape_added",
                 {
@@ -2046,15 +2154,6 @@ class IPCBoardAPI(BoardAPI):
             logger.warning(f"Unknown layer {name!r}; defaulting to F.SilkS")
             return BoardLayer.BL_F_SilkS
         return value
-
-    @staticmethod
-    def _commit_create(board: Any, item: Any, description: str) -> str:
-        """Push a single create_items() inside its own commit. Returns the
-        created item's KIID as a string when available."""
-        commit = board.begin_commit()
-        board.create_items(item)
-        board.push_commit(commit, description)
-        return str(item.id) if hasattr(item, "id") else ""
 
     @staticmethod
     def _resolve_items_by_ids(board: Any, ids: List[str]) -> List[Any]:

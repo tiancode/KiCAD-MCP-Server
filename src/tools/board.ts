@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { passthroughCall } from "./tool-response.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -470,14 +471,8 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // Title block is what shows up on the printed PDF: company / rev /
   // date / nine free-form comment slots.
   // ------------------------------------------------------
-  const passthrough =
-    (command: string) =>
-    async (args: Record<string, unknown> = {}) => {
-      const result = await callKicadScript(command, args);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    };
+  const passthrough = (command: string) =>
+    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
 
   const originTypeSchema = z
     .enum(["grid", "drill", "aux"])

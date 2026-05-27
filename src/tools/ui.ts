@@ -5,18 +5,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { passthroughCall } from "./tool-response.js";
 
 export function registerUITools(server: McpServer, callKicadScript: Function) {
-  // Helper that wraps callKicadScript with the standard MCP text-content
-  // response shape.  Cuts ~10 lines of boilerplate per tool below.
-  const passthrough =
-    (command: string) =>
-    async (args: Record<string, unknown> = {}) => {
-      const result = await callKicadScript(command, args);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    };
+  const passthrough = (command: string) =>
+    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
 
   // Get MCP/KiCAD backend and loaded file state
   server.tool(

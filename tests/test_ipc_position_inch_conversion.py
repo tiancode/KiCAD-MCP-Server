@@ -27,6 +27,10 @@ def _make_iface() -> Any:
     iface.use_ipc = True
     iface.board = None
     iface.ipc_board_api = MagicMock()
+    # MagicMock auto-creates any attribute as a Mock (truthy), which would
+    # trip the place_component transaction guard. Explicitly declare no
+    # open transaction so this test exercises the normal placement path.
+    iface.ipc_board_api._current_commit = None
     iface.ipc_board_api.place_component.return_value = True
     iface.ipc_board_api.move_component.return_value = True
     return iface

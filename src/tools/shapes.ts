@@ -14,16 +14,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { passthroughCall } from "./tool-response.js";
 
 export function registerShapesTools(server: McpServer, callKicadScript: Function) {
-  const passthrough =
-    (command: string) =>
-    async (args: Record<string, unknown> = {}) => {
-      const result = await callKicadScript(command, args);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    };
+  const passthrough = (command: string) =>
+    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
 
   const xySchema = z.object({ x: z.number(), y: z.number() });
 
