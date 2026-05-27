@@ -103,9 +103,55 @@ function getWindowsKiCadPythonCandidates(): string[] {
 }
 
 /**
+ * Locate the Flatpak KiCAD shim, or null if Flatpak KiCAD isn't installed
+ * or the shim file is missing from this checkout.
+ *
+ * The shim is `scripts/kicad-flatpak-python.sh` — a thin bash wrapper
+ * around `flatpak run --command=python3 org.kicad.KiCad`.  We point the
+ * TypeScript server at the shim and let Flatpak Python serve every
+ * subsequent `import pcbnew` / `import kipy` / etc; the sandbox bundles
+ * the full runtime dep set this project needs.
+ *
+ * Detection is intentionally local (no `flatpak list` shell-out):
+ * checking install-dir existence is one stat() per location and reliable
+ * because Flatpak persists its app data there on every install.
+ */
+function findFlatpakKiCadShim(scriptPath: string): string | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+
+  const home = process.env.HOME;
+  const installRoots = [
+    "/var/lib/flatpak/app/org.kicad.KiCad",
+    home ? join(home, ".local/share/flatpak/app/org.kicad.KiCad") : "",
+  ].filter((p): p is string => Boolean(p));
+
+  const installed = installRoots.find((p) => existsSync(p));
+  if (!installed) {
+    return null;
+  }
+
+  // scriptPath is <repo>/python/kicad_interface.py — climb one to <repo>.
+  const repoRoot = dirname(dirname(scriptPath));
+  const shim = join(repoRoot, "scripts", "kicad-flatpak-python.sh");
+
+  if (!existsSync(shim)) {
+    logger.warn(
+      `Flatpak KiCAD detected at ${installed} but shim missing at ${shim}; ` +
+        "falling back to host Python (which likely doesn't have pcbnew). " +
+        "Re-run `chmod +x scripts/kicad-flatpak-python.sh` after a fresh clone.",
+    );
+    return null;
+  }
+
+  return shim;
+}
+
+/**
  * Find the Python executable to use.
  * Prioritizes project venvs, then explicit overrides, then KiCAD-bundled Python
- * before falling back to system Python.
+ * (including the Flatpak shim on Linux) before falling back to system Python.
  */
 function findPythonExecutable(scriptPath: string): string {
   const isWindows = process.platform === "win32";
@@ -192,6 +238,18 @@ function findPythonExecutable(scriptPath: string): string {
         logger.info(`Found KiCAD bundled Python at: ${path}`);
         return path;
       }
+    }
+
+    // Flatpak KiCAD: bundled Python ships pcbnew + every runtime dep but
+    // lives inside the sandbox.  scripts/kicad-flatpak-python.sh wraps
+    // `flatpak run --command=python3 org.kicad.KiCad` so the TypeScript
+    // server can spawn it like any other Python.  Without this branch the
+    // Flatpak-only user falls through to /usr/bin/python3 — which never
+    // has pcbnew — and validatePrerequisites aborts startup.
+    const flatpakShim = findFlatpakKiCadShim(scriptPath);
+    if (flatpakShim) {
+      logger.info(`Found Flatpak KiCAD; using shim at: ${flatpakShim}`);
+      return flatpakShim;
     }
 
     // Resolve system python3 to full path using 'which'
