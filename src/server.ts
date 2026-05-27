@@ -8,7 +8,14 @@ import { spawn, execFile, execSync, ChildProcess } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { promisify } from "util";
 import { logger } from "./logger.js";
+
+// Promise-returning execFile. Resolves with {stdout, stderr} on exit 0;
+// rejects with an Error whose .code is either a launch errno string
+// (ENOENT/EACCES/…) or the numeric non-zero exit code, and which carries
+// .stdout/.stderr properties when the child produced output before exiting.
+const execFileAsync = promisify(execFile);
 
 // Read package metadata once at module load so the MCP server reports the
 // real release version instead of a hardcoded "1.0.0" to every client.
@@ -285,37 +292,49 @@ export class KiCADMcpServer {
   private registerAll(): void {
     logger.info("Registering KiCAD tools, resources, and prompts...");
 
-    // Register router tools FIRST (for tool discovery and execution)
-    registerRouterTools(this.server, this.callKicadScript.bind(this));
+    // Bind once — the previous code did `this.callKicadScript.bind(this)`
+    // on every registrar call, producing 19 throwaway closures per startup.
+    const cb = this.callKicadScript.bind(this);
 
-    // Register all tools
-    registerProjectTools(this.server, this.callKicadScript.bind(this));
-    registerBoardTools(this.server, this.callKicadScript.bind(this));
-    registerComponentTools(this.server, this.callKicadScript.bind(this));
-    registerRoutingTools(this.server, this.callKicadScript.bind(this));
-    registerDesignRuleTools(this.server, this.callKicadScript.bind(this));
-    registerExportTools(this.server, this.callKicadScript.bind(this));
-    registerSchematicTools(this.server, this.callKicadScript.bind(this));
-    registerLibraryTools(this.server, this.callKicadScript.bind(this));
-    registerSymbolLibraryTools(this.server, this.callKicadScript.bind(this));
-    registerJLCPCBApiTools(this.server, this.callKicadScript.bind(this));
-    registerDatasheetTools(this.server, this.callKicadScript.bind(this));
-    registerFootprintTools(this.server, this.callKicadScript.bind(this));
-    registerSymbolCreatorTools(this.server, this.callKicadScript.bind(this));
-    registerUITools(this.server, this.callKicadScript.bind(this));
-    registerFreeroutingTools(this.server, this.callKicadScript.bind(this));
+    // Router tools come FIRST so the discovery/meta tools they expose
+    // (list_tool_categories / execute_tool / …) are present before any
+    // routed tools register against the same server instance.
+    const toolRegistrars = [
+      registerRouterTools,
+      registerProjectTools,
+      registerBoardTools,
+      registerComponentTools,
+      registerRoutingTools,
+      registerDesignRuleTools,
+      registerExportTools,
+      registerSchematicTools,
+      registerLibraryTools,
+      registerSymbolLibraryTools,
+      registerJLCPCBApiTools,
+      registerDatasheetTools,
+      registerFootprintTools,
+      registerSymbolCreatorTools,
+      registerUITools,
+      registerFreeroutingTools,
+    ];
+    for (const register of toolRegistrars) register(this.server, cb);
 
-    // Register all resources
-    registerProjectResources(this.server, this.callKicadScript.bind(this));
-    registerBoardResources(this.server, this.callKicadScript.bind(this));
-    registerComponentResources(this.server, this.callKicadScript.bind(this));
-    registerLibraryResources(this.server, this.callKicadScript.bind(this));
+    const resourceRegistrars = [
+      registerProjectResources,
+      registerBoardResources,
+      registerComponentResources,
+      registerLibraryResources,
+    ];
+    for (const register of resourceRegistrars) register(this.server, cb);
 
-    // Register all prompts
-    registerComponentPrompts(this.server);
-    registerRoutingPrompts(this.server);
-    registerDesignPrompts(this.server);
-    registerFootprintPrompts(this.server);
+    // Prompts take only `server` — different signature, hence its own loop.
+    const promptRegistrars = [
+      registerComponentPrompts,
+      registerRoutingPrompts,
+      registerDesignPrompts,
+      registerFootprintPrompts,
+    ];
+    for (const register of promptRegistrars) register(this.server);
 
     logger.info("All KiCAD tools, resources, and prompts registered");
   }
@@ -333,61 +352,17 @@ export class KiCADMcpServer {
       pythonExe.startsWith("/") || pythonExe.startsWith("C:") || pythonExe.startsWith("\\");
     let pythonExecutableAvailable = true;
 
-    if (isAbsolutePath) {
-      // Absolute path: use existsSync
-      if (!existsSync(pythonExe)) {
-        pythonExecutableAvailable = false;
-        errors.push(`Python executable not found: ${pythonExe}`);
+    if (isAbsolutePath && !existsSync(pythonExe)) {
+      // Absolute path that doesn't exist: bail before spawning anything.
+      pythonExecutableAvailable = false;
+      errors.push(`Python executable not found: ${pythonExe}`);
 
-        if (isWindows) {
-          errors.push("Windows: Install KiCAD 9.0+ from https://www.kicad.org/download/windows/");
-          errors.push("Or run: .\\setup-windows.ps1 for automatic configuration");
-        } else if (isLinux) {
-          errors.push("Linux: Install KiCAD 9.0+ or set KICAD_PYTHON environment variable");
-          errors.push("Set KICAD_PYTHON to specify a custom Python path");
-        }
-      }
-    } else {
-      // Command name: verify it's executable via --version test.
-      // Use execFile (no shell) so paths with spaces/$/quotes are passed
-      // verbatim to the OS instead of being parsed by a shell.
-      logger.info(`Validating command-based Python executable: ${pythonExe}`);
-      try {
-        const { stdout } = await new Promise<{
-          stdout: string;
-          stderr: string;
-        }>((resolve, reject) => {
-          execFile(
-            pythonExe,
-            ["--version"],
-            {
-              timeout: 3000,
-              env: { ...process.env },
-            },
-            (error: any, stdout: string, stderr: string) => {
-              if (error) {
-                reject(error);
-              } else {
-                resolve({ stdout, stderr });
-              }
-            },
-          );
-        });
-
-        logger.info(`Python version check passed: ${stdout.trim()}`);
-      } catch (error: any) {
-        pythonExecutableAvailable = false;
-        errors.push(`Python executable not found in PATH: ${pythonExe}`);
-        errors.push(`Error: ${error.message}`);
-        errors.push("Set KICAD_PYTHON environment variable to specify full path");
-
-        if (isLinux) {
-          errors.push("");
-          errors.push("Linux troubleshooting:");
-          errors.push("1. Check if python3 is installed: which python3");
-          errors.push("2. Install KiCAD: sudo apt install kicad (Ubuntu/Debian)");
-          errors.push("3. Set KICAD_PYTHON=/usr/bin/python3 in your MCP config");
-        }
+      if (isWindows) {
+        errors.push("Windows: Install KiCAD 9.0+ from https://www.kicad.org/download/windows/");
+        errors.push("Or run: .\\setup-windows.ps1 for automatic configuration");
+      } else if (isLinux) {
+        errors.push("Linux: Install KiCAD 9.0+ or set KICAD_PYTHON environment variable");
+        errors.push("Set KICAD_PYTHON to specify a custom Python path");
       }
     }
 
@@ -402,38 +377,84 @@ export class KiCADMcpServer {
       errors.push("Project not built. Run: npm run build");
     }
 
-    // Try to test pcbnew import (quick validation).
-    // Use execFile so the Python path and the `-c` snippet are passed as
-    // discrete argv entries — no shell quoting involved.
+    // Validate interpreter AND pcbnew in a single subprocess.  Previously
+    // this was a `python --version` call followed by a `python -c "import
+    // pcbnew; ..."` call — two spawns paying ~150-300 ms of process-start
+    // cost on cold disk.  Merging them halves the startup overhead and
+    // collapses two near-identical try/Promise/execFile blocks.
+    //
+    // Use execFile (no shell) so the path and `-c` snippet are passed as
+    // discrete argv entries — no shell quoting/expansion involved.
     if (pythonExecutableAvailable && existsSync(this.kicadScriptPath)) {
-      logger.info("Validating pcbnew module access...");
+      logger.info("Validating Python interpreter and pcbnew module...");
 
       try {
-        const { stdout, stderr } = await new Promise<{
-          stdout: string;
-          stderr: string;
-        }>((resolve, reject) => {
-          execFile(
-            pythonExe,
-            ["-c", "import pcbnew; print('OK')"],
-            {
-              timeout: 5000,
-              env: { ...process.env },
-            },
-            (error: any, stdout: string, stderr: string) => {
-              if (error) {
-                reject(error);
-              } else {
-                resolve({ stdout, stderr });
-              }
-            },
-          );
-        });
+        const { stdout } = await execFileAsync(
+          pythonExe,
+          ["-c", "import sys, pcbnew; print('Python ' + sys.version.split()[0]); print('OK')"],
+          { timeout: 5000, env: process.env },
+        );
 
-        if (!stdout.includes("OK")) {
-          errors.push("pcbnew module import test failed");
-          errors.push(`Output: ${stdout}`);
-          errors.push(`Errors: ${stderr}`);
+        if (stdout.includes("OK")) {
+          const versionLine =
+            stdout.split("\n").find((l) => l.startsWith("Python ")) ?? "(version unknown)";
+          logger.info(`✓ ${versionLine.trim()} with importable pcbnew`);
+        } else {
+          // Process exited 0 but never printed OK — would mean print() ran
+          // for the version line but pcbnew import was somehow skipped.
+          // Practically unreachable but worth surfacing rather than passing.
+          errors.push("pcbnew module import test produced no OK marker");
+          errors.push(`Output: ${stdout.trim()}`);
+        }
+      } catch (error: any) {
+        // Three failure shapes from execFile / promisify(execFile):
+        //
+        //   • Launch failure (binary unreachable): error.code is the errno
+        //     STRING — "ENOENT", "EACCES", "ENOEXEC", …
+        //   • Non-zero exit (process ran but Python raised): error.code is
+        //     the exit NUMBER, e.g. 1.  error.stderr carries the traceback.
+        //   • Timeout (binary launched, didn't finish in time): error.code
+        //     is null/undefined and error.killed === true with error.signal
+        //     populated (typically SIGTERM).
+        //
+        // The third path matters: a Flatpak cold-start or a slow
+        // `import pcbnew` can hit the 5s cap, and if we mis-route it to
+        // "pcbnew validation failed" the user gets useless Python traceback
+        // hints when the real fix is "raise the timeout / warm the cache".
+        const isLaunchErrno =
+          typeof error.code === "string" &&
+          ["ENOENT", "EACCES", "ENOEXEC", "EPERM"].includes(error.code);
+        const isTimeout = error.killed === true && Boolean(error.signal);
+
+        if (isLaunchErrno) {
+          errors.push(`Python executable not found in PATH: ${pythonExe}`);
+          errors.push(`Error: ${error.message}`);
+          errors.push("Set KICAD_PYTHON environment variable to specify full path");
+
+          if (isLinux) {
+            errors.push("");
+            errors.push("Linux troubleshooting:");
+            errors.push("1. Check if python3 is installed: which python3");
+            errors.push("2. Install KiCAD: sudo apt install kicad (Ubuntu/Debian)");
+            errors.push("3. Set KICAD_PYTHON=/usr/bin/python3 in your MCP config");
+          }
+        } else if (isTimeout) {
+          errors.push(
+            `Python interpreter / pcbnew import exceeded the 5 s startup probe (${pythonExe})`,
+          );
+          errors.push(
+            "This usually means a slow cold start (Flatpak sandbox spin-up, " +
+              "network-mounted home, antivirus scan) — not a broken install. " +
+              "Re-run; the second start is usually fast.  If it persists, run " +
+              `manually: ${pythonExe} -c 'import pcbnew; print("OK")'`,
+          );
+        } else {
+          // Non-zero exit — Python launched but the import failed.
+          errors.push(`pcbnew validation failed: ${error.message}`);
+          const stderrText = error.stderr ? String(error.stderr).trim() : "";
+          if (stderrText) {
+            errors.push(`Errors: ${stderrText}`);
+          }
 
           if (isWindows) {
             errors.push("");
@@ -447,20 +468,6 @@ export class KiCADMcpServer {
             errors.push("3. Run: .\\setup-windows.ps1 for automatic fix");
             errors.push("4. See: docs/WINDOWS_TROUBLESHOOTING.md");
           }
-        } else {
-          logger.info("✓ pcbnew module validated successfully");
-        }
-      } catch (error: any) {
-        errors.push(`pcbnew validation failed: ${error.message}`);
-
-        if (isWindows) {
-          errors.push("");
-          errors.push("This usually means:");
-          errors.push("- KiCAD is not installed");
-          errors.push("- PYTHONPATH is incorrect");
-          errors.push("- Python cannot find pcbnew module");
-          errors.push("");
-          errors.push("Quick fix: Run .\\setup-windows.ps1");
         }
       }
     }
@@ -584,7 +591,6 @@ export class KiCADMcpServer {
         throw error;
       }
 
-
       // Write a ready message to stderr (for debugging)
       process.stderr.write("KiCAD MCP SERVER READY\n");
 
@@ -618,14 +624,14 @@ export class KiCADMcpServer {
   private async waitForReady(timeoutMs: number): Promise<void> {
     return new Promise((_resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error(
-          `Python process did not send READY within ${timeoutMs / 1000} s`
-        ));
+        reject(new Error(`Python process did not send READY within ${timeoutMs / 1000} s`));
       }, timeoutMs);
-      this.readyPromise.then(() => {
-        clearTimeout(timeout);
-        _resolve();
-      }).catch(reject);
+      this.readyPromise
+        .then(() => {
+          clearTimeout(timeout);
+          _resolve();
+        })
+        .catch(reject);
     });
   }
 
@@ -652,7 +658,7 @@ export class KiCADMcpServer {
       const timeoutHandle = setTimeout(() => {
         logger.warn(
           `Warm-up timed out after ${timeoutMs / 1000} s — ` +
-          "continuing without full initialisation"
+            "continuing without full initialisation",
         );
         this.responseBuffer = "";
         this.processingRequest = false;
@@ -669,13 +675,9 @@ export class KiCADMcpServer {
           this.processingRequest = false;
           this.currentRequestHandler = null;
           if (result?.success) {
-            logger.info(
-              `Warm-up succeeded: pcbnew ${result.version} (${result.elapsed_s}s)`
-            );
+            logger.info(`Warm-up succeeded: pcbnew ${result.version} (${result.elapsed_s}s)`);
           } else {
-            logger.warn(
-              `Warm-up returned failure: ${result?.message || "unknown"} — continuing`
-            );
+            logger.warn(`Warm-up returned failure: ${result?.message || "unknown"} — continuing`);
           }
           resolve();
         },
