@@ -1961,33 +1961,86 @@ class KiCADInterface:
             except OSError:
                 pass
 
+    # Grid layout constants for _add_missing_footprints_from_schematic.
+    # Spacing leaves clearance around typical SMD packages (most are under
+    # 10mm bbox); start offset keeps the grid visually distinct from the
+    # (0, 0) page-origin marker.  Units are pcbnew internal nanometers.
+    _NEW_FOOTPRINT_GRID_SPACING_NM = 15_000_000  # 15 mm cell pitch
+    _NEW_FOOTPRINT_GRID_START_NM = 10_000_000  # 10 mm from page origin
+    _NEW_FOOTPRINT_GRID_GUTTER_NM = 20_000_000  # 20 mm gap past existing FPs
+
+    def _grid_origin_for_new_footprints(self, existing_fps: List[Any]) -> Tuple[int, int]:
+        """Pick a safe (x_nm, y_nm) origin for grid-placing new footprints.
+
+        Empty board → fixed offset from (0, 0).  Otherwise, the grid
+        starts to the *right* of the existing footprint cluster so we
+        don't drop the new components on top of the agent's prior work.
+        """
+        if not existing_fps:
+            return (
+                self._NEW_FOOTPRINT_GRID_START_NM,
+                self._NEW_FOOTPRINT_GRID_START_NM,
+            )
+        max_x = 0
+        for fp in existing_fps:
+            try:
+                pos = fp.GetPosition()
+                if pos.x > max_x:
+                    max_x = pos.x
+            except Exception:
+                # Defensive: a corrupt SWIG proxy on one footprint shouldn't
+                # collapse the whole sync.  Treat as "no clue" → fall back
+                # to the page-origin offset.
+                pass
+        return (
+            max_x + self._NEW_FOOTPRINT_GRID_GUTTER_NM,
+            self._NEW_FOOTPRINT_GRID_START_NM,
+        )
+
     def _add_missing_footprints_from_schematic(
         self, board: Any, schematic_path: str
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
         """Add footprints to ``board`` for any schematic component not yet present.
 
-        New footprints are placed at the board origin so the user can move them
-        into position. Power/flag references (``#PWR``, ``#FLG``) are skipped —
-        they have no PCB representation.
+        New footprints are laid out in a roughly-square grid (cell pitch
+        15 mm, columns = ``ceil(sqrt(N))``) instead of stacked at the
+        page origin — the old behavior dropped every newly-imported
+        footprint at (0, 0), forcing the agent to manually move each one
+        before any of them were visible.  Grid origin is (10 mm, 10 mm)
+        for empty boards or 20 mm to the right of the existing cluster
+        when the board already has footprints.
 
-        Returns ``(added, skipped)``: each entry is
-        ``{"reference": str, "footprint": str, "reason": str?}``.
+        Power/flag references (``#PWR``, ``#FLG``) are skipped — they
+        have no PCB representation.
+
+        Returns ``(added, skipped)``.  Each ``added`` entry includes the
+        assigned ``position`` (in mm) so callers can surface the layout
+        to the user.
         """
+        import math
         from pathlib import Path
 
         from commands.library import LibraryManager
 
-        added: List[Dict[str, str]] = []
+        added: List[Dict[str, Any]] = []
         skipped: List[Dict[str, str]] = []
 
         components = self._extract_components_from_schematic(schematic_path)
         if not components:
             return added, skipped
 
-        existing_refs = {fp.GetReference() for fp in board.GetFootprints()}
+        # One pass through GetFootprints — SWIG iterators are usually OK
+        # to re-iterate, but materialising once removes the doubt and
+        # avoids a second walk to compute the grid origin.
+        existing_fps = list(board.GetFootprints())
+        existing_refs = {fp.GetReference() for fp in existing_fps}
         project_dir = Path(schematic_path).parent
         library_manager = LibraryManager(project_path=project_dir)
 
+        # First pass: filter + load.  We don't position yet because the
+        # column count of the grid depends on how many actually load
+        # successfully (skip entries are removed from the count).
+        to_place: List[Tuple[Any, Dict[str, str], str, str]] = []
         for comp in components:
             ref = comp["reference"]
             fp_str = comp["footprint"]
@@ -2036,16 +2089,35 @@ class KiCADInterface:
                 )
                 continue
 
-            module.SetReference(ref)
-            if comp["value"]:
-                module.SetValue(comp["value"])
-            module.SetFPID(pcbnew.LIB_ID(lib_name, fp_name))
-            # Place at board origin; user / autoplacer can position from there.
-            module.SetPosition(pcbnew.VECTOR2I(0, 0))
+            to_place.append((module, comp, lib_name, fp_name))
 
-            board.Add(module)
-            existing_refs.add(ref)
-            added.append({"reference": ref, "footprint": fp_str})
+        # Second pass: lay out in a grid and add to the board.
+        if to_place:
+            origin_x, origin_y = self._grid_origin_for_new_footprints(existing_fps)
+            cols = max(1, int(math.ceil(math.sqrt(len(to_place)))))
+            spacing = self._NEW_FOOTPRINT_GRID_SPACING_NM
+            for idx, (module, comp, lib_name, fp_name) in enumerate(to_place):
+                ref = comp["reference"]
+                module.SetReference(ref)
+                if comp["value"]:
+                    module.SetValue(comp["value"])
+                module.SetFPID(pcbnew.LIB_ID(lib_name, fp_name))
+                x_nm = origin_x + (idx % cols) * spacing
+                y_nm = origin_y + (idx // cols) * spacing
+                module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
+
+                board.Add(module)
+                existing_refs.add(ref)
+                added.append(
+                    {
+                        "reference": ref,
+                        "footprint": comp["footprint"],
+                        "position": {
+                            "x_mm": round(x_nm / 1_000_000, 3),
+                            "y_mm": round(y_nm / 1_000_000, 3),
+                        },
+                    }
+                )
 
         if added:
             logger.info(f"_add_missing_footprints_from_schematic: added {len(added)} footprints")

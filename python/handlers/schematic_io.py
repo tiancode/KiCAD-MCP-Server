@@ -12,11 +12,10 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import pcbnew  # type: ignore[import-not-found]
 import sexpdata
-
 from commands.schematic import SchematicManager
 from commands.wire_manager import WireManager
 
@@ -89,11 +88,7 @@ def _collect_power_label_names(schematic_path: str) -> set:
                     elif chead == "property" and len(child) >= 3 and isinstance(child[1], str):
                         if child[1] == "Value" and isinstance(child[2], str):
                             value_text = child[2]
-            if (
-                lib_id_text
-                and lib_id_text.lower().startswith("power:")
-                and value_text
-            ):
+            if lib_id_text and lib_id_text.lower().startswith("power:") and value_text:
                 names.add(value_text)
         for child in node[1:]:
             _walk(child)
@@ -243,6 +238,23 @@ def handle_sync_schematic_to_board(
             f"sync_schematic_to_board: {len(added_nets)} nets added, "
             f"{len(added_footprints)} footprints added, {assigned_pads} pads assigned"
         )
+        # Surface the grid-placement contract so agents know each new
+        # footprint landed at a distinct position and which positions
+        # they were — previously they all stacked at (0, 0) and the
+        # caller had to issue N move_component calls before anything
+        # was visible.
+        layout_note: Optional[str] = None
+        if added_footprints:
+            positions = [fp.get("position") for fp in added_footprints if fp.get("position")]
+            if positions:
+                xs = [p["x_mm"] for p in positions]
+                ys = [p["y_mm"] for p in positions]
+                layout_note = (
+                    f"{len(added_footprints)} new footprints grid-placed: "
+                    f"x in [{min(xs)}, {max(xs)}] mm, "
+                    f"y in [{min(ys)}, {max(ys)}] mm. "
+                    f"Call move_component on each ref to reposition."
+                )
         return {
             "success": True,
             "message": (
@@ -255,6 +267,7 @@ def handle_sync_schematic_to_board(
             "unmatched_pads_sample": unmatched[:10],
             "footprints_added": added_footprints,
             "footprints_skipped": skipped_footprints,
+            "layout_note": layout_note,
         }
 
     except Exception as e:
@@ -517,9 +530,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 if vseverity in severity_counts:
                     severity_counts[vseverity] += 1
 
-            tagged_false_positives = sum(
-                1 for v in violations if v.get("likely_false_positive")
-            )
+            tagged_false_positives = sum(1 for v in violations if v.get("likely_false_positive"))
             return {
                 "success": True,
                 "message": (
