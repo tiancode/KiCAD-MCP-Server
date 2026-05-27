@@ -720,11 +720,20 @@ class SymbolLibraryManager:
         query_lower = plan.name_query.lower()
         if not query_lower:
             return []
+        # Tokenize on whitespace.  Multi-token queries used to compare the
+        # full string against every field as one substring, so the natural
+        # ``"VCC power"`` returned 0 hits even when ``power:VCC`` was
+        # available.  We now score each token independently with strict
+        # AND semantics: any token that finds no match anywhere on the
+        # symbol disqualifies the candidate.
+        tokens = query_lower.split()
+        if not tokens:
+            return []
 
         def candidates():
             for library_nickname in plan.libraries_searched:
                 for symbol in self.list_symbols(library_nickname):
-                    score = self._score_match(query_lower, symbol)
+                    score = self._score_match(tokens, symbol)
                     if score > 0:
                         yield (score, symbol)
 
@@ -761,9 +770,27 @@ class SymbolLibraryManager:
         """
         return self.execute_search_plan(self.plan_search(query, library_filter), limit)
 
-    def _score_match(self, query: str, symbol: SymbolInfo) -> int:
+    def _score_match(self, tokens: List[str], symbol: SymbolInfo) -> int:
+        """Sum per-token scores, with strict AND semantics across tokens.
+
+        Multi-token queries used to substring-match the full string (e.g.
+        ``"VCC power"`` against each field), which never matched a
+        symbol named ``VCC`` in library ``power``.  Each whitespace token
+        is now scored independently and any token that finds NO match
+        zeroes the candidate — so ``"VCC banana"`` doesn't accidentally
+        return every VCC variant.
         """
-        Score how well a symbol matches a query
+        total = 0
+        for tok in tokens:
+            sub = self._score_token(tok, symbol)
+            if sub == 0:
+                return 0
+            total += sub
+        return total
+
+    def _score_token(self, query: str, symbol: SymbolInfo) -> int:
+        """
+        Score how well a symbol matches a single query token
 
         Returns:
             Score (0 = no match, higher = better match)
@@ -805,6 +832,13 @@ class SymbolLibraryManager:
         # Category match
         if symbol.category and query in symbol.category.lower():
             score += 20
+
+        # Library-nickname match.  Lets multi-token queries like
+        # ``"VCC power"`` succeed: the ``power`` token matches the
+        # library while ``VCC`` matches the symbol name.  Low weight so
+        # it ranks below real name / value / desc hits.
+        if symbol.library and query in symbol.library.lower():
+            score += 25
 
         return score
 

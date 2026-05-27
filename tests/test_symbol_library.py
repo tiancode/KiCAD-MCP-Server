@@ -602,3 +602,106 @@ class TestSearchSymbolsEdgeCases:
 
         assert "interpretation" in response
         assert "note" in response["interpretation"]
+
+
+@pytest.mark.unit
+class TestSearchSymbolsMultiToken:
+    """Regression for the multi-token failure: ``search_symbols("VCC power",
+    library="power")`` returned 0 hits because the full string was
+    substring-matched against every field as one token.  Whitespace now
+    splits the query into tokens with strict AND semantics."""
+
+    def test_multi_token_matches_via_name_and_library_nickname(self):
+        """``"VCC power"`` should find ``power:VCC`` — token 'VCC' hits the
+        name, token 'power' hits the library nickname."""
+        manager = _make_synthetic_manager(
+            {
+                "power": [
+                    _info("VCC", "power", description="Power symbol"),
+                    _info("+3V3", "power"),
+                ],
+                "Device": [_info("R", "Device", description="Resistor")],
+            }
+        )
+
+        results = manager.search_symbols("VCC power")
+        names = [s.full_ref for s in results]
+        assert "power:VCC" in names
+        assert names[0] == "power:VCC"
+
+    def test_multi_token_with_explicit_library_filter(self):
+        """The user's exact reproduction:
+        ``search_symbols(query="VCC power", library="power")`` was returning 0;
+        must now return power:VCC.  ``library="power"`` restricts scope
+        and the ``power`` token incidentally also matches the library
+        nickname for every candidate."""
+        manager = _make_synthetic_manager(
+            {
+                "power": [_info("VCC", "power"), _info("+3V3", "power")],
+                "Other": [_info("VCC_random", "Other")],
+            }
+        )
+
+        results = manager.search_symbols("VCC power", library_filter="power")
+        names = [s.full_ref for s in results]
+        assert names == ["power:VCC"], (
+            "Multi-token + library_filter must keep AND semantics: "
+            "only power:VCC matches both tokens within the power library."
+        )
+
+    def test_token_with_no_match_anywhere_zeros_the_candidate(self):
+        """``"VCC banana"`` must NOT return random VCC symbols — the
+        'banana' token has to match SOMETHING (name/value/desc/lib/etc.)
+        or the candidate is disqualified."""
+        manager = _make_synthetic_manager(
+            {"power": [_info("VCC", "power", description="Power symbol")]}
+        )
+
+        results = manager.search_symbols("VCC banana")
+        assert results == []
+
+    def test_multi_token_via_description(self):
+        """Tokens can match different fields — one token's name match plus
+        another token's description match is enough."""
+        manager = _make_synthetic_manager(
+            {
+                "Logic": [
+                    _info(
+                        "74HC595",
+                        "Logic",
+                        description="Serial-in parallel-out shift register",
+                    ),
+                ]
+            }
+        )
+
+        results = manager.search_symbols("74HC595 shift")
+        names = [s.full_ref for s in results]
+        assert "Logic:74HC595" in names
+
+    def test_single_token_query_behaves_as_before(self):
+        """Single-token queries (the existing behaviour) must keep their
+        old ranking — exact name match outscores description-substring."""
+        manager = _make_synthetic_manager(
+            {
+                "Device": [_info("LED", "Device", description="Light emitting diode")],
+                "Logic": [
+                    _info("74HC", "Logic", description="some led-related description")
+                ],
+            }
+        )
+
+        results = manager.search_symbols("LED")
+        names = [s.full_ref for s in results]
+        assert names[0] == "Device:LED"
+
+    def test_extra_whitespace_does_not_create_empty_tokens(self):
+        """Leading / trailing / repeated whitespace must not produce empty
+        tokens (which would match everything)."""
+        manager = _make_synthetic_manager(
+            {"power": [_info("VCC", "power")], "Device": [_info("R", "Device")]}
+        )
+
+        results = manager.search_symbols("   VCC   power   ")
+        names = [s.full_ref for s in results]
+        assert names == ["power:VCC"]
