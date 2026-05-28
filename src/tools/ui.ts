@@ -57,7 +57,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };

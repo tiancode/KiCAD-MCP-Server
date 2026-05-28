@@ -141,7 +141,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     }) => {
       const result = await callKicadScript("create_symbol", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -157,7 +157,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     async (args: { libraryPath: string; name: string }) => {
       const result = await callKicadScript("delete_symbol", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -172,7 +172,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     async (args: { libraryPath: string }) => {
       const result = await callKicadScript("list_symbols_in_library", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -207,7 +207,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     }) => {
       const result = await callKicadScript("register_symbol_library", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );

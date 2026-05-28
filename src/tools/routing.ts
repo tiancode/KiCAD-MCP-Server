@@ -20,7 +20,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -56,7 +56,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -99,7 +99,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -127,7 +127,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -161,7 +161,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -192,7 +192,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -224,7 +224,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -258,7 +258,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -348,7 +348,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -372,7 +372,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -395,7 +395,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -419,7 +419,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -455,7 +455,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -480,7 +480,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -522,7 +522,7 @@ Looks up pad positions, detects the net from the source pad, and inserts a via i
     async (args: any) => {
       const result = await callKicadScript("route_pad_to_pad", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -552,7 +552,7 @@ Looks up pad positions, detects the net from the source pad, and inserts a via i
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };

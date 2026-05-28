@@ -26,7 +26,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -52,7 +52,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -72,7 +72,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -90,7 +90,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -119,7 +119,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };

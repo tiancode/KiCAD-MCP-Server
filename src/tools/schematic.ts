@@ -20,7 +20,7 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -594,7 +594,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -643,7 +643,7 @@ edit_schematic_component and set its value to an empty string.`,
       const result = await callKicadScript("add_no_connect", args);
       if (result.success) {
         return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(result) }],
         };
       } else {
         return {
@@ -682,7 +682,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -893,7 +893,7 @@ edit_schematic_component and set its value to an empty string.`,
     async (args: { schematicPath: string }) => {
       const result = await callKicadScript("get_schematic_overview", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -1606,7 +1606,7 @@ edit_schematic_component and set its value to an empty string.`,
     async (args: { schematicPath: string; boardPath: string }) => {
       const result = await callKicadScript("sync_schematic_to_board", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );

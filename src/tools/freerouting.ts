@@ -59,7 +59,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -83,7 +83,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -104,7 +104,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
