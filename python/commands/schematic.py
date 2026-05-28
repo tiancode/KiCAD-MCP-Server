@@ -1,10 +1,14 @@
 import logging
 import os
 import shutil
+import tempfile
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from skip import Schematic
+
+from commands.schematic_locks import schematic_path_lock
 
 logger = logging.getLogger("kicad_interface")
 
@@ -89,10 +93,33 @@ class SchematicManager:
 
     @staticmethod
     def save_schematic(schematic: Any, file_path: str) -> bool:
-        """Save a schematic to file"""
+        """Save a schematic to file.
+
+        Serialized per-path and written atomically: kicad-skip writes to a
+        temp file in the same directory, then ``os.replace`` swaps it into
+        place.  This prevents a concurrent reader (e.g. ``get_schematic_view``
+        shelling out to kicad-cli) from seeing a half-written file and
+        prevents two writers from interleaving — the corruption that
+        ballooned schematics to hundreds of nested roots.
+        """
         try:
-            # kicad-skip uses write method, not save
-            schematic.write(file_path)
+            with schematic_path_lock(file_path):
+                target = Path(file_path)
+                directory = target.parent if str(target.parent) else Path(".")
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=str(directory), prefix=f".{target.name}.", suffix=".tmp"
+                )
+                os.close(fd)
+                try:
+                    # kicad-skip uses write method, not save
+                    schematic.write(tmp_name)
+                    os.replace(tmp_name, target)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
             logger.info(f"Saved schematic to: {file_path}")
             return True
         except Exception as e:

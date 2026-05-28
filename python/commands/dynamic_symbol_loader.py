@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from commands.schematic_locks import atomic_write_text, serialize_on_path
+
 logger = logging.getLogger("kicad_interface")
 
 
@@ -409,6 +411,7 @@ class DynamicSymbolLoader:
         logger.info(f"Extracted symbol {full_name} ({len(result)} chars)")
         return result
 
+    @serialize_on_path(1)
     def refresh_embedded_lib_symbols(self, schematic_path: Path) -> Dict[str, Any]:
         """Re-inject every ``(symbol "Lib:Name" ...)`` in the schematic's
         ``lib_symbols`` block with the current copy from disk.
@@ -551,8 +554,7 @@ class DynamicSymbolLoader:
 
         if refreshed:
             try:
-                with open(schematic_path, "w", encoding="utf-8") as f:
-                    f.write(content)
+                atomic_write_text(schematic_path, content)
             except OSError as e:
                 return {
                     "success": False,
@@ -574,6 +576,7 @@ class DynamicSymbolLoader:
             ),
         }
 
+    @serialize_on_path(1)
     def inject_symbol_into_schematic(
         self, schematic_path: Path, library_name: str, symbol_name: str
     ) -> bool:
@@ -625,14 +628,14 @@ class DynamicSymbolLoader:
         # Insert the symbol block just before the closing ) of lib_symbols
         content = content[:lib_sym_end] + "\n    " + indented_block + "\n  " + content[lib_sym_end:]
 
-        with open(schematic_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write_text(schematic_path, content)
 
         # Handle both Path objects and strings
         sch_name = schematic_path.name if hasattr(schematic_path, "name") else str(schematic_path)
         logger.info(f"Injected symbol {full_name} into {sch_name}")
         return True
 
+    @serialize_on_path(1)
     def create_component_instance(
         self,
         schematic_path: Path,
@@ -697,12 +700,12 @@ class DynamicSymbolLoader:
         else:
             content = content[:insert_at] + instance_block + "\n  " + content[insert_at:]
 
-        with open(schematic_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write_text(schematic_path, content)
 
         logger.info(f"Added component instance {reference} ({full_lib_id}) at ({x}, {y})")
         return True
 
+    @serialize_on_path(1)
     def load_symbol_dynamically(
         self, schematic_path: Path, library_name: str, symbol_name: str
     ) -> str:
@@ -733,6 +736,7 @@ class DynamicSymbolLoader:
         logger.info(f"Symbol loaded. Template reference: {template_ref}")
         return template_ref
 
+    @serialize_on_path(1)
     def add_component(
         self,
         schematic_path: Path,

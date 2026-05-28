@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 import sexpdata
 from commands.schematic import SchematicManager
+from commands.schematic_locks import atomic_write_text, serialize_on_param
 from commands.wire_manager import WireManager
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ def _apply_grid_snap(x: float, y: float, params: Dict[str, Any]) -> Tuple[float,
     return new_x, new_y, (new_x != float(x) or new_y != float(y))
 
 
+@serialize_on_param("schematicPath")
 def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate unannotated components in schematic (R? -> R1, R2, ...)"""
     logger.info("Annotating schematic")
@@ -148,6 +150,7 @@ def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -
         return {"success": False, "message": str(e)}
 
 
+@serialize_on_param("schematicPath")
 def handle_rotate_schematic_component(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -214,8 +217,7 @@ def handle_rotate_schematic_component(
 
         WireManager.sync_junctions(sch_data)
 
-        with open(schematic_path, "w", encoding="utf-8") as f:
-            f.write(_sexpdata.dumps(sch_data))
+        atomic_write_text(schematic_path, _sexpdata.dumps(sch_data))
 
         return {
             "success": True,
@@ -234,6 +236,7 @@ def handle_rotate_schematic_component(
         return {"success": False, "message": str(e)}
 
 
+@serialize_on_param("schematicPath")
 def handle_move_schematic_component(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -312,8 +315,7 @@ def handle_move_schematic_component(
 
         WireManager.sync_junctions(sch_data)
 
-        with open(schematic_path, "w", encoding="utf-8") as f:
-            f.write(sexpdata.dumps(sch_data))
+        atomic_write_text(schematic_path, sexpdata.dumps(sch_data))
 
         response: Dict[str, Any] = {
             "success": True,
@@ -529,6 +531,7 @@ def handle_set_schematic_component_property(
     )
 
 
+@serialize_on_param("schematicPath")
 def handle_edit_schematic_component(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -759,8 +762,7 @@ def handle_edit_schematic_component(
 
         content = content[:block_start] + block_text + content[block_end + 1 :]
 
-        with open(sch_file, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write_text(sch_file, content)
 
         changes: Dict[str, Any] = {
             k: v
@@ -791,6 +793,7 @@ def handle_edit_schematic_component(
         return {"success": False, "message": str(e)}
 
 
+@serialize_on_param("schematicPath")
 def handle_delete_schematic_component(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -888,8 +891,7 @@ def handle_delete_schematic_component(
                 trim_start -= 1
             content = content[:trim_start] + content[b_end + 1 :]
 
-        with open(sch_file, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write_text(sch_file, content)
 
         deleted_count = len(blocks_to_delete)
         logger.info(f"Deleted {deleted_count} instance(s) of {reference} from {sch_file.name}")
@@ -938,6 +940,7 @@ def handle_refresh_schematic_lib_symbols(
     return loader.refresh_embedded_lib_symbols(sch)
 
 
+@serialize_on_param("schematicPath")
 def handle_add_schematic_component(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:

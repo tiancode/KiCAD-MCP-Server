@@ -17,6 +17,12 @@ from typing import Any, List, Optional, Tuple
 import sexpdata
 from sexpdata import Symbol
 
+from commands.schematic_locks import (
+    atomic_write_text,
+    schematic_path_lock,
+    serialize_on_path,
+)
+
 logger = logging.getLogger("kicad_interface")
 
 # Module-level Symbol constants — avoids repeated allocation on every call
@@ -167,14 +173,14 @@ def _find_insertion_point(content: str) -> int:
 
 def _text_insert(file_path: Path, sexp_text: str) -> bool:
     """Insert S-expression text into a .kicad_sch file preserving formatting."""
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
+    with schematic_path_lock(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
 
-    insert_at = _find_insertion_point(content)
-    content = content[:insert_at] + sexp_text + content[insert_at:]
+        insert_at = _find_insertion_point(content)
+        content = content[:insert_at] + sexp_text + content[insert_at:]
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
+        atomic_write_text(file_path, content)
     return True
 
 
@@ -242,6 +248,7 @@ class WireManager:
     _SUB_UNIT_RE = re.compile(r"^(.+)_(\d+)_(\d+)$")
 
     @staticmethod
+    @serialize_on_path(0)
     def add_wire(
         schematic_path: Path,
         start_point: List[float],
@@ -303,8 +310,7 @@ class WireManager:
             # Serialize + validate BEFORE opening for write so a corrupt
             # result never truncates the existing schematic.
             output = _serialize_validated(sch_data)
-            with open(schematic_path, "w", encoding="utf-8") as f:
-                f.write(output)
+            atomic_write_text(schematic_path, output)
 
             logger.info(f"Successfully added wire to {schematic_path.name}")
             return True
@@ -323,6 +329,7 @@ class WireManager:
             return False
 
     @staticmethod
+    @serialize_on_path(0)
     def add_polyline_wire(
         schematic_path: Path,
         points: List[List[float]],
@@ -390,8 +397,7 @@ class WireManager:
             # Serialize + validate BEFORE opening for write so a corrupt
             # result never truncates the existing schematic.
             output = _serialize_validated(sch_data)
-            with open(schematic_path, "w", encoding="utf-8") as f:
-                f.write(output)
+            atomic_write_text(schematic_path, output)
 
             logger.info(f"Successfully added polyline wire to {schematic_path.name}")
             return True
@@ -410,6 +416,7 @@ class WireManager:
             return False
 
     @staticmethod
+    @serialize_on_path(0)
     def add_label(
         schematic_path: Path,
         text: str,
@@ -475,8 +482,7 @@ class WireManager:
             sch_data.insert(sheet_instances_index, label_sexp)
 
             output = _serialize_validated(sch_data)
-            with open(schematic_path, "w", encoding="utf-8") as f:
-                f.write(output)
+            atomic_write_text(schematic_path, output)
 
             logger.info(f"Successfully added label '{text}' to {schematic_path.name}")
             return True
@@ -856,6 +862,7 @@ class WireManager:
         return added, removed
 
     @staticmethod
+    @serialize_on_path(0)
     def add_no_connect(schematic_path: Path, position: List[float]) -> bool:
         """
         Add a no-connect flag to the schematic
@@ -900,8 +907,7 @@ class WireManager:
             # Serialize + validate BEFORE opening for write so a corrupt
             # result never truncates the existing schematic.
             output = _serialize_validated(sch_data)
-            with open(schematic_path, "w", encoding="utf-8") as f:
-                f.write(output)
+            atomic_write_text(schematic_path, output)
 
             logger.info(f"Successfully added no-connect to {schematic_path.name}")
             return True
@@ -920,6 +926,7 @@ class WireManager:
             return False
 
     @staticmethod
+    @serialize_on_path(0)
     def delete_wire(
         schematic_path: Path,
         start_point: List[float],
@@ -989,8 +996,7 @@ class WireManager:
                     del sch_data[i]
                     WireManager.sync_junctions(sch_data)
                     output = _serialize_validated(sch_data)
-                    with open(schematic_path, "w", encoding="utf-8") as f:
-                        f.write(output)
+                    atomic_write_text(schematic_path, output)
                     logger.info(f"Deleted wire from {start_point} to {end_point}")
                     return True
 
@@ -1011,6 +1017,7 @@ class WireManager:
             return False
 
     @staticmethod
+    @serialize_on_path(0)
     def delete_label(
         schematic_path: Path,
         net_name: str,
@@ -1064,8 +1071,7 @@ class WireManager:
 
                 del sch_data[i]
                 output = _serialize_validated(sch_data)
-                with open(schematic_path, "w", encoding="utf-8") as f:
-                    f.write(output)
+                atomic_write_text(schematic_path, output)
                 logger.info(f"Deleted label '{net_name}'")
                 return True
 
