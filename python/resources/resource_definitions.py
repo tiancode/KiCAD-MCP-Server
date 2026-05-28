@@ -170,7 +170,9 @@ def _get_board_info(interface: Any) -> Dict[str, Any]:
 
 def _get_components(interface: Any) -> Dict[str, Any]:
     """Get list of all components"""
-    result = interface.component_commands.get_component_list({})
+    # limit:0 = uncapped; resources are pulled on demand and carry the full
+    # list (the get_component_list tool stays capped at 100).
+    result = interface.component_commands.get_component_list({"limit": 0})
 
     if result.get("success"):
         components = result.get("components", [])
@@ -199,7 +201,7 @@ def _get_components(interface: Any) -> Dict[str, Any]:
 
 def _get_nets(interface: Any) -> Dict[str, Any]:
     """Get list of electrical nets"""
-    result = interface.routing_commands.get_nets_list({})
+    result = interface.routing_commands.get_nets_list({"limit": 0})
 
     if result.get("success"):
         nets = result.get("nets", [])
@@ -279,7 +281,7 @@ def _get_design_rules(interface: Any) -> Dict[str, Any]:
 
 def _get_drc_report(interface: Any) -> Dict[str, Any]:
     """Get DRC violations"""
-    result = interface.design_rule_commands.get_drc_violations({})
+    result = interface.design_rule_commands.get_drc_violations({"limit": 0})
 
     if result.get("success"):
         violations = result.get("violations", [])
