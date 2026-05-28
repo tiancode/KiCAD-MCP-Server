@@ -32,7 +32,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   // Check if KiCAD UI is running
   server.tool(
     "check_kicad_ui",
-    "Check if KiCAD UI is currently running",
+    "Check if KiCAD UI is currently running. Board/IPC operations require the user to have the editor open — the server never auto-launches it; when a board op needs the editor and it's closed, ask the user to open it and wait for confirmation rather than launching it or falling back to file-only edits.",
     {},
     passthrough("check_kicad_ui"),
   );
@@ -71,6 +71,11 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   // regular tools (route_trace, add_via, …) for the universal path; reach
   // for these when you specifically need to inspect IPC state or force
   // the IPC code path for debugging.
+  //
+  // Editor-open requirement: these (and any board op) need KiCAD open with
+  // the board loaded.  The server does NOT auto-launch KiCAD/pcbnew — if
+  // the editor is closed the call returns `needs_pcb_editor: true`; ask the
+  // user to open the board and wait, don't auto-launch or work around it.
   // -----------------------------------------------------------------
   server.tool(
     "ipc_list_components",
@@ -119,10 +124,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
       diameter: z.number().optional().describe("Via outer diameter in mm (default 0.8)"),
       drill: z.number().optional().describe("Drill diameter in mm (default 0.4)"),
       net: z.string().optional().describe("Net name"),
-      type: z
-        .enum(["through", "blind", "micro"])
-        .optional()
-        .describe("Via type (default through)"),
+      type: z.enum(["through", "blind", "micro"]).optional().describe("Via type (default through)"),
     },
     passthrough("ipc_add_via"),
   );

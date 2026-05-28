@@ -789,9 +789,10 @@ class KiCADInterface:
     def _pcb_editor_gate_reason() -> str:
         return (
             "KiCAD has no .kicad_pcb document open over IPC. "
-            "Open the board in KiCAD (project manager → PCB icon, "
-            "or open the .kicad_pcb file directly, "
-            "or call open_project with the .kicad_pcb path) and retry."
+            "The MCP server does NOT auto-launch the PCB editor — ask the user "
+            "to open the board in KiCAD (project manager → PCB icon, or open the "
+            ".kicad_pcb file directly), wait for them to confirm it's open, then "
+            "retry. Do not work around this by falling back to file-only edits."
         )
 
     def _pcb_editor_gate_response(self, command: Optional[str] = None) -> Dict[str, Any]:
