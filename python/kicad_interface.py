@@ -367,6 +367,7 @@ class KiCADInterface:
         "add_no_connect": "schematic_wire",
         "add_schematic_hierarchical_label": "schematic_wire",
         "add_schematic_net_label": "schematic_wire",
+        "add_schematic_sheet": "schematic_wire",
         "add_schematic_wire": "schematic_wire",
         "add_sheet_pin": "schematic_wire",
         "connect_passthrough": "schematic_wire",

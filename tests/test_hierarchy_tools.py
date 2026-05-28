@@ -87,6 +87,23 @@ _MINIMAL_PARENT = textwrap.dedent("""\
     )
 """)
 
+_ROOT_WITH_UUID = textwrap.dedent("""\
+    (kicad_sch
+    \t(version 20250114)
+    \t(generator "eeschema")
+    \t(uuid "5b9623a5-6d01-41fc-9865-e1bc779418c8")
+    \t(paper "A4")
+    \t(lib_symbols
+    \t)
+    \t(sheet_instances
+    \t\t(path "/"
+    \t\t\t(page "1")
+    \t\t)
+    \t)
+    )
+""")
+
+
 _PARENT_TWO_SHEETS = textwrap.dedent("""\
     (kicad_sch
     \t(version 20231120)
@@ -347,3 +364,191 @@ class TestAddSheetPin:
         content = sch.read_text()
         assert "(at 100 60 180)" in content
         assert "(justify right)" in content
+
+
+# ===========================================================================
+# Hierarchical sheet box tests
+# ===========================================================================
+
+_ROOT_UUID = "5b9623a5-6d01-41fc-9865-e1bc779418c8"
+
+
+@pytest.mark.unit
+class TestAddSchematicSheet:
+    def _root(self, tmp_path):
+        sch = tmp_path / "board.kicad_sch"
+        sch.write_text(_ROOT_WITH_UUID)
+        return sch
+
+    def test_inserts_sheet_block_with_props(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50.8, 50.8],
+                "createSubSheet": False,
+            }
+        )
+        assert result["success"] is True, result
+        content = sch.read_text()
+        assert '(property "Sheetname" "Power"' in content
+        assert '(property "Sheetfile" "power.kicad_sch"' in content
+        # Page lives in the block's own (instances), keyed on the ROOT uuid.
+        assert f'(path "/{_ROOT_UUID}"' in content
+        assert '(page "2")' in content
+
+    def test_root_sheet_instances_untouched(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50.8, 50.8],
+                "createSubSheet": False,
+            }
+        )
+        content = sch.read_text()
+        si = content[content.find("(sheet_instances") :]
+        # KiCad 9/10 does not list sub-sheets in the root sheet_instances.
+        assert si.count("(path") == 1, si
+
+    def test_page_number_auto_increments(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        r1 = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+                "createSubSheet": False,
+            }
+        )
+        r2 = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "MCU",
+                "sheetFile": "mcu.kicad_sch",
+                "position": [120, 50],
+                "createSubSheet": False,
+            }
+        )
+        assert r1["page"] == "2"
+        assert r2["page"] == "3"
+
+    def test_explicit_page_number(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+                "pageNumber": 7,
+                "createSubSheet": False,
+            }
+        )
+        assert result["page"] == "7"
+        assert '(page "7")' in sch.read_text()
+
+    def test_creates_sub_sheet_when_missing(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+            }
+        )
+        assert result["success"] is True
+        assert result["createdSubSheet"] is True
+        assert (tmp_path / "power.kicad_sch").exists()
+
+    def test_skip_create_sub_sheet(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+                "createSubSheet": False,
+            }
+        )
+        assert result["success"] is True
+        assert result["createdSubSheet"] is False
+        assert not (tmp_path / "power.kicad_sch").exists()
+
+    def test_absolute_sheetfile_normalized_to_relative(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        abs_sub = tmp_path / "sub" / "power.kicad_sch"
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": str(abs_sub),
+                "position": [50, 50],
+                "createSubSheet": False,
+            }
+        )
+        assert result["success"] is True
+        assert result["sheetFile"] == str(Path("sub") / "power.kicad_sch")
+        assert '(property "Sheetfile" "sub/power.kicad_sch"' in sch.read_text()
+
+    def test_discover_finds_new_sheet(self, iface, tmp_path):
+        from commands.wire_connectivity import _discover_sub_sheets
+
+        sch = self._root(tmp_path)
+        iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+            }
+        )
+        subs = [Path(s).name for s in _discover_sub_sheets(str(sch))]
+        assert "power.kicad_sch" in subs
+
+    def test_result_still_loads_as_sexpr(self, iface, tmp_path):
+        import sexpdata
+
+        sch = self._root(tmp_path)
+        iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+                "createSubSheet": False,
+            }
+        )
+        tree = sexpdata.loads(sch.read_text())
+        assert tree[0] == sexpdata.Symbol("kicad_sch")
+
+    def test_missing_sheet_file_fails(self, iface, tmp_path):
+        sch = self._root(tmp_path)
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "position": [50, 50],
+            }
+        )
+        assert result["success"] is False
+        assert "sheetfile" in result["message"].lower()
+
+    def test_nonexistent_parent_fails(self, iface, tmp_path):
+        result = iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(tmp_path / "nope.kicad_sch"),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+            }
+        )
+        assert result["success"] is False
+        assert "not found" in result["message"].lower()

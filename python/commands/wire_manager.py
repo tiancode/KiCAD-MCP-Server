@@ -15,13 +15,12 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import sexpdata
-from sexpdata import Symbol
-
 from commands.schematic_locks import (
     atomic_write_text,
     schematic_path_lock,
     serialize_on_path,
 )
+from sexpdata import Symbol
 
 logger = logging.getLogger("kicad_interface")
 
@@ -236,6 +235,79 @@ def _make_sheet_pin_text(
         f"\t\t\t\t(justify {justify})\n"
         f"\t\t\t)\n"
         f"\t\t)\n"
+    )
+
+
+def _make_sheet_text(
+    sheet_name: str,
+    sheet_file: str,
+    position: List[float],
+    size: List[float],
+    project_name: str,
+    root_uuid: str,
+    page_number: str,
+) -> str:
+    """Generate a hierarchical sheet block S-expression as formatted text.
+
+    Mirrors the KiCad 9/10 format (version 20250114): the box carries
+    ``Sheetname`` / ``Sheetfile`` properties plus an ``(instances ...)`` block
+    whose path is the PARENT (root) schematic's own top-level uuid — that is
+    how real KiCad keys per-instance page numbers, so the root
+    ``(sheet_instances)`` block is left untouched (KiCad does not list
+    sub-sheets there).
+    """
+    uid = str(uuid.uuid4())
+    x, y = position[0], position[1]
+    w, h = size[0], size[1]
+    # Property label placement matches KiCad: name just above the top edge,
+    # file just below the bottom edge.
+    name_y = round(y - 0.7625, 4)
+    file_y = round(y + h + 0.61, 4)
+    name_esc = sheet_name.replace("\\", "\\\\").replace('"', '\\"')
+    file_esc = sheet_file.replace("\\", "\\\\").replace('"', '\\"')
+    proj_esc = project_name.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        f"\t(sheet\n"
+        f"\t\t(at {x} {y})\n"
+        f"\t\t(size {w} {h})\n"
+        f"\t\t(exclude_from_sim no)\n"
+        f"\t\t(in_bom yes)\n"
+        f"\t\t(on_board yes)\n"
+        f"\t\t(dnp no)\n"
+        f"\t\t(stroke\n"
+        f"\t\t\t(width 0)\n"
+        f"\t\t\t(type solid)\n"
+        f"\t\t)\n"
+        f"\t\t(fill\n"
+        f"\t\t\t(color 0 0 0 0.0000)\n"
+        f"\t\t)\n"
+        f'\t\t(uuid "{uid}")\n'
+        f'\t\t(property "Sheetname" "{name_esc}"\n'
+        f"\t\t\t(at {x} {name_y} 0)\n"
+        f"\t\t\t(effects\n"
+        f"\t\t\t\t(font\n"
+        f"\t\t\t\t\t(size 1.27 1.27)\n"
+        f"\t\t\t\t)\n"
+        f"\t\t\t\t(justify left bottom)\n"
+        f"\t\t\t)\n"
+        f"\t\t)\n"
+        f'\t\t(property "Sheetfile" "{file_esc}"\n'
+        f"\t\t\t(at {x} {file_y} 0)\n"
+        f"\t\t\t(effects\n"
+        f"\t\t\t\t(font\n"
+        f"\t\t\t\t\t(size 1.27 1.27)\n"
+        f"\t\t\t\t)\n"
+        f"\t\t\t\t(justify left top)\n"
+        f"\t\t\t)\n"
+        f"\t\t)\n"
+        f"\t\t(instances\n"
+        f'\t\t\t(project "{proj_esc}"\n'
+        f'\t\t\t\t(path "/{root_uuid}"\n'
+        f'\t\t\t\t\t(page "{page_number}")\n'
+        f"\t\t\t\t)\n"
+        f"\t\t\t)\n"
+        f"\t\t)\n"
+        f"\t)\n"
     )
 
 
@@ -1341,6 +1413,115 @@ class WireManager:
             i += 1
 
         return content, False
+
+    @staticmethod
+    @serialize_on_path(0)
+    def add_sheet(
+        schematic_path: Path,
+        sheet_name: str,
+        sheet_file: str,
+        position: List[float],
+        size: Optional[List[float]] = None,
+        page_number: Optional[str] = None,
+        project_name: Optional[str] = None,
+    ) -> Tuple[bool, dict]:
+        """Insert a hierarchical sheet box into the parent (root) schematic.
+
+        Writes a KiCad-9/10-faithful ``(sheet ...)`` block referencing
+        ``sheet_file`` (relative to the parent's directory). The per-instance
+        page number lives in the block's own ``(instances ...)`` — keyed on the
+        parent schematic's top-level uuid — exactly as KiCad writes it, so the
+        root ``(sheet_instances)`` is left alone.
+
+        Returns ``(success, info)`` where ``info`` carries the new sheet's
+        ``uuid``, ``page``, ``project`` and resolved ``sheet_file``.
+        """
+        size = size or [25.4, 25.4]
+        with open(schematic_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Root uuid = the parent schematic's own top-level (uuid ...).
+        root_uuid = WireManager._root_schematic_uuid(content)
+        if not root_uuid:
+            logger.error("add_sheet: could not find the parent schematic's top-level uuid")
+            return False, {"error": "parent schematic has no top-level uuid"}
+
+        if project_name is None:
+            project_name = WireManager._guess_project_name(schematic_path)
+        if page_number is None:
+            page_number = str(WireManager._next_page_number(content))
+
+        sheet_text = _make_sheet_text(
+            sheet_name,
+            sheet_file,
+            position,
+            size,
+            project_name,
+            root_uuid,
+            page_number,
+        )
+
+        # Insert before (sheet_instances on the root sheet; fall back to before
+        # the final closing paren (sub-sheets have no sheet_instances block).
+        insert_at = content.rfind("(sheet_instances")
+        if insert_at == -1:
+            stripped = content.rstrip()
+            if not stripped.endswith(")"):
+                logger.error("add_sheet: could not find an insertion point")
+                return False, {"error": "no insertion point in schematic"}
+            insert_at = len(stripped) - 1
+            new_content = content[:insert_at] + sheet_text + content[insert_at:]
+        else:
+            new_content = content[:insert_at] + sheet_text + "  " + content[insert_at:]
+
+        # Serialize-validate the assembled text before touching disk so a
+        # malformed block can never truncate the existing schematic.
+        _validate_schematic_sexpr(new_content)
+        atomic_write_text(schematic_path, new_content)
+
+        uid = re.search(r'\(uuid "([^"]+)"\)', sheet_text)
+        logger.info(
+            f"Added sheet '{sheet_name}' -> {sheet_file} (page {page_number}) "
+            f"to {schematic_path.name}"
+        )
+        return True, {
+            "uuid": uid.group(1) if uid else None,
+            "page": page_number,
+            "project": project_name,
+            "sheet_file": sheet_file,
+        }
+
+    @staticmethod
+    def _root_schematic_uuid(content: str) -> Optional[str]:
+        """Return the schematic's own top-level uuid (first uuid child of root)."""
+        try:
+            sexp = sexpdata.loads(content)
+        except Exception:
+            return None
+        if not (isinstance(sexp, list) and sexp and sexp[0] == _SYM_KICAD_SCH):
+            return None
+        for item in sexp[1:]:
+            if isinstance(item, list) and len(item) >= 2 and item[0] == _SYM_UUID:
+                return str(item[1]).strip('"')
+        return None
+
+    @staticmethod
+    def _next_page_number(content: str) -> int:
+        """Smallest unused positive page number across the whole file (root is 1)."""
+        used = {int(n) for n in re.findall(r'\(page "(\d+)"', content)}
+        n = 1
+        while n in used:
+            n += 1
+        return n
+
+    @staticmethod
+    def _guess_project_name(schematic_path: Path) -> str:
+        """Project name = the sibling .kicad_pro stem, else the schematic stem."""
+        parent = schematic_path.parent
+        pros = sorted(parent.glob("*.kicad_pro"))
+        if pros:
+            return pros[0].stem
+        return schematic_path.stem
 
 
 if __name__ == "__main__":

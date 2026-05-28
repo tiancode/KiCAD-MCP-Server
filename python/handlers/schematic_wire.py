@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import sexpdata
-
 from commands.connection_schematic import ConnectionManager
 from commands.schematic import SchematicManager
 from commands.wire_manager import WireManager
@@ -84,6 +83,91 @@ def handle_add_sheet_pin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
 
     except Exception as e:
         logger.error(f"Error adding sheet pin: {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": str(e)}
+
+
+def handle_add_schematic_sheet(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a hierarchical sheet box on the parent schematic referencing a sub-sheet."""
+    logger.info("Adding hierarchical sheet box to schematic")
+    try:
+        from commands.schematic import SchematicManager
+        from commands.wire_manager import WireManager
+
+        schematic_path = params.get("schematicPath")
+        sheet_name = params.get("sheetName")
+        sheet_file = params.get("sheetFile")
+        position = params.get("position")
+        size = params.get("size")
+        page_number = params.get("pageNumber")
+        create_sub_sheet = params.get("createSubSheet", True)
+
+        if not schematic_path:
+            return {"success": False, "message": "schematicPath is required"}
+        if not sheet_name:
+            return {"success": False, "message": "sheetName is required"}
+        if not sheet_file:
+            return {"success": False, "message": "sheetFile is required"}
+        if not position or len(position) != 2:
+            return {"success": False, "message": "position [x, y] is required"}
+        if size is not None and len(size) != 2:
+            return {"success": False, "message": "size must be [width, height]"}
+
+        parent = Path(schematic_path)
+        if not parent.exists():
+            return {"success": False, "message": f"Parent schematic not found: {schematic_path}"}
+
+        # Normalize the Sheetfile to a path relative to the parent's directory —
+        # that is what _discover_sub_sheets and kicad-cli resolve against.
+        parent_dir = parent.parent
+        sf = Path(sheet_file)
+        if sf.is_absolute():
+            try:
+                rel_sheet_file = str(sf.relative_to(parent_dir))
+            except ValueError:
+                rel_sheet_file = sf.name
+            sub_sheet_abspath = sf
+        else:
+            rel_sheet_file = sheet_file
+            sub_sheet_abspath = parent_dir / sheet_file
+
+        created_sub_sheet = False
+        if create_sub_sheet and not sub_sheet_abspath.exists():
+            SchematicManager.create_schematic(
+                sub_sheet_abspath.stem, path=str(sub_sheet_abspath.parent)
+            )
+            created_sub_sheet = True
+
+        success, info = WireManager.add_sheet(
+            parent,
+            sheet_name,
+            rel_sheet_file,
+            position,
+            size=size,
+            page_number=str(page_number) if page_number is not None else None,
+        )
+
+        if not success:
+            return {
+                "success": False,
+                "message": f"Failed to add sheet: {info.get('error', 'unknown error')}",
+            }
+
+        return {
+            "success": True,
+            "message": (
+                f"Added sheet '{sheet_name}' -> {rel_sheet_file} (page {info.get('page')})"
+            ),
+            "uuid": info.get("uuid"),
+            "page": info.get("page"),
+            "sheetFile": rel_sheet_file,
+            "createdSubSheet": created_sub_sheet,
+        }
+
+    except Exception as e:
+        logger.error(f"Error adding sheet: {e}")
         import traceback
 
         logger.error(traceback.format_exc())
@@ -680,9 +764,7 @@ def handle_add_schematic_net_label(
             "actual_position": position,
             "connected_to_pin": connected_to_pin,
         }
-        if requested_position is not None and snapped_to_pin and not (
-            component_ref and pin_number
-        ):
+        if requested_position is not None and snapped_to_pin and not (component_ref and pin_number):
             # Auto-snap path — surface what we moved so the caller knows
             # the recorded position differs from what they asked for.
             response["requested_position"] = requested_position

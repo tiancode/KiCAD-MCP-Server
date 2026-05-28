@@ -2133,4 +2133,72 @@ edit_schematic_component and set its value to an empty string.`,
       };
     },
   );
+
+  // Create a hierarchical sheet box on the parent (root) schematic
+  server.tool(
+    "add_schematic_sheet",
+    "Place a hierarchical sheet box on the parent (root) schematic that references a " +
+      "sub-sheet .kicad_sch file. This is the box that makes a multi-page hierarchical " +
+      "design exist: ERC/netlist traversal and kicad-cli follow the Sheetfile reference. " +
+      "Writes a KiCad-9/10-faithful (sheet ...) block — the page number lives in the block's " +
+      "own (instances), so the root (sheet_instances) is left untouched. By default also " +
+      "creates an empty sub-sheet file from the template if it doesn't exist. " +
+      "Inter-sheet connectivity is by same-named global labels (add_schematic_net_label " +
+      "labelType=global_label) on each page — sheet pins are optional.",
+    {
+      schematicPath: z.string().describe("Path to the PARENT (root) .kicad_sch file"),
+      sheetName: z.string().describe("Sheet name shown on the box (Sheetname property)"),
+      sheetFile: z
+        .string()
+        .describe(
+          "Sub-sheet .kicad_sch filename, relative to the parent's directory " +
+            "(an absolute path is converted to relative). The Sheetfile reference.",
+        ),
+      position: z.array(z.number()).length(2).describe("Top-left corner [x, y] of the box in mm"),
+      size: z
+        .array(z.number())
+        .length(2)
+        .optional()
+        .describe("Box [width, height] in mm (default [25.4, 25.4])"),
+      pageNumber: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe("Page number for this sheet (default: smallest unused page)"),
+      createSubSheet: z
+        .boolean()
+        .optional()
+        .describe(
+          "Create an empty sub-sheet file from the template if it doesn't exist (default: true)",
+        ),
+    },
+    async (args: {
+      schematicPath: string;
+      sheetName: string;
+      sheetFile: string;
+      position: number[];
+      size?: number[];
+      pageNumber?: string | number;
+      createSubSheet?: boolean;
+    }) => {
+      const result = await callKicadScript("add_schematic_sheet", args);
+      if (result.success) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result.message || `Added sheet '${args.sheetName}' -> ${args.sheetFile}`,
+            },
+          ],
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to add sheet: ${result.message || "Unknown error"}`,
+          },
+        ],
+      };
+    },
+  );
 }
