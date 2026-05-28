@@ -135,8 +135,13 @@ def handle_add_schematic_sheet(iface: "KiCADInterface", params: Dict[str, Any]) 
 
         created_sub_sheet = False
         if create_sub_sheet and not sub_sheet_abspath.exists():
+            # Use the genuinely-empty template — template_with_symbols carries
+            # offscreen _TEMPLATE_* placeholder instances that would otherwise
+            # show up as phantom LED/C/R parts in the sub-sheet's ERC and BOM.
             SchematicManager.create_schematic(
-                sub_sheet_abspath.stem, path=str(sub_sheet_abspath.parent)
+                sub_sheet_abspath.stem,
+                path=str(sub_sheet_abspath.parent),
+                template="empty.kicad_sch",
             )
             created_sub_sheet = True
 

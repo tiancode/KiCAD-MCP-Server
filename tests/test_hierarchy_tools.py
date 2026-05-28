@@ -467,6 +467,23 @@ class TestAddSchematicSheet:
         assert result["createdSubSheet"] is True
         assert (tmp_path / "power.kicad_sch").exists()
 
+    def test_created_sub_sheet_has_no_placeholder_components(self, iface, tmp_path):
+        # The auto-created sub-sheet must be genuinely empty — the default
+        # create template carries offscreen _TEMPLATE_* placeholder instances
+        # that would otherwise surface as phantom parts in ERC/BOM.
+        sch = self._root(tmp_path)
+        iface._handle_add_schematic_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Power",
+                "sheetFile": "power.kicad_sch",
+                "position": [50, 50],
+            }
+        )
+        sub = (tmp_path / "power.kicad_sch").read_text()
+        assert "_TEMPLATE" not in sub
+        assert "(symbol (lib_id" not in sub
+
     def test_skip_create_sub_sheet(self, iface, tmp_path):
         sch = self._root(tmp_path)
         result = iface._handle_add_schematic_sheet(

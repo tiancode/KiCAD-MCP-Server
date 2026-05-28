@@ -6,9 +6,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from skip import Schematic
-
 from commands.schematic_locks import schematic_path_lock
+from skip import Schematic
 
 logger = logging.getLogger("kicad_interface")
 
@@ -18,16 +17,31 @@ class SchematicManager:
 
     @staticmethod
     def create_schematic(
-        name: str, metadata: Optional[Any] = None, *, path: Optional[str] = None
+        name: str,
+        metadata: Optional[Any] = None,
+        *,
+        path: Optional[str] = None,
+        template: Optional[str] = None,
     ) -> Any:
-        """Create a new empty schematic from template"""
+        """Create a new empty schematic from template.
+
+        ``template`` selects the seed file from ``python/templates/`` (basename
+        only — directory components are stripped to prevent traversal). Defaults
+        to ``template_with_symbols.kicad_sch``, which carries offscreen
+        ``_TEMPLATE_*`` placeholder instances for the clone-based placement
+        path. Hierarchical sub-sheets pass ``empty.kicad_sch`` so the new sheet
+        is genuinely empty (no placeholder components polluting ERC/BOM).
+        """
         try:
-            # Determine template path (use template_with_symbols for component cloning support)
+            # Determine template path (default keeps clone-based placement support)
+            template_name = (
+                os.path.basename(template) if template else ("template_with_symbols.kicad_sch")
+            )
             template_path = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "..",
                 "templates",
-                "template_with_symbols.kicad_sch",
+                template_name,
             )
 
             # Determine output path
