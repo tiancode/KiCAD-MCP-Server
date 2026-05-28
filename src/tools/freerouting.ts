@@ -139,6 +139,11 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         lines.push(
           `  freerouting.jar: ${result.freerouting.jar_found ? "found" : "MISSING"} at ${result.freerouting.jar_path}`,
         );
+        if (result.freerouting.requested_path) {
+          lines.push(
+            `    (auto-discovered versioned filename; you requested ${result.freerouting.requested_path})`,
+          );
+        }
       }
 
       // Install hint — only present when something's missing.

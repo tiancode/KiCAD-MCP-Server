@@ -142,3 +142,72 @@ def test_custom_jar_path_appears_in_install_step(monkeypatch, tmp_path):
     assert step["target_path"] == str(custom)
     # mkdir line points at the right parent.
     assert any("different/place" in cmd for cmd in step["shell_unix"])
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery of versioned filenames (GitHub release ships
+# freerouting-X.Y.Z.jar, not the bare freerouting.jar the default path
+# expects).
+# ---------------------------------------------------------------------------
+def test_versioned_jar_filename_auto_discovered(monkeypatch, tmp_path):
+    """The user's reproduction: they downloaded
+    ``freerouting-2.2.4.jar`` (the actual GitHub release filename) into
+    ``~/.kicad-mcp/`` but the default path expects ``freerouting.jar``.
+    The resolver now globs ``freerouting-*.jar`` in the same dir and
+    picks the newest match — no rename required."""
+    from commands import freerouting as fr
+
+    # Bare freerouting.jar does NOT exist; a versioned variant does.
+    bare = tmp_path / "freerouting.jar"  # missing
+    versioned = tmp_path / "freerouting-2.2.4.jar"
+    versioned.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(fr, "_find_java", lambda: "/usr/bin/java")
+    monkeypatch.setattr(fr, "_java_version_ok", lambda exe: True)
+    monkeypatch.setattr(fr, "_find_docker", lambda: None)
+    monkeypatch.setattr(fr, "_docker_available", lambda: False)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: MagicMock(stderr='openjdk version "26"', stdout=""),
+    )
+
+    out = _cmds().check_freerouting({"freeroutingJar": str(bare)})
+
+    assert out["ready"] is True
+    assert out["freerouting"]["jar_found"] is True
+    # jar_path is the actually-resolved file, not the requested name.
+    assert out["freerouting"]["jar_path"] == str(versioned)
+    # requested_path reports what the caller asked for, so the user
+    # sees both the lookup target and the auto-discovered file.
+    assert out["freerouting"]["requested_path"] == str(bare)
+    # No install section — auto-discovery covered the gap.
+    assert "install" not in out
+
+
+def test_versioned_jar_picks_newest_when_multiple_present(monkeypatch, tmp_path):
+    """Multiple versioned jars in the same dir → resolver picks the
+    lexicographically-latest (= newest version under upstream's
+    semver-ish scheme)."""
+    from commands import freerouting as fr
+
+    (tmp_path / "freerouting-1.9.0.jar").write_text("old", encoding="utf-8")
+    newest = tmp_path / "freerouting-2.2.4.jar"
+    newest.write_text("new", encoding="utf-8")
+    (tmp_path / "freerouting-2.0.0.jar").write_text("middle", encoding="utf-8")
+
+    resolved = fr._resolve_freerouting_jar(str(tmp_path / "freerouting.jar"))
+    assert resolved == str(newest)
+
+
+def test_resolver_returns_none_when_directory_has_no_jars(tmp_path):
+    """Defensive: dir exists but contains no ``freerouting-*.jar`` and
+    no exact match → None.  Caller then surfaces the install hint."""
+    from commands.freerouting import _resolve_freerouting_jar
+
+    assert _resolve_freerouting_jar(str(tmp_path / "freerouting.jar")) is None
+
+
+def test_resolver_returns_none_when_parent_directory_missing(tmp_path):
+    from commands.freerouting import _resolve_freerouting_jar
+
+    missing = tmp_path / "does/not/exist/freerouting.jar"
+    assert _resolve_freerouting_jar(str(missing)) is None

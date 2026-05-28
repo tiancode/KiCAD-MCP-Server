@@ -9,6 +9,7 @@ Supports two execution modes:
   - Docker: docker run eclipse-temurin:21-jre (requires Docker)
 """
 
+import glob
 import logging
 import os
 import re
@@ -25,6 +26,33 @@ DEFAULT_FREEROUTING_JAR = os.environ.get(
     "FREEROUTING_JAR",
     os.path.join(os.path.expanduser("~"), ".kicad-mcp", "freerouting.jar"),
 )
+
+
+def _resolve_freerouting_jar(requested: str) -> Optional[str]:
+    """Return the actual .jar file to use, or None if nothing's available.
+
+    GitHub releases ship versioned filenames (``freerouting-2.2.4.jar``)
+    rather than the bare ``freerouting.jar`` the default path expects.
+    When the exact path doesn't exist, look in the same directory for
+    ``freerouting-*.jar`` and pick the lexicographically-latest match —
+    which works as a version sort for the simple ``vX.Y.Z`` scheme
+    upstream uses.  Returns the absolute path of whatever lands.
+
+    Callers should treat this as the canonical "what JAR will autoroute
+    actually run" answer; the user-facing ``check_freerouting`` surfaces
+    both the requested path and the resolved one when they differ.
+    """
+    if os.path.isfile(requested):
+        return requested
+    parent = os.path.dirname(requested) or "."
+    if not os.path.isdir(parent):
+        return None
+    candidates = sorted(
+        glob.glob(os.path.join(parent, "freerouting-*.jar")),
+        reverse=True,  # newest version first
+    )
+    return candidates[0] if candidates else None
+
 
 DOCKER_IMAGE = "eclipse-temurin:21-jre"
 
@@ -324,7 +352,10 @@ class FreeroutingCommands:
                 "errorDetails": ("Provide boardPath or open a project first"),
             }
 
-        jar_path = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
+        requested_jar = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
+        # Resolve versioned filenames (e.g. ``freerouting-2.2.4.jar``) so the
+        # user doesn't have to rename the GitHub release download.
+        jar_path = _resolve_freerouting_jar(requested_jar) or requested_jar
         timeout = params.get("timeout", 300)
         passes = params.get("maxPasses", 20)
 
@@ -355,9 +386,11 @@ class FreeroutingCommands:
                 "success": False,
                 "message": "Freerouting JAR not found",
                 "errorDetails": (
-                    f"Expected at: {jar_path}. Download from "
-                    "https://github.com/freerouting/freerouting/"
-                    "releases or set FREEROUTING_JAR env var."
+                    f"Expected at: {requested_jar}.  Also tried "
+                    f"freerouting-*.jar in {os.path.dirname(requested_jar) or '.'}.  "
+                    "Download from https://github.com/freerouting/freerouting/"
+                    "releases or set FREEROUTING_JAR env var.  "
+                    "Call check_freerouting for install instructions."
                 ),
             }
 
@@ -759,8 +792,17 @@ class FreeroutingCommands:
         run — the TS adapter prints them as a copy-pasteable block.
         Previously the response just said ``jar_found: false`` and left
         the user to discover the install URL on their own.
+
+        Versioned filenames (``freerouting-2.2.4.jar``) in the same
+        directory as the requested path are auto-discovered so callers
+        don't have to rename the GitHub release download.  The
+        ``freerouting.jar_path`` field reports the actual file that
+        would be invoked; ``freerouting.requested_path`` reports the
+        original lookup target when they differ.
         """
-        jar_path = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
+        requested_jar = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
+        resolved_jar = _resolve_freerouting_jar(requested_jar)
+        jar_path = resolved_jar or requested_jar
 
         # Check local Java
         java_exe = _find_java()
@@ -869,6 +911,12 @@ class FreeroutingCommands:
             "freerouting": {
                 "jar_found": jar_exists,
                 "jar_path": jar_path,
+                # When the auto-discover landed on a versioned filename,
+                # surface the original lookup target so the user can see
+                # what was matched and where the file actually lives.
+                "requested_path": (
+                    requested_jar if resolved_jar and resolved_jar != requested_jar else None
+                ),
             },
             "execution_mode": mode,
             "ready": ready,
