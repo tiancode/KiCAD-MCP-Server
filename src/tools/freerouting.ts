@@ -114,17 +114,72 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
   // Check Freerouting dependencies
   server.tool(
     "check_freerouting",
-    "Check if Java and Freerouting JAR are available on the system. Run this before autoroute to verify prerequisites.",
+    "Check if Java and Freerouting JAR are available on the system. Run this before autoroute to verify prerequisites.  When something's missing the response carries an ``install`` section with concrete commands and the GitHub release URL — the human-readable output below prints them as a copy-pasteable block.",
     {
       freeroutingJar: z.string().optional().describe("Path to freerouting.jar to check"),
     },
     async (args: any) => {
       const result = await callKicadScript("check_freerouting", args);
+
+      const lines: string[] = [];
+      lines.push(`Ready: ${result.ready ? "yes" : "no"}`);
+      lines.push(`  Execution mode: ${result.execution_mode}`);
+      if (result.java) {
+        lines.push(
+          `  Java: ${result.java.found ? result.java.version ?? "found" : "not found"}` +
+            (result.java.java_21_ok ? "  (≥21 ✓)" : "  (<21 ✗)"),
+        );
+      }
+      if (result.docker) {
+        lines.push(
+          `  Docker/Podman: ${result.docker.available ? `available (${result.docker.path})` : "not available"}`,
+        );
+      }
+      if (result.freerouting) {
+        lines.push(
+          `  freerouting.jar: ${result.freerouting.jar_found ? "found" : "MISSING"} at ${result.freerouting.jar_path}`,
+        );
+      }
+
+      // Install hint — only present when something's missing.
+      const install = result.install;
+      if (install && install.steps && install.steps.length > 0) {
+        lines.push("");
+        lines.push("Install steps:");
+        install.steps.forEach((step: any, idx: number) => {
+          lines.push(`  ${idx + 1}. ${step.missing}`);
+          if (step.summary) lines.push(`     ${step.summary}`);
+          if (step.target_path) lines.push(`     → save to: ${step.target_path}`);
+          if (step.download_page) lines.push(`     download: ${step.download_page}`);
+          if (step.shell_unix && Array.isArray(step.shell_unix)) {
+            lines.push("     shell (Linux/macOS):");
+            step.shell_unix.forEach((cmd: string) =>
+              lines.push(`       ${cmd}`),
+            );
+          }
+          if (step.shell_windows && Array.isArray(step.shell_windows)) {
+            lines.push("     shell (Windows):");
+            step.shell_windows.forEach((cmd: string) =>
+              lines.push(`       ${cmd}`),
+            );
+          }
+          if (step.override_with_env) {
+            lines.push(`     override path via env: ${step.override_with_env}`);
+          }
+          if (step.java_install) lines.push(`     ${step.java_install}`);
+          if (step.docker_alt) lines.push(`     ${step.docker_alt}`);
+        });
+        if (install.after_install) {
+          lines.push("");
+          lines.push(install.after_install);
+        }
+      }
+
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: lines.join("\n"),
           },
         ],
       };

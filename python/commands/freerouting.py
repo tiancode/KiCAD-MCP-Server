@@ -752,7 +752,14 @@ class FreeroutingCommands:
         }
 
     def check_freerouting(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Check if Freerouting and Java/Docker are available."""
+        """Check if Freerouting and Java/Docker are available.
+
+        When something's missing the response carries a structured
+        ``install`` section with the exact commands the user needs to
+        run — the TS adapter prints them as a copy-pasteable block.
+        Previously the response just said ``jar_found: false`` and left
+        the user to discover the install URL on their own.
+        """
         jar_path = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
 
         # Check local Java
@@ -788,7 +795,64 @@ class FreeroutingCommands:
         elif has_docker:
             mode = "docker"
 
-        return {
+        install_steps: List[Dict[str, Any]] = []
+        if not jar_exists:
+            target_dir = os.path.dirname(jar_path) or "."
+            install_steps.append(
+                {
+                    "missing": "freerouting.jar",
+                    "target_path": jar_path,
+                    "summary": (
+                        "Download the Freerouting JAR from the GitHub release "
+                        "page and save it as the path above.  Any release ≥ "
+                        "1.9 works; the latest version is recommended."
+                    ),
+                    "download_page": "https://github.com/freerouting/freerouting/releases/latest",
+                    "release_index": "https://github.com/freerouting/freerouting/releases",
+                    "shell_unix": [
+                        f"mkdir -p {target_dir!s}",
+                        "# Pick the freerouting-*-linux-x64.jar (or *.jar without "
+                        "platform suffix) from the latest release:",
+                        "#   https://github.com/freerouting/freerouting/releases/latest",
+                        f"# curl -L -o {jar_path!s} \\",
+                        "#   <copy the JAR asset URL from the release page>",
+                    ],
+                    "shell_windows": [
+                        f"mkdir {target_dir!s}",
+                        "# Download the JAR from "
+                        "https://github.com/freerouting/freerouting/releases/latest",
+                        f"# and save it to {jar_path!s}",
+                    ],
+                    "override_with_env": "FREEROUTING_JAR=/path/to/freerouting.jar",
+                }
+            )
+        if not java_21_ok and not has_docker:
+            install_steps.append(
+                {
+                    "missing": "java>=21 or docker/podman",
+                    "summary": (
+                        "Freerouting needs either Java 21+ on PATH OR a "
+                        "running Docker/Podman daemon (the MCP will pull "
+                        f"{DOCKER_IMAGE} and run the JAR inside it).  "
+                        "Either path works; Java is simpler."
+                    ),
+                    "java_install": (
+                        "Linux: ``sudo apt install openjdk-21-jre`` (Debian/"
+                        "Ubuntu) or ``sudo pacman -S jre-openjdk`` (Arch).  "
+                        "macOS: ``brew install openjdk@21`` then "
+                        "``sudo ln -sfn $(brew --prefix)/opt/openjdk@21/"
+                        "libexec/openjdk.jdk /Library/Java/JavaVirtualMachines"
+                        "/openjdk-21.jdk``.  "
+                        "Windows: install from https://adoptium.net/temurin/releases/?version=21"
+                    ),
+                    "docker_alt": (
+                        "Or start Docker Desktop / install podman; the MCP "
+                        f"will use the ``{DOCKER_IMAGE}`` image automatically."
+                    ),
+                }
+            )
+
+        response: Dict[str, Any] = {
             "success": True,
             "message": "Freerouting dependency check",
             "java": {
@@ -809,3 +873,13 @@ class FreeroutingCommands:
             "execution_mode": mode,
             "ready": ready,
         }
+        if install_steps:
+            response["install"] = {
+                "needed": True,
+                "steps": install_steps,
+                "after_install": (
+                    "Re-run check_freerouting to verify, then call "
+                    "autoroute(...) to use the Freerouting CLI."
+                ),
+            }
+        return response
