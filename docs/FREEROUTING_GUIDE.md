@@ -23,18 +23,29 @@ The `autoroute` tool performs all four steps in a single call.
 
 ### Freerouting JAR
 
-Download the Freerouting executable JAR:
+Download the Freerouting executable JAR from the
+[releases page](https://github.com/freerouting/freerouting/releases) into
+`~/.kicad-mcp/`. **You do not need to rename it** — the integration globs
+`~/.kicad-mcp/freerouting-*.jar` and auto-discovers the newest versioned
+artifact, so the upstream filename works as-is:
 
 ```bash
 mkdir -p ~/.kicad-mcp
-curl -L -o ~/.kicad-mcp/freerouting.jar \
-  https://github.com/freerouting/freerouting/releases/download/v2.0.1/freerouting-2.0.1-executable.jar
+# The real GitHub release filename — no rename required.
+curl -L -o ~/.kicad-mcp/freerouting-2.2.4.jar \
+  https://github.com/freerouting/freerouting/releases/download/v2.2.4/freerouting-2.2.4.jar
 ```
 
-The default location is `~/.kicad-mcp/freerouting.jar`. You can override this with:
+The default lookup path is `~/.kicad-mcp/freerouting.jar`; if that exact file
+is missing, the resolver picks the newest `freerouting-*.jar` in the same
+directory. You can override the path with:
 
 - The `freeroutingJar` parameter on any tool call
 - The `FREEROUTING_JAR` environment variable
+
+If no JAR is found, `check_freerouting` returns a structured `install`
+section with the download URL, per-platform shell commands, and the env-var
+override — run it first to get copy-pasteable instructions.
 
 ### Java Runtime (Option A -- Direct Execution)
 
@@ -83,7 +94,7 @@ Verify that prerequisites are installed before running the autorouter.
 |-----------|------|----------|-------------|
 | `freeroutingJar` | string | No | Path to freerouting.jar to check |
 
-**Returns:** Java availability, version, Docker status, JAR location
+**Returns:** Java availability, version, Docker status, resolved JAR location (plus `requested_path` when a versioned filename was auto-discovered), and — when a prerequisite is missing — an `install` section with the download URL and per-platform commands
 
 **Example:**
 

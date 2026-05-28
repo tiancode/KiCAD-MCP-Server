@@ -4,6 +4,203 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Dual-Backend Safety + Lifecycle Robustness
+
+A series of fixes hardening the SWIG↔IPC interaction model and making
+the Python subprocess survive transient failures. The user-visible
+shape is: tools that used to silently produce wrong data, hang, or
+return contradictions now either succeed or refuse with a structured
+error pointing at the remediation.
+
+- **PCB-editor gate** (`KiCADInterface._ipc_has_open_board_document`).
+  IPC board ops now refuse with `success: false, needs_pcb_editor:
+  true` unless `kipy.get_open_documents()` lists a `.kicad_pcb`
+  document. The previous process-existence proxy
+  (`is_pcb_editor_running`) falsely passed when `pcbnew` was alive as
+  a kiway worker with no board loaded; every call then quietly
+  returned empty data. Gate response shape:
+  `_pcb_editor_gate_response`.
+- **Cross-backend conflict gate.** Each side carries its own copy of
+  the board (SWIG memory + on-disk file vs. KiCad UI memory); writes
+  from one used to silently invalidate the other. Two flags on
+  `KiCADInterface` (`_ipc_writes_pending`, `_swig_writes_landed`)
+  track each side's dirtiness via the IPCBackend change callback +
+  SWIG auto-save signature. Cross-backend mutations refuse with
+  `success: false, needs_reconcile: true, direction: "ipc_to_swig" |
+  "swig_to_ipc"` and a structured remediation hint.
+- **`reconcile_backends` tool** flushes IPC→disk + SWIG reload
+  automatically when called with `direction: "ipc_to_swig"`. The
+  reverse direction returns the manual steps (kipy has no
+  reload-from-disk API). `get_backend_state` exposes
+  `ipcWritesPending` / `swigWritesLanded` so agents can pre-empt the
+  gate without trial-and-error.
+- **PCB editor auto-open after `open_project`.** After
+  `_autolaunch_for_project` attaches IPC, the handler invokes a
+  best-effort `run_action` candidate list
+  (`kicadManager.Control.editPCB`, `editPcbnew`,
+  `common.Control.openPcbnew`, `pcbnew.EditorControl.openBoardEditor`)
+  so the project manager opens the board frame. Response carries
+  `pcbEditorAutoOpened: <action_name>` on success. The earlier
+  manual-recovery text that told users to "call `open_project` with
+  the `.kicad_pcb` path" — i.e. the very call that just succeeded —
+  has been removed.
+- **IPC attach polling after launch.** Polls
+  `_try_enable_ipc_backend(force=True)` on 0.5 s intervals up to
+  `_AUTOLAUNCH_IPC_POLL_DEADLINE_S` (10 s default) so the wxApp init
+  race no longer surfaces a transient `ipcAttached: false`. Response
+  carries `ipcAttachAttempts` and `ipcAttachElapsedMs`; when polling
+  times out the response includes `retryAfterMs: 5000` plus an
+  actionable "wait then retry / open Preferences → Plugins" warning,
+  not a misleading hard failure.
+- **`get_backend_info` / `check_kicad_ui` force-attach.** Always
+  invoke `_try_enable_ipc_backend(force=True)`, regardless of whether
+  `/proc` already shows KiCad — covers the "user launched KiCad after
+  MCP started" case. The SWIG branch now distinguishes "KiCad isn't
+  running" (recommend `launch_kicad_ui`) from "KiCad is running but
+  the IPC API server is disabled" (recommend Preferences → Plugins →
+  Enable IPC).
+- **`launch_kicad_ui(projectPath=…)` forwards file-open to a running
+  instance** via IPC `run_action` candidates (`common.Control.openFile`
+  family) and falls back to spawning `kicad <path>` so KiCad's
+  `wxSingleInstanceChecker` hands the open request off to the existing
+  process. Response carries `fileOpenForwarded: bool, fileOpenMethod:
+  "already_open" | "ipc_action" | "spawn" | "none"`. Used to be a
+  no-op when KiCad was already running.
+- **Python subprocess auto-respawn.** When the Python child dies
+  (e.g. `pkill -9 -f kicad` catches the cmdline), the Node server
+  drains the in-flight queue with a fast error and the next
+  `callKicadScript` calls `ensurePythonProcess()` to spawn a fresh
+  Python (cached `pythonExe`, no re-prerequisite check). No more
+  "Python process for KiCAD scripting is not running" until the user
+  reloads the MCP connection.
+- **`KiCADProcessManager` handles `pacman -Syu kicad`**: strips the
+  trailing `" (deleted)"` from `/proc/<pid>/exe` so the gate doesn't
+  permanently block the editor after an in-place upgrade.
+
+### Schematic + ERC
+
+- **`add_schematic_component` / `move_schematic_component` snap to the
+  1.27 mm KiCad schematic grid by default.** A request for `(130, 80)`
+  is written as `(130.81, 80.01)`. The response carries `.position`
+  (actual landing) plus a `.snap` block (requested vs. snapped) when
+  coordinates moved. Opt out with `snapToGrid: false`.
+- **`add_schematic_net_label`** honours a new `snapTolerance` (default
+  0.05 mm): a raw `position` near a pin auto-snaps onto the pin
+  endpoint so float imprecision doesn't break the electrical
+  connection. Response always includes
+  `connected_to_pin: {ref, pin} | null` — verified at KiCad's IU
+  precision — so callers can confirm without running ERC.
+- **ERC coordinate-unit bug fix.** kicad-cli 10.0.3 emits a
+  schematic ERC JSON whose header claims `coordinate_units: "mm"` but
+  `items[].pos` is `internal-units / 10000`. A symbol at
+  (129.84, 94.92) mm came back as (1.2984, 0.9492). `handle_run_erc`
+  now scales `pos.x/y` by 100 and stamps `unit: "mm"` on the
+  resulting `location`.
+- **`run_erc` auto-refreshes embedded `lib_symbols` before kicad-cli**
+  (opt out with `autoRefreshLibSymbols: false`). Silences the "Symbol
+  X doesn't match copy in library Y" warnings that every MCP-placed
+  component used to emit because the injection format drifts from
+  KiCad's canonical form. Refresh result surfaces under
+  `response.lib_symbols_refresh`.
+- **`run_erc` recommendations.** `summary.recommendations[]` surfaces
+  structured `add_pwr_flag` (with extracted net names + a concrete
+  `add_schematic_component` example) and `refresh_lib_symbols`
+  entries. `summary.real_errors` counts ONLY non-PWR_FLAG issues so
+  the headline number reflects genuine wiring problems.
+- **PWR_FLAG no longer leaks as a real net.**
+  `_parse_virtual_connections` registers `#FLG` pin positions with a
+  sentinel instead of the literal `"PWR_FLAG"`, and
+  `_build_hierarchical_pad_net_map` skips `#FLG` symbols entirely.
+  `sync_schematic_to_board` no longer adds a synthetic `"PWR_FLAG"`
+  net to the board's `NetInfo`.
+- **`refresh_schematic_lib_symbols` tool** rewrites every embedded
+  `lib_symbols` entry from the on-disk `.kicad_sym` so the post-upgrade
+  `lib_symbol_mismatch` swarm can be cleared in one call. Different
+  from `refresh_symbol_libraries` (which only rebuilds the MCP's
+  library index).
+- **`annotate_schematic` documents its no-op case.** Returns
+  `noop: true` when every symbol already has a concrete reference,
+  with a message explaining the tool is only needed for `?`-suffix
+  placeholders.
+
+### Discovery + Search
+
+- **`search_symbols` tokenises multi-keyword queries with strict AND.**
+  `search_symbols(query="VCC power", library="power")` used to return
+  0 because the whole string was substring-matched as one token.
+  Whitespace splits into tokens; any token that finds no match zeros
+  the candidate. Library nickname is now a matchable field (low
+  weight) so `"VCC power"` naturally resolves to `power:VCC`.
+- **`search_footprints` ranks exact / shorter matches first.**
+  Collects all matches before applying `limit`, then orders by band
+  (exact > prefix > substring) and name length within band.
+  `LED_D5.0mm` no longer gets buried under `LED_D5.0mm-3` etc. Regex
+  metacharacters in the input are escaped so `.` matches a literal
+  dot.
+- **`get_symbol_info` inlines pin info.** Response carries `pins[]`
+  (number / name / x / y / angle / length / type in the symbol's
+  local coordinate frame) plus `pin_count` and `pin_bounding_box`, so
+  callers can plan placement coordinates without round-tripping
+  through `get_schematic_pin_locations`.
+
+### Routing + Geometry
+
+- **`route_pad_to_pad` refuses obstacle crossings by default.** When
+  the straight line (or either leg of a via path) crosses a third
+  pad, the call returns
+  `success: false, hasObstacles: true, obstacleCount, obstaclesCrossed`
+  + a `hint` pointing at `force: true` for the legacy
+  "insert anyway, return warnings" behaviour. Tool description
+  rewritten to lead with "Insert ONE STRAIGHT trace segment" + "NOT
+  an autorouter".
+- **`refill_zones` refuses the SWIG path by default** because
+  `pcbnew.ZONE_FILLER.Fill()` has a documented segfault / silently
+  wrong-fill history when invoked outside KiCad's own process. Pass
+  `force: true` to opt into the subprocess-isolated fill for
+  headless flows; the response then carries a `warnings` entry
+  flagging the uncertainty.
+- **`add_copper_pour` / `add_zone` IPC handler** reads the canonical
+  `outline` parameter name (previously only read `points`), falls
+  back to the board's Edge.Cuts bounding box when omitted, and
+  converts top-level / per-point `unit` (`mm` / `inch` / `mil`) to
+  millimetres before forwarding to kipy.
+- **`get_component_list` / `get_component_properties` never mix IPC
+  with SWIG.** Old code patched a missing `boundingBox` from the SWIG
+  board (which held pre-IPC-mutation positions), so a freshly moved
+  component came back with new `position` and stale `boundingBox`.
+  Both handlers now return a pure IPC view; missing `boundingBox`
+  stays `null` rather than being silently wrong. `layer` is
+  normalised through `.name` / `BL_` prefix strip so the output is
+  `"F.Cu"` even on kipy builds where `str(layer)` returns the raw
+  int.
+- **`get_pad_position` accepts the schema-documented `pad`** parameter,
+  not just legacy `padName` / `padNumber`.
+
+### Freerouting
+
+- **`check_freerouting` install hint.** Response gains
+  `install.steps[]` listing the GitHub release URL, per-platform
+  shell commands, and the `FREEROUTING_JAR` override when components
+  are missing. TS adapter prints a copy-pasteable block; when
+  everything's in place the install section is omitted.
+- **Versioned JAR filenames auto-discovered.** GitHub releases ship
+  `freerouting-X.Y.Z.jar`, not the bare `freerouting.jar` the default
+  path expects. `_resolve_freerouting_jar` globs for
+  `freerouting-*.jar` in the same dir and picks the newest match.
+  Both `check_freerouting` and `autoroute` use the resolver, so users
+  don't have to rename release artifacts. The response gains
+  `freerouting.requested_path` when auto-discovery landed on a
+  different filename.
+
+### Per-Response Banner Cleanup
+
+The dispatcher used to inject `_backend` / `_realtime` /
+`_recommendation` into every successful response. The recommendation
+text repeated on every SWIG call AND incorrectly fired on schematic /
+file-only tools that can't use IPC. All three fields are gone from
+the dispatcher — backend state is queryable on demand via
+`get_backend_state` / `get_backend_info`.
+
 ### Server Internals — Architecture Refactor
 
 - **`python/kicad_interface.py` reduced from 6 668 → 2 797 lines (−58 %)** by
