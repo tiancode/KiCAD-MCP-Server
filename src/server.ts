@@ -57,7 +57,6 @@ import { registerFootprintTools } from "./tools/footprint.js";
 import { registerSymbolCreatorTools } from "./tools/symbol-creator.js";
 import { registerUITools } from "./tools/ui.js";
 import { registerFreeroutingTools } from "./tools/freerouting.js";
-import { registerRouterTools } from "./tools/router.js";
 import { registerShapesTools } from "./tools/shapes.js";
 import { registerTransactionTools } from "./tools/transactions.js";
 
@@ -360,11 +359,9 @@ export class KiCADMcpServer {
     // on every registrar call, producing 19 throwaway closures per startup.
     const cb = this.callKicadScript.bind(this);
 
-    // Router tools come FIRST so the discovery/meta tools they expose
-    // (list_tool_categories / execute_tool / …) are present before any
-    // routed tools register against the same server instance.
+    // Every tool is registered directly as an MCP tool — no router/registry
+    // indirection. Clients see the full tool list and call tools by name.
     const toolRegistrars = [
-      registerRouterTools,
       registerProjectTools,
       registerBoardTools,
       registerComponentTools,
