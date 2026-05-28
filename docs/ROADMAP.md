@@ -62,7 +62,7 @@
 
 ### Documentation Overhaul (In Progress)
 
-- [ ] Per-feature documentation for all 151 tools
+- [ ] Per-feature documentation for all 167 tools
 - [ ] Architecture guide for contributors
 - [ ] End-to-end PCB design workflow guide
 - [ ] Documentation index

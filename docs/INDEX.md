@@ -2,7 +2,7 @@
 
 KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 
-**Version:** 2.2.3 (Unreleased: see CHANGELOG) | **Tools:** 151 | **Last Updated:** 2026-05-27
+**Version:** 2.2.3 (Unreleased: see CHANGELOG) | **Tools:** 167 | **Last Updated:** 2026-05-28
 
 ---
 
