@@ -1,10 +1,8 @@
-# Discussions. Get in here.
-
-https://github.com/mixelpixx/KiCAD-MCP-Server/discussions/73
-
 # KiCAD MCP Server
 
 A Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with KiCAD for PCB design automation. Built on the MCP 2025-06-18 specification, this server provides comprehensive tool schemas and real-time project state access for intelligent PCB design workflows.
+
+> This project began as a fork of [mixelpixx/KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server) and is now developed and maintained independently. See [Acknowledgments](#acknowledgments) for credits to the original project.
 
 ## Overview
 
@@ -24,10 +22,6 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 - Cross-platform support (Linux, Windows, macOS)
 - Real-time KiCAD UI integration via IPC API (experimental)
 - Comprehensive error handling and logging
-
-## Try out Arduino MCP - now you can get Claude to help in the IDE, real time!:
-
-https://github.com/mixelpixx/arduino-ide
 
 ## What's New (post-2.2.3, on `main`)
 
@@ -538,7 +532,7 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # Clone and build
-git clone https://github.com/mixelpixx/KiCAD-MCP-Server.git
+git clone https://github.com/tiancode/KiCAD-MCP-Server.git
 cd KiCAD-MCP-Server
 npm install
 pip3 install -r requirements.txt
@@ -553,7 +547,7 @@ python3 -c "import pcbnew; print(pcbnew.GetBuildVersion())"
 **Automated Setup (Recommended):**
 
 ```powershell
-git clone https://github.com/mixelpixx/KiCAD-MCP-Server.git
+git clone https://github.com/tiancode/KiCAD-MCP-Server.git
 cd KiCAD-MCP-Server
 .\setup-windows.ps1
 ```
@@ -588,7 +582,7 @@ if it fails.
 brew install node@20
 
 # Clone repository
-git clone https://github.com/mixelpixx/KiCAD-MCP-Server.git
+git clone https://github.com/tiancode/KiCAD-MCP-Server.git
 cd KiCAD-MCP-Server
 
 # Create virtual environment using KiCAD's bundled Python
@@ -1305,7 +1299,7 @@ npm run format
 
 ### Getting Help
 
-1. Check the [GitHub Issues](https://github.com/mixelpixx/KiCAD-MCP-Server/issues)
+1. Check the [GitHub Issues](https://github.com/tiancode/KiCAD-MCP-Server/issues)
 2. Review server logs: `~/.kicad-mcp/logs/kicad_interface.log`
 3. Open a new issue with:
    - Operating system and version
@@ -1356,8 +1350,8 @@ We are actively developing new features. Your feedback directly shapes developme
 
 **Share your ideas:**
 
-1. [Open a feature request](https://github.com/mixelpixx/KiCAD-MCP-Server/issues/new?labels=enhancement&template=feature_request.md)
-2. [Join the discussion](https://github.com/mixelpixx/KiCAD-MCP-Server/discussions)
+1. [Open a feature request](https://github.com/tiancode/KiCAD-MCP-Server/issues/new?labels=enhancement&template=feature_request.md)
+2. [Join the discussion](https://github.com/tiancode/KiCAD-MCP-Server/discussions)
 3. Star the repo if you find it useful
 
 ## Contributing
@@ -1382,13 +1376,16 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ## Acknowledgments
 
+- Originally forked from [mixelpixx/KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server) by [@mixelpixx](https://github.com/mixelpixx) (MIT). This project has since diverged and is maintained independently, but the original work made it possible.
 - Built on the [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
 - Powered by [KiCAD](https://www.kicad.org/) open-source PCB design software
 - Uses [kicad-skip](https://github.com/kicad-skip) for schematic manipulation
 - [JLCSearch API](https://jlcsearch.tscircuit.com/) by [@tscircuit](https://github.com/tscircuit/jlcsearch) - Public JLCPCB parts API
 - [JLCParts Database](https://github.com/yaqwsx/jlcparts) by [@yaqwsx](https://github.com/yaqwsx) - JLCPCB parts data
 
-### Community Contributors
+### Contributors to the original project
+
+These contributions were made to the upstream [mixelpixx/KiCAD-MCP-Server](https://github.com/mixelpixx/KiCAD-MCP-Server) and live on in this fork:
 
 - [@Kletternaut](https://github.com/Kletternaut) - Routing/component tools, footprint/symbol creators, passthrough workflow, template fixes (PRs #44, #48, #49, #51, #53, #57, #59)
 - [@Mehanik](https://github.com/Mehanik) - Schematic inspection/editing tools, component field positions (PRs #60, #66, #67)
@@ -1407,9 +1404,10 @@ If you use this project in your research or publication, please cite:
 ```bibtex
 @software{kicad_mcp_server,
   title = {KiCAD MCP Server: AI-Assisted PCB Design},
-  author = {mixelpixx},
-  year = {2025},
-  url = {https://github.com/mixelpixx/KiCAD-MCP-Server},
+  author = {tiancode and mixelpixx},
+  year = {2026},
+  url = {https://github.com/tiancode/KiCAD-MCP-Server},
+  note = {Independently maintained fork of mixelpixx/KiCAD-MCP-Server},
   version = {2.2.3}
 }
 ```
