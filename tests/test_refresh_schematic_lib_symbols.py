@@ -110,6 +110,83 @@ def test_refresh_replaces_stale_embedded_copy(monkeypatch, tmp_path):
     assert "Resistor (OLD STALE COPY)" not in rewritten
 
 
+# A COMPACTED schematic: the whole tree on one line, exactly the shape
+# sexpdata.dumps() emits after add_wire / add_label.  The embedded
+# Device:R copy is stale ("OLD STALE COPY") so a refresh will replace it.
+_SCHEMATIC_COMPACTED_STALE_R = (
+    "(kicad_sch (version 20231120) (generator eeschema) (lib_symbols "
+    '(symbol "Device:R" (property "Reference" "R" (at 0 0 0)) '
+    '(property "Value" "R" (at 0 0 0)) '
+    '(property "Description" "Resistor (OLD STALE COPY)" (at 0 0 0)) '
+    '(symbol "Device:R_0_1" (rectangle (start -1.016 -2.54) (end 1.016 2.54) '
+    "(stroke (width 0.254) (type default)) (fill (type none)))) "
+    '(symbol "Device:R_1_1" '
+    '(pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1")) '
+    '(pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))))) '
+    '(symbol (lib_id "Device:R") (at 100 80 0) (unit 1)))'
+)
+
+
+def _paren_depth(text):
+    """String-aware net paren depth (0 == balanced)."""
+    depth = 0
+    in_str = False
+    esc = False
+    for ch in text:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+    return depth
+
+
+def test_refresh_on_compacted_file_does_not_explode(monkeypatch, tmp_path):
+    """Regression: a schematic compacted to a single line (what
+    add_wire/add_label leave behind via sexpdata.dumps) used to explode
+    on refresh — the per-line indent was computed as the WHOLE file
+    prefix (because rfind('\\n') returned -1), so the entire head,
+    including '(kicad_sch', was prepended to every line of every
+    refreshed symbol, ballooning the file to hundreds of nested roots.
+
+    The refreshed file must stay a single, paren-balanced root.
+    """
+    lib_dir = tmp_path / "symbols"
+    lib_dir.mkdir()
+    (lib_dir / "Device.kicad_sym").write_text(_LIB_FRESH, encoding="utf-8")
+
+    sch_path = tmp_path / "compact.kicad_sch"
+    sch_path.write_text(_SCHEMATIC_COMPACTED_STALE_R, encoding="utf-8")
+    before_len = len(_SCHEMATIC_COMPACTED_STALE_R)
+
+    loader = _make_loader(tmp_path, lib_dir, monkeypatch)
+    out = loader.refresh_embedded_lib_symbols(sch_path)
+
+    assert out["success"] is True
+    assert out["refreshed"] == ["Device:R"]
+
+    rewritten = sch_path.read_text(encoding="utf-8")
+    # The headline regression assertions:
+    assert rewritten.count("(kicad_sch") == 1, "file exploded into multiple roots"
+    assert _paren_depth(rewritten) == 0, "refresh produced unbalanced parens"
+    # A sane single-symbol refresh grows by at most a few KB, never the
+    # ~1.3 MB / 700-root blow-up the bug produced.
+    assert len(rewritten) < before_len + 5000, "file grew implausibly large"
+    # And it actually did the refresh.
+    assert "Resistor (UPDATED)" in rewritten
+    assert "OLD STALE COPY" not in rewritten
+
+
 def test_refresh_skips_unchanged_entries(monkeypatch, tmp_path):
     """When the embedded snapshot already matches disk, the entry is
     reported as ``unchanged`` and the file isn't rewritten."""
@@ -364,9 +441,7 @@ def test_run_erc_opt_out_of_auto_refresh(monkeypatch, tmp_path):
         )[1],
     )
 
-    out = handle_run_erc(
-        iface, {"schematicPath": str(sch), "autoRefreshLibSymbols": False}
-    )
+    out = handle_run_erc(iface, {"schematicPath": str(sch), "autoRefreshLibSymbols": False})
 
     assert out["success"] is True
     assert "lib_symbols_refresh" not in out

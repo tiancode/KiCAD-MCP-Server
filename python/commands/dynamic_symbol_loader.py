@@ -543,9 +543,14 @@ class DynamicSymbolLoader:
                 unchanged.append(full_name)
                 continue
             # Preserve indent of the original block's opening line so
-            # the replacement keeps the same visual layout.
+            # the replacement keeps the same visual layout.  Use ONLY the
+            # leading whitespace of the line: on a compacted (newline-free)
+            # file `rfind` returns -1 and the line prefix is the entire file
+            # head — prepending that to every fresh line exploded the file
+            # into hundreds of nested roots.
             line_start = content.rfind("\n", 0, start) + 1
-            indent = content[line_start:start]
+            line_prefix = content[line_start:start]
+            indent = line_prefix[: len(line_prefix) - len(line_prefix.lstrip())]
             indented = "\n".join(
                 (indent + line) if line.strip() else line for line in fresh.split("\n")
             )
