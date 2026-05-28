@@ -1184,11 +1184,11 @@ How many Basic parts are available?
 ### Python Interface (`python/`)
 
 - **kicad_interface.py:** Main entry point, MCP message handler, command routing
-- **kicad_api/:** Backend implementations
-  - `base.py` - Abstract base classes for backends
-  - `ipc_backend.py` - KiCAD 9.0 IPC API backend (real-time UI sync)
-  - `swig_backend.py` - pcbnew SWIG API backend (file-based operations)
-  - `factory.py` - Backend auto-detection and instantiation
+- **kicad_api/:** IPC backend implementation
+  - `base.py` - Abstract base classes (`KiCADBackend` / `BoardAPI`)
+  - `ipc_backend.py` - KiCAD IPC API backend (real-time UI sync)
+  - (The SWIG path is not a backend object — it is direct `pcbnew` access
+    behind `KiCADInterface.command_routes` in `kicad_interface.py`.)
 - **schemas/tool_schemas.py:** JSON Schema definitions for all tools
 - **resources/resource_definitions.py:** Resource handlers and URIs
 - **commands/:** Modular command implementations

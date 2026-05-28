@@ -75,11 +75,11 @@ KiCAD-MCP-Server/
                                 # dynamic_symbol_loader, freerouting, jlcpcb,
                                 # jlcsearch, datasheet_manager, …).  Most
                                 # handlers/<m>.py modules delegate to these.
-    kicad_api/                  # Backend abstraction
+    kicad_api/                  # IPC backend
       base.py                   # KiCADBackend + BoardAPI abstract bases
-      factory.py                # Auto-detection: IPC first, SWIG fallback
-      swig_backend.py           # pcbnew SWIG bindings (deprecated path)
       ipc_backend.py            # kipy IPC client (KiCAD 9.0+ / 10.0+)
+                                # (SWIG path is direct pcbnew via
+                                #  command_routes, not a backend object)
     schemas/tool_schemas.py     # JSON Schema definitions for every tool
     annotations/                # IPC-annotation loader for tool descriptions
     resources/                  # Resource read handlers
@@ -199,23 +199,27 @@ parameter gives them access to shared state (`iface.board`,
 
 ### Backend System (`python/kicad_api/`)
 
-Two backends for interacting with KiCAD:
+Two ways of interacting with KiCAD:
 
-**SWIG Backend** (default):
+**SWIG path** (default):
 
-- Direct Python bindings to KiCAD's C++ API via SWIG
+- Direct Python bindings to KiCAD's C++ API via `pcbnew`
 - Operates on files -- loads .kicad_pcb, modifies in memory, saves back
 - Works without KiCAD running
 - Requires manual UI reload to see changes
+- Dispatched directly through `KiCADInterface.command_routes` →
+  `commands/*.py`; it is **not** wrapped in a backend object
 
-**IPC Backend** (experimental):
+**IPC Backend** (`ipc_backend.py`):
 
-- Communicates with running KiCAD via IPC API socket
+- Communicates with running KiCAD via IPC API socket (kipy)
 - Changes appear in the UI immediately
 - Requires KiCAD 9.0+ running with IPC enabled
-- Falls back to SWIG when unavailable
+- Falls back to the SWIG path when unavailable
 
-`factory.py` auto-detects which backend to use.
+Backend selection happens in `kicad_interface.py` at import time: it tries to
+attach the IPC backend first (honoring `KICAD_BACKEND`), otherwise commands run
+against `pcbnew` directly.
 
 ### Schematic System
 

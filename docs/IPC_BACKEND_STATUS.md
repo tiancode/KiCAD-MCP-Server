@@ -231,14 +231,15 @@ pip install kicad-python
 ```
 python/kicad_api/
 ├── __init__.py          # Package exports
-├── base.py              # Abstract base classes
-├── factory.py           # Backend auto-detection
-├── ipc_backend.py       # IPC implementation
-└── swig_backend.py      # Legacy SWIG wrapper
+├── base.py              # Abstract base classes (KiCADBackend / BoardAPI)
+└── ipc_backend.py       # IPC implementation (kipy)
 
 python/
 └── test_ipc_backend.py  # IPC test script
 ```
+
+The SWIG path is not a backend object in this package — it is direct `pcbnew`
+access dispatched via `KiCADInterface.command_routes` in `kicad_interface.py`.
 
 ## Future Work
 

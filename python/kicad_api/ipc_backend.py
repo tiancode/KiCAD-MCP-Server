@@ -2297,5 +2297,4 @@ class IPCBoardAPI(BoardAPI):
         return info
 
 
-# Export for factory
 __all__ = ["IPCBackend", "IPCBoardAPI"]
