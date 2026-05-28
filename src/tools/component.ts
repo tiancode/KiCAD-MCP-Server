@@ -5,6 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { paginationParams } from "./pagination-params.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -415,13 +416,16 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .optional()
         .describe("Filter by bounding box region"),
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for coordinates (default: mm)"),
+      ...paginationParams,
     },
-    async ({ layer, boundingBox, unit }) => {
+    async ({ layer, boundingBox, unit, limit, offset }) => {
       logger.debug("Getting component list");
       const result = await callKicadScript("get_component_list", {
         layer,
         boundingBox,
         unit: unit || "mm",
+        limit,
+        offset,
       });
 
       return {

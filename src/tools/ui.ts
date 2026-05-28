@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { passthroughCall } from "./tool-response.js";
+import { paginationParams } from "./pagination-params.js";
 
 export function registerUITools(server: McpServer, callKicadScript: Function) {
   const passthrough = (command: string) =>
@@ -80,7 +81,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   server.tool(
     "ipc_list_components",
     "List all footprints on the board via the IPC backend (real-time, no SWIG reload).",
-    {},
+    { ...paginationParams },
     passthrough("ipc_list_components"),
   );
   server.tool(

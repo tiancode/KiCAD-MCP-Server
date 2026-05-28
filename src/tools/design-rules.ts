@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { formatKicadResult } from "./tool-response.js";
+import { paginationParams } from "./pagination-params.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -258,10 +259,11 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
         .enum(["error", "warning", "all"])
         .optional()
         .describe("Filter violations by severity"),
+      ...paginationParams,
     },
-    async ({ severity }) => {
+    async ({ severity, limit, offset }) => {
       logger.debug("Getting DRC violations");
-      const result = await callKicadScript("get_drc_violations", { severity });
+      const result = await callKicadScript("get_drc_violations", { severity, limit, offset });
 
       return formatKicadResult(result);
     },

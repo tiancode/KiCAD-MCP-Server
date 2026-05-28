@@ -4,6 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { paginationParams } from "./pagination-params.js";
 
 export function registerRoutingTools(server: McpServer, callKicadScript: Function) {
   // Add net tool
@@ -217,6 +218,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Filter by bounding box region"),
       unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit for coordinates"),
+      ...paginationParams,
     },
     async (args: any) => {
       const result = await callKicadScript("query_traces", args);
@@ -365,6 +367,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Include statistics (track count, total length, etc.)"),
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for length measurements"),
+      ...paginationParams,
     },
     async (args: any) => {
       const result = await callKicadScript("get_nets_list", args);

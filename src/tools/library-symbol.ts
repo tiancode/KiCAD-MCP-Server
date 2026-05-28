@@ -5,6 +5,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { paginationParams, truncationNote } from "./pagination-params.js";
 
 export function registerSymbolLibraryTools(server: McpServer, callKicadScript: Function) {
   // List available symbol libraries
@@ -141,8 +142,9 @@ Returns symbol references that can be used directly in schematics.`,
         .describe(
           "Optional: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path to resolve project-scope libraries.",
         ),
+      ...paginationParams,
     },
-    async (args: { library: string; projectPath?: string }) => {
+    async (args: { library: string; projectPath?: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_library_symbols", args);
       if (result.success && result.symbols) {
         const symbolList = result.symbols
@@ -157,7 +159,7 @@ Returns symbol references that can be used directly in schematics.`,
           content: [
             {
               type: "text",
-              text: `Library "${args.library}" contains ${result.count} symbols:\n${symbolList}`,
+              text: `Library "${args.library}" contains ${result.total ?? result.count} symbols:\n${symbolList}${truncationNote(result)}`,
             },
           ],
         };

@@ -4,6 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { paginationParams, truncationNote } from "./pagination-params.js";
 
 export function registerSchematicTools(server: McpServer, callKicadScript: Function) {
   // Create schematic tool
@@ -914,10 +915,13 @@ edit_schematic_component and set its value to an empty string.`,
         })
         .optional()
         .describe("Optional filters"),
+      ...paginationParams,
     },
     async (args: {
       schematicPath: string;
       filter?: { libId?: string; referencePrefix?: string };
+      limit?: number;
+      offset?: number;
     }) => {
       const result = await callKicadScript("list_schematic_components", args);
       if (result.success) {
@@ -935,7 +939,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Components (${comps.length}):\n${lines.join("\n")}`,
+              text: `Components (${comps.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -958,8 +962,9 @@ edit_schematic_component and set its value to an empty string.`,
     "List all nets in the schematic with their connections.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string }) => {
+    async (args: { schematicPath: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_schematic_nets", args);
       if (result.success) {
         const nets = result.nets || [];
@@ -978,7 +983,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Nets (${nets.length}):\n${lines.join("\n")}`,
+              text: `Nets (${nets.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -998,8 +1003,9 @@ edit_schematic_component and set its value to an empty string.`,
     "List all wires in the schematic with start/end coordinates.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string }) => {
+    async (args: { schematicPath: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_schematic_wires", args);
       if (result.success) {
         const wires = result.wires || [];
@@ -1015,7 +1021,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Wires (${wires.length}):\n${lines.join("\n")}`,
+              text: `Wires (${wires.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -1048,8 +1054,15 @@ edit_schematic_component and set its value to an empty string.`,
         .describe(
           "Filter by label type. 'net' = local label, 'global' = global label, 'power' = power symbol. Omit to return all types.",
         ),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string; netName?: string; labelType?: string }) => {
+    async (args: {
+      schematicPath: string;
+      netName?: string;
+      labelType?: string;
+      limit?: number;
+      offset?: number;
+    }) => {
       const result = await callKicadScript("list_schematic_labels", args);
       if (result.success) {
         const labels = result.labels || [];
@@ -1065,7 +1078,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Labels (${labels.length}):\n${lines.join("\n")}`,
+              text: `Labels (${labels.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -1983,8 +1996,9 @@ edit_schematic_component and set its value to an empty string.`,
         .string()
         .optional()
         .describe("Case-insensitive substring filter — only return texts containing this string"),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string; text?: string }) => {
+    async (args: { schematicPath: string; text?: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_schematic_texts", args);
       if (result.success) {
         const texts = result.texts || [];
@@ -2006,7 +2020,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text" as const,
-              text: `Text annotations (${texts.length}):\n${lines.join("\n")}`,
+              text: `Text annotations (${texts.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
