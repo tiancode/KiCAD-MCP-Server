@@ -294,10 +294,14 @@ export class KiCADMcpServer {
   }> = [];
   private processingRequest = false;
   private responseBuffer: string = "";
+  /** Monotonic id stamped on each request so a late response from a
+   *  timed-out command can't be misattributed to the next request. */
+  private nextRequestId = 1;
   private currentRequestHandler: {
     resolve: Function;
     reject: Function;
     timeoutHandle: NodeJS.Timeout;
+    id: number;
   } | null = null;
 
   /** Resolved when Python prints {"type":"ready"} — stdin loop is live. */
@@ -797,7 +801,8 @@ export class KiCADMcpServer {
         return;
       }
 
-      const requestStr = JSON.stringify({ command: "_warmup", params: {} });
+      const requestId = this.nextRequestId++;
+      const requestStr = JSON.stringify({ command: "_warmup", params: {}, id: requestId });
       this.responseBuffer = "";
 
       const timeoutHandle = setTimeout(() => {
@@ -834,6 +839,7 @@ export class KiCADMcpServer {
           resolve(); // don't fail the whole server
         },
         timeoutHandle,
+        id: requestId,
       };
 
       this.pythonProcess.stdin.write(requestStr + "\n");
@@ -1009,6 +1015,25 @@ export class KiCADMcpServer {
       }
     }
 
+    // Correlation guard: if this response carries an id that doesn't match
+    // the in-flight request's id, it is a late reply from a command we already
+    // timed out on. Discard it — the current request keeps waiting for its own
+    // matching response — rather than handing stale data to the wrong caller.
+    const handlerId = this.currentRequestHandler.id;
+    if (
+      typeof handlerId === "number" &&
+      result != null &&
+      typeof result.id === "number" &&
+      result.id !== handlerId
+    ) {
+      logger.warn(
+        `Discarding stale response id=${result.id} while awaiting id=${handlerId} ` +
+          "(late reply from a timed-out command).",
+      );
+      this.responseBuffer = "";
+      return;
+    }
+
     // If we get here, we have a valid JSON response
     logger.debug(`Completed KiCAD command with result: ${result.success ? "success" : "failure"}`);
 
@@ -1050,8 +1075,13 @@ export class KiCADMcpServer {
     try {
       logger.debug(`Processing KiCAD command: ${request.command}`);
 
+      // Stamp a correlation id so a late response from a previously
+      // timed-out command is recognised and discarded instead of being
+      // handed to this request (see tryParseResponse).
+      const requestId = this.nextRequestId++;
+
       // Format the command and parameters as JSON
-      const requestStr = JSON.stringify(request);
+      const requestStr = JSON.stringify({ ...request, id: requestId });
 
       // Clear response buffer for new request
       this.responseBuffer = "";
@@ -1075,7 +1105,7 @@ export class KiCADMcpServer {
       }, timeoutDuration);
 
       // Store the current request handler
-      this.currentRequestHandler = { resolve, reject, timeoutHandle };
+      this.currentRequestHandler = { resolve, reject, timeoutHandle, id: requestId };
 
       // Write the request to the Python process
       logger.debug(`Sending request: ${requestStr}`);

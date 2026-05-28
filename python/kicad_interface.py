@@ -2461,6 +2461,7 @@ def main() -> None:
                     logger.info("Detected custom format message")
                     command = command_data.get("command")
                     params = command_data.get("params", {})
+                    request_id = command_data.get("id")
 
                     if not command:
                         logger.error("Missing command field")
@@ -2472,6 +2473,13 @@ def main() -> None:
                     else:
                         # Handle command
                         response = interface.handle_command(command, params)
+
+                    # Echo the correlation id back when the client supplied one,
+                    # so the TS bridge can drop a late response from a command it
+                    # already timed out on instead of misattributing it to the
+                    # next request.
+                    if isinstance(response, dict) and request_id is not None:
+                        response["id"] = request_id
 
                 # Send response via the clean fd (immune to pcbnew stdout noise)
                 logger.debug(f"Sending response: {response}")
