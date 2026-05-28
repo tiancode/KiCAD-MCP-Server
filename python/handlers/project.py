@@ -34,6 +34,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How long to poll for IPC attach after we just launched KiCAD.  KiCad's
+# wxApp init typically takes 3–8 s on Linux and up to ~15 s on macOS, so
+# a sub-10s deadline can return a misleading ``ipcAttached: false`` to
+# the caller.  Module-level so tests can monkey-patch it to 0 and avoid
+# adding real-time delay to the suite.
+_AUTOLAUNCH_IPC_POLL_DEADLINE_S = 10.0
+_AUTOLAUNCH_IPC_POLL_INTERVAL_S = 0.5
+
 
 def _autolaunch_disabled(params: Dict[str, Any]) -> Optional[str]:
     """Return a reason string if auto-launch is suppressed, else None.
@@ -118,6 +126,11 @@ def _autolaunch_for_project(
         "launched": False,
         "running": False,
         "ipcAttached": False,
+        # Filled in by the attach-poll loop below.  Useful to surface so
+        # callers can tell apart "took 5s, fine" from "polled 20× and
+        # gave up — KiCAD is hung".
+        "ipcAttachAttempts": 0,
+        "ipcAttachElapsedMs": 0,
         # ipcAttached=true with pcbDocumentOpen=false used to be the trap
         # behind silent 0×0 get_board_info / "Failed to move component"
         # results: the IPC socket was up but KiCad had no .kicad_pcb loaded,
@@ -155,17 +168,53 @@ def _autolaunch_for_project(
     if not running:
         return base
 
-    try:
-        # Force the connection attempt when we just spawned KiCAD — process
-        # detection lags via /proc, so is_running() may be False even though
-        # launch returned success.  When KiCAD was already running, the
-        # default non-forced path is enough.
-        ipc_attached = iface._try_enable_ipc_backend(force=launched)
-    except Exception as exc:  # pragma: no cover - best effort
-        logger.info("IPC attach after auto-launch failed: %s", exc)
-        ipc_attached = False
+    # IPC attach with polling when we just spawned KiCAD — its wxApp
+    # init takes 3–8 s on Linux / 8–15 s on macOS, so a single-shot
+    # attach right after ``launch()`` almost always returns ``False``
+    # and the user sees ``ipcAttached: false`` even though the server
+    # comes up a few seconds later.  Poll on a short interval up to
+    # ``_AUTOLAUNCH_IPC_POLL_DEADLINE_S``; when KiCAD was already
+    # running, single-shot is plenty.
+    import time as _time
+
+    poll_deadline_s = _AUTOLAUNCH_IPC_POLL_DEADLINE_S if launched else 0.0
+    poll_interval_s = _AUTOLAUNCH_IPC_POLL_INTERVAL_S
+    poll_started_at = _time.monotonic()
+    ipc_attached = False
+    poll_attempts = 0
+    while True:
+        poll_attempts += 1
+        try:
+            ipc_attached = iface._try_enable_ipc_backend(force=launched)
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.info("IPC attach after auto-launch failed: %s", exc)
+            ipc_attached = False
+        if ipc_attached:
+            break
+        elapsed = _time.monotonic() - poll_started_at
+        if elapsed >= poll_deadline_s:
+            break
+        _time.sleep(poll_interval_s)
+
+    poll_elapsed_ms = int((_time.monotonic() - poll_started_at) * 1000)
+    base["ipcAttachAttempts"] = poll_attempts
+    base["ipcAttachElapsedMs"] = poll_elapsed_ms
 
     if not ipc_attached:
+        # We just spawned KiCAD and it's still booting (or the IPC
+        # API server is disabled in Preferences).  Tell the caller
+        # exactly what to do instead of leaving them to guess from
+        # ``ipcAttached: false``.
+        if launched:
+            base["retryAfterMs"] = 5000
+            base["warning"] = (
+                f"IPC attach didn't land within {int(poll_deadline_s)}s of "
+                "launching KiCAD — its wxApp init can take longer on some "
+                "systems.  Wait ~5 seconds and re-call get_backend_info / "
+                "the failing tool; the next attempt will retry the attach.  "
+                "If it still fails, open KiCAD → Preferences → Plugins → "
+                "Enable IPC API Server and re-launch."
+            )
         return base
 
     # Cross-project safety: if KiCAD currently has a different project

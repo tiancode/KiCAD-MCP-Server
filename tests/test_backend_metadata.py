@@ -869,6 +869,9 @@ def test_open_project_launches_with_kicad_pro_file_not_parent_dir(monkeypatch, t
     iface._project_path_from_filename = KiCADInterface._project_path_from_filename.__get__(iface)
     iface._refresh_symbol_library_for_project = lambda p: None
     iface._try_enable_ipc_backend = lambda force=False: False  # IPC attach fails, fine.
+    # Disable the wait-for-IPC poll so this test doesn't sit on a 10 s
+    # sleep — we're testing path resolution, not the attach loop.
+    monkeypatch.setattr(project_handler, "_AUTOLAUNCH_IPC_POLL_DEADLINE_S", 0.0)
 
     result = project_handler.handle_open_project(iface, {"filename": str(project_file)})
 
