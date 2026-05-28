@@ -575,7 +575,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "check_courtyard_overlaps",
-    "Detect courtyard overlaps between footprints and (optionally) flag courtyards that extend past the board outline. Accepts a `positions` dict of hypothetical placements so an AI can validate a proposed move_component / place_component before committing it. Returns overlap pairs with intersection extents (mm) and per-component boundary violations.",
+    "Detect courtyard overlaps between footprints, and optionally flag courtyards past the board outline. Accepts a `positions` dict of hypothetical placements to validate a proposed move/place before committing. Returns overlap pairs with intersection extents (mm) and per-component boundary violations.",
     {
       positions: z
         .record(z.string(), z.array(z.number()).min(2).max(3))
