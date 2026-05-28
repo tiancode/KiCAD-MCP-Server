@@ -542,7 +542,10 @@ class ComponentCommands:
                     }
                 )
 
-            return {"success": True, "components": components}
+            from utils.pagination import paginate
+
+            components, page = paginate(components, params)
+            return {"success": True, "components": components, **page}
 
         except Exception as e:
             logger.error(f"Error getting component list: {str(e)}")

@@ -572,7 +572,10 @@ def handle_get_component_list(iface: "KiCADInterface", params: Dict[str, Any]) -
     """
     try:
         components = iface.ipc_board_api.list_components()
-        return {"success": True, "components": components, "count": len(components)}
+        from utils.pagination import paginate
+
+        components, page = paginate(components, params)
+        return {"success": True, "components": components, **page}
     except Exception as e:
         logger.error(f"IPC get_component_list error: {e}")
         return {"success": False, "message": str(e)}

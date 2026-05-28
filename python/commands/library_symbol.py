@@ -1218,11 +1218,14 @@ class SymbolLibraryCommands:
 
             symbols = self.library_manager.list_symbols(library)
 
+            from utils.pagination import paginate
+
+            symbol_dicts, page = paginate([asdict(s) for s in symbols], params)
             return {
                 "success": True,
                 "library": library,
-                "symbols": [asdict(s) for s in symbols],
-                "count": len(symbols),
+                "symbols": symbol_dicts,
+                **page,
             }
         except Exception as e:
             import traceback as _tb

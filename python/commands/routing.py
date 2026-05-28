@@ -898,7 +898,10 @@ class RoutingCommands:
                         }
                     )
 
-            return {"success": True, "nets": nets}
+            from utils.pagination import paginate
+
+            nets, page = paginate(nets, params)
+            return {"success": True, "nets": nets, **page}
 
         except Exception as e:
             logger.error(f"Error getting nets list: {str(e)}")
@@ -1016,7 +1019,10 @@ class RoutingCommands:
                     logger.warning(f"Skipping invalid track object: {track_err}")
                     continue
 
-            result = {"success": True, "traceCount": len(traces), "traces": traces}
+            from utils.pagination import paginate
+
+            traces, page = paginate(traces, params)
+            result = {"success": True, "traceCount": page["total"], "traces": traces, **page}
 
             if include_vias:
                 result["viaCount"] = len(vias)
