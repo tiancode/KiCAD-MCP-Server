@@ -39,7 +39,114 @@ _SYM_MIRROR = Symbol("mirror")
 _SYM_PIN = Symbol("pin")
 _SYM_SYMBOL = Symbol("symbol")
 _SYM_UNIT = Symbol("unit")
+_SYM_KICAD_SCH = Symbol("kicad_sch")
 _IU_PER_MM = 10000
+
+# Friendly aliases → the canonical KiCad element name.  The MCP schema only
+# advertises the three canonical names, but `execute_tool` passthrough and
+# direct Python calls bypass that validation, and a bare ``Symbol(label_type)``
+# would happily emit e.g. ``(global ...)`` — an element KiCad doesn't know,
+# which makes the parser reject the WHOLE schematic ("Failed to load
+# schematic").  Normalising here means a near-miss like "global" becomes a
+# valid ``global_label`` instead of silently corrupting the file.
+_LABEL_TYPE_ALIASES = {
+    "label": "label",
+    "local": "label",
+    "local_label": "label",
+    "net": "label",
+    "net_label": "label",
+    "global": "global_label",
+    "global_label": "global_label",
+    "hier": "hierarchical_label",
+    "hierarchical": "hierarchical_label",
+    "hierarchical_label": "hierarchical_label",
+    "sheet": "hierarchical_label",
+}
+
+
+def _normalize_label_type(label_type: str) -> str:
+    """Map a caller-supplied label type to a canonical KiCad element name.
+
+    Raises ValueError for anything unrecognised so a typo surfaces as a
+    clear error rather than an invalid ``(<typo> ...)`` element that
+    makes KiCad refuse to load the schematic.
+    """
+    key = str(label_type).strip().lower()
+    if key not in _LABEL_TYPE_ALIASES:
+        raise ValueError(
+            f"Unknown label type {label_type!r}. Expected one of "
+            "label / global_label / hierarchical_label "
+            "(aliases accepted: local, global, hierarchical)."
+        )
+    return _LABEL_TYPE_ALIASES[key]
+
+
+def _validate_schematic_sexpr(output: str) -> None:
+    """Raise ValueError if ``output`` is not a structurally loadable .kicad_sch.
+
+    Backstop against serializer corruption.  Checks, in order:
+
+    1. Parenthesis balance (string-aware — parens inside ``"..."`` are
+       ignored).  An unbalanced result is the failure mode seen when
+       concurrent read-modify-write calls interleave.
+    2. The text re-parses as a single S-expression tree rooted at
+       ``(kicad_sch ...)``.
+
+    This cannot catch a *balanced-but-semantically-wrong* file (an
+    invalid element name still parses) — that class of bug is prevented
+    at construction time (see ``_normalize_label_type``).  Run this on
+    the serialized string BEFORE writing it, so a failed edit never
+    truncates the on-disk schematic.
+    """
+    depth = 0
+    in_str = False
+    esc = False
+    for ch in output:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                raise ValueError(
+                    "schematic serialization produced an unbalanced ')' "
+                    "(too many closing parens) — refusing to write a corrupt file"
+                )
+    if depth != 0:
+        raise ValueError(
+            f"schematic serialization left {depth} unclosed paren(s) — "
+            "refusing to write a corrupt file"
+        )
+    try:
+        tree = sexpdata.loads(output)
+    except Exception as e:
+        raise ValueError(f"schematic serialization is not valid S-expression: {e}")
+    if not (isinstance(tree, list) and tree and tree[0] == _SYM_KICAD_SCH):
+        raise ValueError("schematic serialization lost its (kicad_sch ...) root")
+
+
+def _serialize_validated(sch_data: Any) -> str:
+    """Serialize a parsed .kicad_sch tree, asserting the result is loadable.
+
+    Returns the serialized text.  Raises ValueError (via
+    ``_validate_schematic_sexpr``) before any file I/O so callers can
+    serialize first, then open the file for writing only once the bytes
+    are known-good — avoiding the truncate-on-open data loss that a
+    raise *inside* ``open(path, "w")`` would cause.
+    """
+    output = sexpdata.dumps(sch_data)
+    _validate_schematic_sexpr(output)
+    return output
 
 
 def _find_insertion_point(content: str) -> int:
@@ -193,9 +300,10 @@ class WireManager:
 
             WireManager.sync_junctions(sch_data)
 
-            # Write back
+            # Serialize + validate BEFORE opening for write so a corrupt
+            # result never truncates the existing schematic.
+            output = _serialize_validated(sch_data)
             with open(schematic_path, "w", encoding="utf-8") as f:
-                output = sexpdata.dumps(sch_data)
                 f.write(output)
 
             logger.info(f"Successfully added wire to {schematic_path.name}")
@@ -279,9 +387,10 @@ class WireManager:
 
             WireManager.sync_junctions(sch_data)
 
-            # Write back
+            # Serialize + validate BEFORE opening for write so a corrupt
+            # result never truncates the existing schematic.
+            output = _serialize_validated(sch_data)
             with open(schematic_path, "w", encoding="utf-8") as f:
-                output = sexpdata.dumps(sch_data)
                 f.write(output)
 
             logger.info(f"Successfully added polyline wire to {schematic_path.name}")
@@ -315,12 +424,23 @@ class WireManager:
             schematic_path: Path to .kicad_sch file
             text: Label text (net name)
             position: [x, y] coordinates for label
-            label_type: Type of label ('label', 'global_label', 'hierarchical_label')
+            label_type: Type of label — canonical names are 'label',
+                'global_label', 'hierarchical_label'; the aliases 'local',
+                'global', 'hierarchical' are accepted and normalized.
             orientation: Rotation angle (0, 90, 180, 270)
 
         Returns:
             True if successful, False otherwise
+
+        Raises:
+            ValueError: if ``label_type`` is not a recognised label type.
+                Raised before any file I/O so a typo can't corrupt the
+                schematic.
         """
+        # Resolve the element name up front: an invalid type must raise a
+        # clear error, never fall through to ``Symbol("<typo>")`` which would
+        # emit an element KiCad can't parse and break the whole schematic.
+        element = _normalize_label_type(label_type)
         try:
             with open(schematic_path, "r", encoding="utf-8") as f:
                 sch_content = f.read()
@@ -331,7 +451,7 @@ class WireManager:
             justify_h = Symbol("right") if orientation in (180, 270) else Symbol("left")
 
             label_sexp = [
-                Symbol(label_type),
+                Symbol(element),
                 text,
                 [Symbol("at"), position[0], position[1], orientation],
                 [
@@ -354,8 +474,9 @@ class WireManager:
 
             sch_data.insert(sheet_instances_index, label_sexp)
 
+            output = _serialize_validated(sch_data)
             with open(schematic_path, "w", encoding="utf-8") as f:
-                f.write(sexpdata.dumps(sch_data))
+                f.write(output)
 
             logger.info(f"Successfully added label '{text}' to {schematic_path.name}")
             return True
@@ -776,9 +897,10 @@ class WireManager:
             sch_data.insert(sheet_instances_index, no_connect_sexp)
             logger.info(f"Injected no-connect at {position}")
 
-            # Write back
+            # Serialize + validate BEFORE opening for write so a corrupt
+            # result never truncates the existing schematic.
+            output = _serialize_validated(sch_data)
             with open(schematic_path, "w", encoding="utf-8") as f:
-                output = sexpdata.dumps(sch_data)
                 f.write(output)
 
             logger.info(f"Successfully added no-connect to {schematic_path.name}")
@@ -866,8 +988,9 @@ class WireManager:
                 if match_fwd or match_rev:
                     del sch_data[i]
                     WireManager.sync_junctions(sch_data)
+                    output = _serialize_validated(sch_data)
                     with open(schematic_path, "w", encoding="utf-8") as f:
-                        f.write(sexpdata.dumps(sch_data))
+                        f.write(output)
                     logger.info(f"Deleted wire from {start_point} to {end_point}")
                     return True
 
@@ -940,8 +1063,9 @@ class WireManager:
                         continue
 
                 del sch_data[i]
+                output = _serialize_validated(sch_data)
                 with open(schematic_path, "w", encoding="utf-8") as f:
-                    f.write(sexpdata.dumps(sch_data))
+                    f.write(output)
                 logger.info(f"Deleted label '{net_name}'")
                 return True
 
