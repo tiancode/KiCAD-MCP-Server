@@ -269,7 +269,11 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         return response
 
     # SWIG branch — diagnose the *specific* reason IPC isn't attached.
-    unavailable_count = len(status.get("unavailable_tools", []))
+    # This is the capability-enumeration tool, so it returns the full
+    # unavailable_tools list; the routine status tools (_backend_status) carry
+    # only unavailable_tool_count to keep their responses small.
+    response["unavailable_tools"] = list(iface.IPC_REQUIRED_COMMANDS)
+    unavailable_count = len(response["unavailable_tools"])
     kicad_running = KiCADProcessManager.is_running()
     if not kicad_running:
         response["kicad_running"] = False

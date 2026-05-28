@@ -1004,10 +1004,12 @@ class KiCADInterface:
     def _backend_status(self) -> Dict[str, Any]:
         """Return backend status fields for command responses.
 
-        Includes a ``capabilities`` snapshot and ``unavailable_tools`` list so
-        agents can see at a glance which IPC-only tools the current backend
-        cannot reach — avoids 8-deep trial-and-error chains that the user
-        called out as the worst UX of the SWIG fallback.
+        Includes a ``capabilities`` snapshot and, on the SWIG backend, an
+        ``unavailable_tool_count`` so agents see at a glance that some IPC-only
+        tools are unreachable.  The full ``unavailable_tools`` list (~26 names)
+        is large; only ``get_backend_info`` — the capability-enumeration tool —
+        returns it.  Routine status calls (check_kicad_ui, get_backend_state,
+        launch_kicad_ui) carry just the count to keep responses small.
         """
         ipc_backend = getattr(self, "ipc_backend", None)
         ipc_connected = ipc_backend.is_connected() if ipc_backend else False
@@ -1026,7 +1028,7 @@ class KiCADInterface:
             },
         }
         if not is_ipc:
-            status["unavailable_tools"] = list(self.IPC_REQUIRED_COMMANDS)
+            status["unavailable_tool_count"] = len(self.IPC_REQUIRED_COMMANDS)
         return status
 
     @staticmethod
