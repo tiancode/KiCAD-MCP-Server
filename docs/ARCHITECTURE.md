@@ -217,6 +217,10 @@ Backend selection happens in `kicad_interface.py` at import time: it tries to
 attach the IPC backend first (honoring `KICAD_BACKEND`), otherwise commands run
 against `pcbnew` directly.
 
+Migrating PCB operations off SWIG onto IPC is an ongoing, incremental effort —
+see [SWIG_TO_IPC_MIGRATION.md](SWIG_TO_IPC_MIGRATION.md) for the playbook and
+the per-command recipe.
+
 ### Schematic System
 
 Schematic manipulation uses a different stack than PCB operations:
