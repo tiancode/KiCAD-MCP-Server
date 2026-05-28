@@ -300,8 +300,6 @@ Access project state without executing tools:
 
 The server provides 174 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish.
 
-For the complete tool reference, see [Tool Inventory](docs/TOOL_INVENTORY.md).
-
 ### Project Management (5 tools)
 
 - `create_project` - Initialize new KiCAD projects
