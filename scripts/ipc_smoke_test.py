@@ -11,15 +11,15 @@ Prerequisites:
 3. A board should be open in the PCB editor
 
 Usage:
-    ./venv/bin/python python/test_ipc_backend.py
+    ./venv/bin/python scripts/ipc_smoke_test.py
 """
 
-import os
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add the python/ package dir (sibling of scripts/) to the import path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
 import logging
 

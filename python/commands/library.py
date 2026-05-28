@@ -566,11 +566,14 @@ class LibraryCommands:
 
             footprints = self.library_manager.list_footprints(library)
 
+            from utils.pagination import paginate
+
+            footprints, page = paginate(footprints, params)
             return {
                 "success": True,
                 "library": library,
                 "footprints": footprints,
-                "count": len(footprints),
+                **page,
             }
         except (OSError, ValueError) as e:
             logger.exception(f"Error listing library footprints: {e}")

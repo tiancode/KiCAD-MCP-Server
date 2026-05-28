@@ -117,9 +117,11 @@ AttributeError: 'BOARD' object has no attribute 'LT_USER'
 
 ### MCP protocol-level gaps (Fixed)
 
-- `execute_tool`, `get_backend_info`, and seven `ipc_*` tools were
-  referenced everywhere but never registered on the TS side. All
-  registered now; tool count: 142 → 151.
+- `get_backend_info` and the `ipc_*` tools were referenced but not all
+  registered on the TS side; `get_backend_info` and `ipc_add_track` now have
+  wrappers. (The router/registry discovery layer — `execute_tool`,
+  `list_tool_categories`, … — and the redundant `ipc_*` duplicates were later
+  removed; every tool is registered directly and called by name.)
 
 ### CI failure masking (Fixed)
 

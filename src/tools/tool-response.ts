@@ -31,7 +31,7 @@ export function formatKicadResult(result: unknown): McpTextResult {
 
 /**
  * Build a parameterless MCP handler that forwards args to the Python
- * subprocess and JSON-pretty-prints the response.  The 5-line inline
+ * subprocess and serializes the response as compact JSON.  The 5-line inline
  * closure was being copy-pasted into every tool file — pulling it here
  * keeps the content shape in one place so future changes (error
  * routing, structured content blocks, etc.) only touch one file.
@@ -43,7 +43,7 @@ export function passthroughCall(
   return async (args: Record<string, unknown> = {}) => {
     const result = await callKicadScript(command, args);
     return {
-      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
   };
 }

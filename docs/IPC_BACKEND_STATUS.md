@@ -158,7 +158,7 @@ Run the test script to verify IPC functionality:
 
 ```bash
 # Make sure KiCAD is running with IPC enabled and a board open
-./venv/bin/python python/test_ipc_backend.py
+./venv/bin/python scripts/ipc_smoke_test.py
 ```
 
 ## Architecture
@@ -231,14 +231,15 @@ pip install kicad-python
 ```
 python/kicad_api/
 ├── __init__.py          # Package exports
-├── base.py              # Abstract base classes
-├── factory.py           # Backend auto-detection
-├── ipc_backend.py       # IPC implementation
-└── swig_backend.py      # Legacy SWIG wrapper
+├── base.py              # Abstract base classes (KiCADBackend / BoardAPI)
+└── ipc_backend.py       # IPC implementation (kipy)
 
-python/
-└── test_ipc_backend.py  # IPC test script
+scripts/
+└── ipc_smoke_test.py    # Manual IPC smoke test (run with KiCAD open)
 ```
+
+The SWIG path is not a backend object in this package — it is direct `pcbnew`
+access dispatched via `KiCADInterface.command_routes` in `kicad_interface.py`.
 
 ## Future Work
 

@@ -5,6 +5,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { offsetParam, truncationNote } from "./pagination-params.js";
 
 export function registerLibraryTools(server: McpServer, callKicadScript: Function) {
   // List available footprint libraries
@@ -90,8 +91,9 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Functio
       library_name: z.string().describe("Name of the library to list footprints from"),
       filter: z.string().optional().describe("Optional filter pattern for footprint names"),
       limit: z.number().optional().default(100).describe("Maximum number of footprints to list"),
+      ...offsetParam,
     },
-    async (args: { library_name: string; filter?: string; limit?: number }) => {
+    async (args: { library_name: string; filter?: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_library_footprints", args);
       if (result.success && result.footprints) {
         const footprintList = result.footprints.map((fp: string) => `  - ${fp}`).join("\n");
@@ -99,7 +101,7 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Functio
           content: [
             {
               type: "text",
-              text: `Library ${args.library_name} contains ${result.footprints.length} footprints:\n${footprintList}`,
+              text: `Library ${args.library_name} contains ${result.footprints.length} footprints:\n${footprintList}${truncationNote(result)}`,
             },
           ],
         };

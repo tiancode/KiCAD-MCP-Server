@@ -227,7 +227,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
   // ------------------------------------------------------
   server.tool(
     "export_netlist",
-    "Export the schematic netlist to a file using kicad-cli. Supports KiCad XML (default), Spice (for simulation), Cadstar, and OrcadPCB2 formats. Use this when you need to write a netlist file to disk — for example to produce a SPICE file for simulation or to diff against a reference. To get net/component data inline without writing a file, use generate_netlist instead.",
+    "Export the schematic netlist to a file via kicad-cli (KiCad XML default, plus Spice, Cadstar, OrcadPCB2). Use when you need a netlist file on disk (e.g. SPICE for simulation). For net/component data inline without a file, use generate_netlist.",
     {
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
       outputPath: z.string().describe("Absolute path for the output file (e.g. /tmp/design.spice)"),

@@ -4,6 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { paginationParams, truncationNote } from "./pagination-params.js";
 
 export function registerSchematicTools(server: McpServer, callKicadScript: Function) {
   // Create schematic tool
@@ -20,7 +21,7 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -494,7 +495,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Draw wire between coordinate waypoints with optional pin snapping
   server.tool(
     "add_schematic_wire",
-    "Draws a wire on the schematic between two or more coordinate points. Always call get_schematic_pin_locations first to get the approximate pin coordinates, then pass them as the first and last waypoints. snapToPins (on by default) will correct any float imprecision by snapping endpoints to the exact nearest pin coordinate. To route around components, add intermediate waypoints between the start and end: e.g. [[x1,y1], [xMid,y1], [xMid,y2], [x2,y2]] routes horizontally then vertically. Intermediate waypoints are never snapped.",
+    "Draw a wire between two or more points. Call get_schematic_pin_locations first for pin coordinates, then pass them as the first/last waypoints. snapToPins (default on) snaps endpoints to the nearest exact pin coordinate. Add intermediate waypoints to route around parts, e.g. [[x1,y1],[xMid,y1],[xMid,y2],[x2,y2]] goes horizontal then vertical; intermediate waypoints are never snapped.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       waypoints: z
@@ -594,7 +595,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -643,7 +644,7 @@ edit_schematic_component and set its value to an empty string.`,
       const result = await callKicadScript("add_no_connect", args);
       if (result.success) {
         return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(result) }],
         };
       } else {
         return {
@@ -682,7 +683,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -893,7 +894,7 @@ edit_schematic_component and set its value to an empty string.`,
     async (args: { schematicPath: string }) => {
       const result = await callKicadScript("get_schematic_overview", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -914,10 +915,13 @@ edit_schematic_component and set its value to an empty string.`,
         })
         .optional()
         .describe("Optional filters"),
+      ...paginationParams,
     },
     async (args: {
       schematicPath: string;
       filter?: { libId?: string; referencePrefix?: string };
+      limit?: number;
+      offset?: number;
     }) => {
       const result = await callKicadScript("list_schematic_components", args);
       if (result.success) {
@@ -935,7 +939,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Components (${comps.length}):\n${lines.join("\n")}`,
+              text: `Components (${comps.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -958,8 +962,9 @@ edit_schematic_component and set its value to an empty string.`,
     "List all nets in the schematic with their connections.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string }) => {
+    async (args: { schematicPath: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_schematic_nets", args);
       if (result.success) {
         const nets = result.nets || [];
@@ -978,7 +983,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Nets (${nets.length}):\n${lines.join("\n")}`,
+              text: `Nets (${nets.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -998,8 +1003,9 @@ edit_schematic_component and set its value to an empty string.`,
     "List all wires in the schematic with start/end coordinates.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string }) => {
+    async (args: { schematicPath: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_schematic_wires", args);
       if (result.success) {
         const wires = result.wires || [];
@@ -1015,7 +1021,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Wires (${wires.length}):\n${lines.join("\n")}`,
+              text: `Wires (${wires.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -1048,8 +1054,15 @@ edit_schematic_component and set its value to an empty string.`,
         .describe(
           "Filter by label type. 'net' = local label, 'global' = global label, 'power' = power symbol. Omit to return all types.",
         ),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string; netName?: string; labelType?: string }) => {
+    async (args: {
+      schematicPath: string;
+      netName?: string;
+      labelType?: string;
+      limit?: number;
+      offset?: number;
+    }) => {
       const result = await callKicadScript("list_schematic_labels", args);
       if (result.success) {
         const labels = result.labels || [];
@@ -1065,7 +1078,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text",
-              text: `Labels (${labels.length}):\n${lines.join("\n")}`,
+              text: `Labels (${labels.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };
@@ -1082,7 +1095,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Move a placed symbol, dragging connected wires
   server.tool(
     "move_schematic_component",
-    "Move a placed symbol to a new position in the schematic.  By default (preserveWires=true) wire endpoints touching the component's pins are stretched to follow the new position.  Destination coordinates SNAP to KiCad's 1.27 mm schematic grid by default — off-grid placements produce 'pin off-grid' ERC warnings on every pin.  Pass snapToGrid: false to keep the exact coordinates.",
+    "Move a placed symbol. preserveWires (default true) stretches wire endpoints touching its pins to follow. Coordinates snap to KiCad's 1.27 mm grid by default — off-grid placement triggers 'pin off-grid' ERC warnings; pass snapToGrid:false to keep exact coordinates.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator (e.g., R1, U1)"),
@@ -1481,14 +1494,14 @@ edit_schematic_component and set its value to an empty string.`,
   // Run Electrical Rules Check (ERC)
   server.tool(
     "run_erc",
-    "Runs the KiCAD Electrical Rules Check (ERC) on a schematic and returns all violations.  Use after wiring to verify the schematic before generating a netlist.  Common gotcha: KiCad's ERC requires every power-input pin (e.g. NE555 GND/VCC, MCU VDD) to be driven by either an Output Power pin or a power:PWR_FLAG symbol — power LABELS alone (GND / VCC / +3V3 wires) are not enough.  The response's summary.recommendations[] field surfaces an actionable 'add PWR_FLAG' entry whenever those false-positive errors are detected, including the exact net names that need flagging.  summary.real_errors counts ONLY non-PWR_FLAG issues so the headline number reflects genuine wiring problems.  Auto-refresh: by default the handler re-extracts every lib_symbols entry from the current .kicad_sym on disk before invoking kicad-cli — this silences the 'Symbol X doesn't match copy in library Y' warnings that every MCP-placed component used to emit because our injection format drifts from KiCad's canonical form.  The refresh result is surfaced under response.lib_symbols_refresh.",
+    "Run ERC on a schematic and return all violations. Gotcha: KiCad's ERC requires every power-input pin (e.g. GND/VCC/VDD) to be driven by an Output Power pin or a PWR_FLAG symbol — power labels alone aren't enough. summary.recommendations[] surfaces actionable 'add PWR_FLAG' entries (with the net names) for those false positives; summary.real_errors counts only non-PWR_FLAG issues. By default lib_symbols are re-extracted from the on-disk .kicad_sym first (silences 'symbol doesn't match library' warnings); result under response.lib_symbols_refresh.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       autoRefreshLibSymbols: z
         .boolean()
         .optional()
         .describe(
-          "Re-inject every embedded lib_symbols entry from the current on-disk .kicad_sym before running ERC.  Default true — silences lib_symbol_mismatch warnings caused by drift between MCP's injection format and KiCad's canonical form.  Pass false to skip when you specifically want to see those warnings (e.g. debugging library drift).",
+          "Re-inject lib_symbols from the on-disk .kicad_sym before ERC (default true) to silence lib_symbol_mismatch warnings from format drift. Pass false to keep those warnings (debugging library drift).",
         ),
     },
     async (args: { schematicPath: string; autoRefreshLibSymbols?: boolean }) => {
@@ -1550,7 +1563,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Generate netlist
   server.tool(
     "generate_netlist",
-    "Return a structured JSON netlist from the schematic — component list (reference, value, footprint) and net list (net name with all connected component/pin pairs). Use this to inspect or verify connectivity within the conversation. Does not write any file. To export a netlist file in Spice, KiCad XML, Cadstar, or OrcadPCB2 format, use export_netlist instead.",
+    "Return a structured JSON netlist — components (reference, value, footprint) and nets (name + connected component/pin pairs). For inspecting connectivity inline; writes no file. To export a netlist file (Spice/KiCad XML/Cadstar/OrcadPCB2), use export_netlist.",
     {
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
     },
@@ -1598,7 +1611,7 @@ edit_schematic_component and set its value to an empty string.`,
   // Sync schematic to PCB board (equivalent to KiCAD F8 / "Update PCB from Schematic")
   server.tool(
     "sync_schematic_to_board",
-    "Import the schematic netlist into the PCB board — equivalent to pressing F8 in KiCAD (Tools → Update PCB from Schematic). MUST be called after the schematic is complete and before placing or routing components on the PCB. Without this step, the board has no footprints and no net assignments — place_component and route_pad_to_pad will produce an empty, unroutable board.",
+    "Import the schematic netlist into the PCB (= F8 / Tools → Update PCB from Schematic). Call after the schematic is complete and before placing/routing — without it the board has no footprints or net assignments and place_component/route_pad_to_pad produce an empty, unroutable board.",
     {
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
       boardPath: z.string().describe("Absolute path to the .kicad_pcb board file"),
@@ -1606,7 +1619,7 @@ edit_schematic_component and set its value to an empty string.`,
     async (args: { schematicPath: string; boardPath: string }) => {
       const result = await callKicadScript("sync_schematic_to_board", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -1983,8 +1996,9 @@ edit_schematic_component and set its value to an empty string.`,
         .string()
         .optional()
         .describe("Case-insensitive substring filter — only return texts containing this string"),
+      ...paginationParams,
     },
-    async (args: { schematicPath: string; text?: string }) => {
+    async (args: { schematicPath: string; text?: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_schematic_texts", args);
       if (result.success) {
         const texts = result.texts || [];
@@ -2006,7 +2020,7 @@ edit_schematic_component and set its value to an empty string.`,
           content: [
             {
               type: "text" as const,
-              text: `Text annotations (${texts.length}):\n${lines.join("\n")}`,
+              text: `Text annotations (${texts.length}):\n${lines.join("\n")}${truncationNote(result)}`,
             },
           ],
         };

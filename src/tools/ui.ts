@@ -57,7 +57,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -78,30 +78,6 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   // user to open the board and wait, don't auto-launch or work around it.
   // -----------------------------------------------------------------
   server.tool(
-    "ipc_list_components",
-    "List all footprints on the board via the IPC backend (real-time, no SWIG reload).",
-    {},
-    passthrough("ipc_list_components"),
-  );
-  server.tool(
-    "ipc_get_tracks",
-    "List all PCB tracks via the IPC backend (real-time).",
-    {},
-    passthrough("ipc_get_tracks"),
-  );
-  server.tool(
-    "ipc_get_vias",
-    "List all vias via the IPC backend (real-time).",
-    {},
-    passthrough("ipc_get_vias"),
-  );
-  server.tool(
-    "ipc_save_board",
-    "Save the open board via the IPC backend (real-time; equivalent to Ctrl+S in KiCAD UI).",
-    {},
-    passthrough("ipc_save_board"),
-  );
-  server.tool(
     "ipc_add_track",
     "Add a track via the IPC backend (real-time).  Most callers should use route_trace instead; this tool exposes the raw IPC path for debugging.",
     {
@@ -114,32 +90,6 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
       net: z.string().optional().describe("Net name to bind the track to"),
     },
     passthrough("ipc_add_track"),
-  );
-  server.tool(
-    "ipc_add_via",
-    "Add a via via the IPC backend (real-time).  Most callers should use add_via instead.",
-    {
-      x: z.number().describe("X (mm)"),
-      y: z.number().describe("Y (mm)"),
-      diameter: z.number().optional().describe("Via outer diameter in mm (default 0.8)"),
-      drill: z.number().optional().describe("Drill diameter in mm (default 0.4)"),
-      net: z.string().optional().describe("Net name"),
-      type: z.enum(["through", "blind", "micro"]).optional().describe("Via type (default through)"),
-    },
-    passthrough("ipc_add_via"),
-  );
-  server.tool(
-    "ipc_add_text",
-    "Add a text annotation via the IPC backend (real-time).  Most callers should use add_text instead.",
-    {
-      text: z.string().describe("Text to add"),
-      x: z.number().describe("X (mm)"),
-      y: z.number().describe("Y (mm)"),
-      layer: z.string().optional().describe("Layer name (default F.SilkS)"),
-      size: z.number().optional().describe("Text size in mm (default 1.0)"),
-      rotation: z.number().optional().describe("Rotation in degrees (default 0)"),
-    },
-    passthrough("ipc_add_text"),
   );
 
   // -----------------------------------------------------------------

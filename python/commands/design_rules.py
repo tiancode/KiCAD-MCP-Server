@@ -454,10 +454,14 @@ class DesignRuleCommands:
             else:
                 filtered_violations = all_violations
 
+            from utils.pagination import paginate
+
+            filtered_violations, page = paginate(filtered_violations, params)
             return {
                 "success": True,
                 "violations": filtered_violations,
                 "violationsFile": violations_file,  # Include file path for reference
+                **page,
             }
 
         except Exception as e:

@@ -28,7 +28,10 @@ export function registerComponentResources(
   // ------------------------------------------------------
   server.resource("component_list", "kicad://components", async (uri) => {
     logger.debug("Retrieving component list");
-    const result = await callKicadScript("get_component_list", {});
+    // limit:0 = uncapped. Resources are pulled on demand (not in the per-turn
+    // model loop), so they return the full list; the get_component_list *tool*
+    // stays capped at 100.
+    const result = await callKicadScript("get_component_list", { limit: 0 });
 
     if (!result.success) {
       logger.error(`Failed to retrieve component list: ${result.errorDetails}`);

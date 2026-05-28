@@ -10,8 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 151 tools across 16 categories with JSON Schema validation
-- Smart tool discovery with router pattern (reduces AI context by 70%)
+- 174 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 27 tools and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -54,12 +53,14 @@ End-to-end tested against KiCAD 10.0.3 (Flathub Flatpak):
 
 ### MCP-protocol fixes
 
-- The router's `execute_tool` is finally registered (every
-  `list_tool_categories` response told you to use it, but the actual
-  MCP tool was missing).
+- The router/registry discovery layer (`list_tool_categories`,
+  `search_tools`, `execute_tool`, …) was removed. Every tool is
+  registered directly as an MCP tool and called by name, so the
+  meta-tools and the hand-maintained category registry no longer earned
+  their maintenance cost.
 - `get_backend_info` and seven `ipc_*` tools (`ipc_list_components`,
   `ipc_add_track`, etc.) now have proper MCP wrappers; previously
-  only the Python handlers existed. Total MCP tool count: 142 → **151**.
+  only the Python handlers existed.
 - `get_backend_state` reports the correct project / board paths in
   IPC mode.
 
@@ -232,22 +233,12 @@ We are currently implementing and testing the KiCAD 9.0 IPC API for real-time UI
 
 Note: IPC features are under active development and testing. Enable IPC in KiCAD via Preferences > Plugins > Enable IPC API Server.
 
-### Tool Discovery & Router Pattern
+### Tools
 
-We've implemented an intelligent tool router to keep AI context efficient while maintaining full functionality:
-
-- **18 direct tools** always visible for high-frequency operations
-- **65 routed tools** organized into 8 categories (board, component, export, drc, schematic, library, routing, autoroute)
-- **35 additional tools** always visible (symbol/footprint creators, JLCPCB, datasheet, advanced routing)
-- **4 router tools** for discovery and execution:
-  - `list_tool_categories` - Browse all available categories
-  - `get_category_tools` - View tools in a specific category
-  - `search_tools` - Find tools by keyword
-  - `execute_tool` - Run any tool with parameters
-
-**Why this matters:** By organizing tools into discoverable categories, Claude can intelligently find and use the right tool for your task without loading all 122 tool schemas into every conversation. This reduces context consumption while maintaining full access to all functionality.
-
-**Usage is seamless:** Just ask naturally - "export gerber files" or "add mounting holes" - and Claude will discover and execute the appropriate tools automatically.
+Every tool is registered directly as an MCP tool and is callable by name — there
+is no router/registry indirection or `execute_tool` gateway. Just ask naturally
+("export gerber files", "add mounting holes") and Claude calls the appropriate
+tool.
 
 ### NEEDS TESTING - REPORT ISSUES
 
@@ -307,9 +298,7 @@ Access project state without executing tools:
 
 ## Available Tools
 
-The server provides **151 tools** organized into 16 functional categories. With the router pattern, tools are automatically discovered as needed -- just ask Claude what you want to accomplish.
-
-For the complete tool reference with access types (direct/routed/additional), see [Tool Inventory](docs/TOOL_INVENTORY.md).
+The server provides 174 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish.
 
 ### Project Management (5 tools)
 
@@ -1166,8 +1155,7 @@ How many Basic parts are available?
 
 - **JSON-RPC 2.0 Transport:** Bi-directional communication via STDIO
 - **Protocol Version:** MCP 2025-06-18
-- **Capabilities:** Tools (122), Resources (8)
-- **Tool Router:** Intelligent discovery system with 8 categories
+- **Capabilities:** Tools (174), Resources (8)
 - **Error Handling:** Standard JSON-RPC error codes
 
 ### TypeScript Server (`src/`)
@@ -1176,19 +1164,16 @@ How many Basic parts are available?
 - Manages Python subprocess lifecycle
 - Handles message routing and validation
 - Provides logging and error recovery
-- **Router System:**
-  - `src/tools/registry.ts` - Tool categorization and lookup
-  - `src/tools/router.ts` - Discovery and execution tools
-  - Reduces AI context usage by 70% while maintaining full functionality
+- All tools registered directly as MCP tools (one file per category in `src/tools/`)
 
 ### Python Interface (`python/`)
 
 - **kicad_interface.py:** Main entry point, MCP message handler, command routing
-- **kicad_api/:** Backend implementations
-  - `base.py` - Abstract base classes for backends
-  - `ipc_backend.py` - KiCAD 9.0 IPC API backend (real-time UI sync)
-  - `swig_backend.py` - pcbnew SWIG API backend (file-based operations)
-  - `factory.py` - Backend auto-detection and instantiation
+- **kicad_api/:** IPC backend implementation
+  - `base.py` - Abstract base classes (`KiCADBackend` / `BoardAPI`)
+  - `ipc_backend.py` - KiCAD IPC API backend (real-time UI sync)
+  - (The SWIG path is not a backend object — it is direct `pcbnew` access
+    behind `KiCADInterface.command_routes` in `kicad_interface.py`.)
 - **schemas/tool_schemas.py:** JSON Schema definitions for all tools
 - **resources/resource_definitions.py:** Resource handlers and URIs
 - **commands/:** Modular command implementations
@@ -1314,7 +1299,7 @@ npm run format
 
 See [STATUS_SUMMARY.md](docs/STATUS_SUMMARY.md) for the complete status matrix and [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
-**Working Features (151 tools):**
+**Working Features (167 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)

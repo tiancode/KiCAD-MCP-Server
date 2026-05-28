@@ -290,8 +290,8 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
       };
     }
 
-    // Get component list
-    const componentsResult = await callKicadScript("get_component_list", {});
+    // Get component list (limit:0 = uncapped; resources carry full data)
+    const componentsResult = await callKicadScript("get_component_list", { limit: 0 });
     if (!componentsResult.success) {
       logger.error(`Failed to retrieve component list: ${componentsResult.errorDetails}`);
       return {
@@ -308,8 +308,8 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
       };
     }
 
-    // Get nets list
-    const netsResult = await callKicadScript("get_nets_list", {});
+    // Get nets list (limit:0 = uncapped; resources carry full data)
+    const netsResult = await callKicadScript("get_nets_list", { limit: 0 });
     if (!netsResult.success) {
       logger.error(`Failed to retrieve nets list: ${netsResult.errorDetails}`);
       return {

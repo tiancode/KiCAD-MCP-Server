@@ -4,6 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { paginationParams } from "./pagination-params.js";
 
 export function registerRoutingTools(server: McpServer, callKicadScript: Function) {
   // Add net tool
@@ -20,7 +21,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -56,7 +57,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -99,7 +100,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -127,7 +128,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -142,6 +143,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       layer: z.string().describe("PCB layer"),
       net: z.string().describe("Net name"),
       clearance: z.number().optional().describe("Clearance in mm"),
+      minWidth: z.number().optional().describe("Minimum fill width in mm (default 0.2)"),
       outline: z
         .array(z.object({ x: z.number(), y: z.number() }))
         .optional()
@@ -161,7 +163,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -192,7 +194,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -217,6 +219,8 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Filter by bounding box region"),
       unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit for coordinates"),
+      includeVias: z.boolean().optional().describe("Also return vias (default false)"),
+      ...paginationParams,
     },
     async (args: any) => {
       const result = await callKicadScript("query_traces", args);
@@ -224,7 +228,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -258,7 +262,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -282,7 +286,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // ------------------------------------------------------
   server.tool(
     "add_gnd_stitching_vias",
-    "Drop GND stitching vias across the board with collision checking against every non-GND segment, via, and pad on every copper layer (PTH vias penetrate the full stackup, so missing any one layer is the classic silent-short failure mode). Three combinable strategies: `grid` (regular grid across the interior), `around_refs` (densify around named ICs), and `in_zones` (only place vias inside an actual GND copper zone). Supports `dryRun` to preview placements without writing.",
+    "Drop GND stitching vias with collision checking against every non-GND segment/via/pad on all copper layers (PTH vias span the full stackup). Three combinable strategies: grid (regular interior grid), around_refs (densify around named ICs), in_zones (only inside a GND copper zone). dryRun previews placements without writing.",
     {
       gndNet: z
         .string()
@@ -348,7 +352,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -365,6 +369,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Include statistics (track count, total length, etc.)"),
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for length measurements"),
+      ...paginationParams,
     },
     async (args: any) => {
       const result = await callKicadScript("get_nets_list", args);
@@ -372,7 +377,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -395,7 +400,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -419,7 +424,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -455,7 +460,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -465,7 +470,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Refill zones tool
   server.tool(
     "refill_zones",
-    "Refill all copper zones on the board.  Routed through the IPC fast-path when KiCad is running with the IPC API server enabled — reliable, returns the real pcbnew result.  When IPC isn't available the SWIG path is **refused by default** because pcbnew.ZONE_FILLER has a long history of segfaults and silently-wrong fills outside KiCad's own process.  Recommended fallback: let KiCad fill on open (press B) — zones are already defined on disk and gerber export only needs the fill at export time.  Pass force=true to opt into the SWIG subprocess-isolated fill anyway (headless flows that accept the risk); the response then carries a warnings entry pointing at the uncertainty.",
+    "Refill all copper zones. Uses the IPC fast-path when KiCad runs with the IPC API server. Without IPC the SWIG path is refused by default (pcbnew.ZONE_FILLER segfaults / mis-fills outside KiCad); instead let KiCad fill on open (press B) — zones are already on disk and gerber export only needs the fill at export time. Pass force=true to opt into the subprocess-isolated SWIG fill anyway (the response then carries a warning).",
     {
       force: z
         .boolean()
@@ -480,7 +485,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -522,7 +527,7 @@ Looks up pad positions, detects the net from the source pad, and inserts a via i
     async (args: any) => {
       const result = await callKicadScript("route_pad_to_pad", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -552,7 +557,7 @@ Looks up pad positions, detects the net from the source pad, and inserts a via i
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };

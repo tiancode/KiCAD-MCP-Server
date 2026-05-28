@@ -117,7 +117,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
     }) => {
       const result = await callKicadScript("create_footprint", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -153,7 +153,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
     }) => {
       const result = await callKicadScript("edit_footprint_pad", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -194,7 +194,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
     }) => {
       const result = await callKicadScript("register_footprint_library", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );
@@ -215,7 +215,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
     async (args: { searchPaths?: string[] }) => {
       const result = await callKicadScript("list_footprint_libraries", args);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result) }],
       };
     },
   );

@@ -19,7 +19,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
   // unrouted count to zero.
   server.tool(
     "autoroute",
-    "Run Freerouting autorouter on the current PCB. Exports to Specctra DSN, runs Freerouting CLI, and imports the routed SES result. Requires Java 11+ and freerouting.jar (see check_freerouting). Set `attempts` > 1 to run best-of-N: Freerouting is invoked multiple times with varied `--max-passes`, each result is scored by (nets_routed * 1000 + segments, +50000 bonus when every `targetNets` entry routed), and the winning SES is imported. Single-attempt behaviour is unchanged when `attempts` is omitted.",
+    "Run Freerouting autorouter on the current PCB: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES. Requires Java 11+ and freerouting.jar (see check_freerouting). attempts > 1 runs best-of-N (varied --max-passes, keeps the result that routes the most nets) and imports the winner; omit attempts for a single run.",
     {
       boardPath: z.string().optional().describe("Path to .kicad_pcb file (default: current board)"),
       freeroutingJar: z
@@ -59,7 +59,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -83,7 +83,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };
@@ -104,7 +104,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(result),
           },
         ],
       };

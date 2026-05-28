@@ -15,6 +15,7 @@ import sexpdata
 from commands.library_schematic import LibraryManager as SchematicLibraryManager
 from commands.schematic import SchematicManager
 from commands.wire_manager import WireManager
+from utils.pagination import paginate
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
@@ -106,7 +107,8 @@ def handle_list_schematic_texts(iface: "KiCADInterface", params: Dict[str, Any])
         if filter_text is not None:
             texts = [t for t in texts if filter_text.lower() in t["text"].lower()]
 
-        return {"success": True, "texts": texts, "count": len(texts)}
+        texts, page = paginate(texts, params)
+        return {"success": True, "texts": texts, **page}
 
     except Exception as e:
         logger.error(f"Error listing schematic texts: {e}")
@@ -331,7 +333,8 @@ def handle_list_schematic_labels(iface: "KiCADInterface", params: Dict[str, Any]
         if label_type is not None:
             labels = [lbl for lbl in labels if lbl["type"] == label_type]
 
-        return {"success": True, "labels": labels, "count": len(labels)}
+        labels, page = paginate(labels, params)
+        return {"success": True, "labels": labels, **page}
 
     except Exception as e:
         logger.error(f"Error listing schematic labels: {e}")
@@ -375,7 +378,8 @@ def handle_list_schematic_wires(iface: "KiCADInterface", params: Dict[str, Any])
                             }
                         )
 
-        return {"success": True, "wires": wires, "count": len(wires)}
+        wires, page = paginate(wires, params)
+        return {"success": True, "wires": wires, **page}
 
     except Exception as e:
         logger.error(f"Error listing schematic wires: {e}")
@@ -471,7 +475,8 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
                 }
             )
 
-        return {"success": True, "nets": nets, "count": len(nets)}
+        nets, page = paginate(nets, params)
+        return {"success": True, "nets": nets, **page}
 
     except Exception as e:
         logger.error(f"Error listing schematic nets: {e}")
@@ -509,7 +514,7 @@ def handle_list_schematic_components(
             # _base_coords AttributeError from MCP_FEEDBACK A3).  Fall back
             # to a sexpdata walk so the caller at least sees the
             # component list; pin enrichment is skipped on this path.
-            return _list_schematic_components_raw_fallback(sch_file, params.get("filter", {}))
+            return _list_schematic_components_raw_fallback(sch_file, params)
 
         # Optional filters
         filter_params = params.get("filter", {})
@@ -532,7 +537,7 @@ def handle_list_schematic_components(
                 schematic_path,
                 e,
             )
-            return _list_schematic_components_raw_fallback(sch_file, params.get("filter", {}))
+            return _list_schematic_components_raw_fallback(sch_file, params)
 
         for symbol in symbol_iter:
             try:
@@ -595,10 +600,11 @@ def handle_list_schematic_components(
                 logger.warning("Skipping unparseable symbol in %s: %s", schematic_path, e)
                 continue
 
+        components, page = paginate(components, params)
         result: Dict[str, Any] = {
             "success": True,
             "components": components,
-            "count": len(components),
+            **page,
         }
         if skip_failures:
             result["partial"] = True
@@ -619,14 +625,14 @@ def handle_list_schematic_components(
         try:
             return _list_schematic_components_raw_fallback(
                 Path(params["schematicPath"]),
-                params.get("filter") or {},
+                params,
             )
         except Exception:  # noqa: BLE001 — the raw parser failed too
             return {"success": False, "message": str(e)}
 
 
 def _list_schematic_components_raw_fallback(
-    sch_file: "Path", filter_params: Dict[str, Any]
+    sch_file: "Path", params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Degraded path used when kicad-skip can't load the schematic.
 
@@ -636,6 +642,8 @@ def _list_schematic_components_raw_fallback(
     degradation.
     """
     from commands.schematic_raw_parser import parse_components
+
+    filter_params = params.get("filter") or {}
 
     try:
         components = parse_components(str(sch_file))
@@ -653,10 +661,11 @@ def _list_schematic_components_raw_fallback(
     if ref_prefix_filter:
         components = [c for c in components if c.get("reference", "").startswith(ref_prefix_filter)]
 
+    components, page = paginate(components, params)
     return {
         "success": True,
         "components": components,
-        "count": len(components),
+        **page,
         "partial": True,
         "parser": "raw_fallback",
         "warning": (

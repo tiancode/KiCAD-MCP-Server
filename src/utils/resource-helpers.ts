@@ -15,7 +15,7 @@ export function createJsonResponse(data: any, uri?: string) {
       {
         uri: uri || "data:application/json",
         mimeType: "application/json",
-        text: JSON.stringify(data, null, 2),
+        text: JSON.stringify(data),
       },
     ],
   };

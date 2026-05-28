@@ -39,8 +39,6 @@ KiCAD-MCP-Server/
     config.ts                   # Config loader (LOG_LEVEL, optional --config file)
     logger.ts                   # Logging
     tools/                      # MCP tool registrations (one file per category)
-      registry.ts               # Direct vs. routed tool categorisation
-      router.ts                 # list_tool_categories / search_tools / execute_tool
       project.ts, board.ts, component.ts, routing.ts, design-rules.ts,
       export.ts, schematic.ts, library.ts, library-symbol.ts,
       footprint.ts, symbol-creator.ts, datasheet.ts, jlcpcb-api.ts,
@@ -75,11 +73,11 @@ KiCAD-MCP-Server/
                                 # dynamic_symbol_loader, freerouting, jlcpcb,
                                 # jlcsearch, datasheet_manager, …).  Most
                                 # handlers/<m>.py modules delegate to these.
-    kicad_api/                  # Backend abstraction
+    kicad_api/                  # IPC backend
       base.py                   # KiCADBackend + BoardAPI abstract bases
-      factory.py                # Auto-detection: IPC first, SWIG fallback
-      swig_backend.py           # pcbnew SWIG bindings (deprecated path)
       ipc_backend.py            # kipy IPC client (KiCAD 9.0+ / 10.0+)
+                                # (SWIG path is direct pcbnew via
+                                #  command_routes, not a backend object)
     schemas/tool_schemas.py     # JSON Schema definitions for every tool
     annotations/                # IPC-annotation loader for tool descriptions
     resources/                  # Resource read handlers
@@ -95,7 +93,6 @@ KiCAD-MCP-Server/
   scripts/
     swig_smoke_test.py          # End-to-end against real pcbnew
     download_jlcpcb.py          # JLCPCB parts DB downloader
-    test-router.js              # Router registry sanity test
     install-linux.sh, auto_refresh_kicad.sh, generate_tool_annotations.py
 
   docs/                         # Documentation
@@ -135,13 +132,12 @@ server.tool(
 );
 ```
 
-### Tool Router (`src/tools/router.ts` and `src/tools/registry.ts`)
+### Tool Registration
 
-The router pattern is primarily a discoverability layer:
-
-- `registry.ts` defines tool categories and tags each tool as "direct" (always visible) or "routed" (discoverable via the category browser).
-- `router.ts` provides 4 meta-tools: `list_tool_categories`, `get_category_tools`, `search_tools`, `execute_tool`.
-- **All tools — direct AND routed — are registered as MCP tools** and can be called by name. `execute_tool` is a thin passthrough that lets clients run any tool through a single entry point (useful when discovering tools dynamically). The "router" name is historical; today the registry mostly drives `list_tool_categories` output.
+Every tool is registered directly as an MCP tool — one registrar function per
+file in `src/tools/`, all wired up in `KiCADMcpServer.registerAll` (`server.ts`).
+Clients receive the full tool list and call tools by name; there is no
+router/registry indirection or `execute_tool` gateway.
 
 ### Python Subprocess Communication
 
@@ -199,23 +195,31 @@ parameter gives them access to shared state (`iface.board`,
 
 ### Backend System (`python/kicad_api/`)
 
-Two backends for interacting with KiCAD:
+Two ways of interacting with KiCAD:
 
-**SWIG Backend** (default):
+**SWIG path** (default):
 
-- Direct Python bindings to KiCAD's C++ API via SWIG
+- Direct Python bindings to KiCAD's C++ API via `pcbnew`
 - Operates on files -- loads .kicad_pcb, modifies in memory, saves back
 - Works without KiCAD running
 - Requires manual UI reload to see changes
+- Dispatched directly through `KiCADInterface.command_routes` →
+  `commands/*.py`; it is **not** wrapped in a backend object
 
-**IPC Backend** (experimental):
+**IPC Backend** (`ipc_backend.py`):
 
-- Communicates with running KiCAD via IPC API socket
+- Communicates with running KiCAD via IPC API socket (kipy)
 - Changes appear in the UI immediately
 - Requires KiCAD 9.0+ running with IPC enabled
-- Falls back to SWIG when unavailable
+- Falls back to the SWIG path when unavailable
 
-`factory.py` auto-detects which backend to use.
+Backend selection happens in `kicad_interface.py` at import time: it tries to
+attach the IPC backend first (honoring `KICAD_BACKEND`), otherwise commands run
+against `pcbnew` directly.
+
+Migrating PCB operations off SWIG onto IPC is an ongoing, incremental effort —
+see [SWIG_TO_IPC_MIGRATION.md](SWIG_TO_IPC_MIGRATION.md) for the playbook and
+the per-command recipe.
 
 ### Schematic System
 
@@ -250,20 +254,7 @@ server.tool(
 );
 ```
 
-### Step 2: Add to Registry (if routed)
-
-If the tool should be discoverable via the router (not always visible), add it to a category in `src/tools/registry.ts`:
-
-```typescript
-{
-  name: "category_name",
-  tools: ["existing_tool", "my_new_tool"]
-}
-```
-
-If the tool should always be visible, add it to `directToolNames` instead.
-
-### Step 3: Import in server.ts
+### Step 2: Import in server.ts
 
 Import and call the registration function in `src/server.ts`:
 
@@ -272,7 +263,7 @@ import { registerMyTools } from "./tools/my-tools.js";
 registerMyTools(server, callKicadScript);
 ```
 
-### Step 4: Implement the Python Handler
+### Step 3: Implement the Python Handler
 
 Pick the right handler module in `python/handlers/<module>.py` (or
 create a new one). Add a free function with the standard signature:
@@ -304,7 +295,7 @@ class KiCADInterface:
 `self._handle_my_new_tool` materialises via `__getattr__` — no
 trampoline method to write.
 
-### Step 5: Build and Test
+### Step 4: Build and Test
 
 ```bash
 npm run build          # Compile TypeScript
@@ -342,7 +333,6 @@ Key test files:
 ## Key Design Decisions
 
 - **TypeScript + Python split**: TypeScript handles MCP protocol (well-supported SDK), Python handles KiCAD (only available API)
-- **Router pattern**: Reduces AI context from ~80K tokens (151 tools) to manageable size
 - **Auto-save**: Every board-modifying SWIG operation auto-saves to prevent data loss
 - **Dynamic symbol loading**: Works around kicad-skip's inability to create symbols from scratch
 - **S-expression wire injection**: Works around kicad-skip's inability to create wires
@@ -354,10 +344,7 @@ Key test files:
 | File                                       | Purpose                             |
 | ------------------------------------------ | ----------------------------------- |
 | `src/server.ts`                            | MCP server, subprocess management   |
-| `src/tools/registry.ts`                    | Tool categories and organization    |
-| `src/tools/router.ts`                      | Router meta-tools                   |
 | `python/kicad_interface.py`                | Python entry point, command routing |
-| `python/kicad_api/factory.py`              | Backend selection                   |
 | `python/commands/dynamic_symbol_loader.py` | Symbol injection system             |
 | `python/commands/wire_manager.py`          | Wire creation engine                |
 | `python/commands/pin_locator.py`           | Pin position discovery              |

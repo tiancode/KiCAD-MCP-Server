@@ -205,8 +205,8 @@ export function registerProjectResources(
       };
     }
 
-    // Get component list
-    const componentsResult = await callKicadScript("get_component_list", {});
+    // Get component list (limit:0 = uncapped; resources carry full data)
+    const componentsResult = await callKicadScript("get_component_list", { limit: 0 });
     if (!componentsResult.success) {
       logger.error(`Failed to retrieve component list: ${componentsResult.errorDetails}`);
       return {

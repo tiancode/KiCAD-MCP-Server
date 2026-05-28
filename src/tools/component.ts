@@ -5,6 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { paginationParams } from "./pagination-params.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -415,13 +416,16 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .optional()
         .describe("Filter by bounding box region"),
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for coordinates (default: mm)"),
+      ...paginationParams,
     },
-    async ({ layer, boundingBox, unit }) => {
+    async ({ layer, boundingBox, unit, limit, offset }) => {
       logger.debug("Getting component list");
       const result = await callKicadScript("get_component_list", {
         layer,
         boundingBox,
         unit: unit || "mm",
+        limit,
+        offset,
       });
 
       return {
@@ -571,7 +575,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "check_courtyard_overlaps",
-    "Detect courtyard overlaps between footprints and (optionally) flag courtyards that extend past the board outline. Accepts a `positions` dict of hypothetical placements so an AI can validate a proposed move_component / place_component before committing it. Returns overlap pairs with intersection extents (mm) and per-component boundary violations.",
+    "Detect courtyard overlaps between footprints, and optionally flag courtyards past the board outline. Accepts a `positions` dict of hypothetical placements to validate a proposed move/place before committing. Returns overlap pairs with intersection extents (mm) and per-component boundary violations.",
     {
       positions: z
         .record(z.string(), z.array(z.number()).min(2).max(3))

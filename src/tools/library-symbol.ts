@@ -5,6 +5,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { paginationParams, truncationNote } from "./pagination-params.js";
 
 export function registerSymbolLibraryTools(server: McpServer, callKicadScript: Function) {
   // List available symbol libraries
@@ -141,8 +142,9 @@ Returns symbol references that can be used directly in schematics.`,
         .describe(
           "Optional: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path to resolve project-scope libraries.",
         ),
+      ...paginationParams,
     },
-    async (args: { library: string; projectPath?: string }) => {
+    async (args: { library: string; projectPath?: string; limit?: number; offset?: number }) => {
       const result = await callKicadScript("list_library_symbols", args);
       if (result.success && result.symbols) {
         const symbolList = result.symbols
@@ -157,7 +159,7 @@ Returns symbol references that can be used directly in schematics.`,
           content: [
             {
               type: "text",
-              text: `Library "${args.library}" contains ${result.count} symbols:\n${symbolList}`,
+              text: `Library "${args.library}" contains ${result.total ?? result.count} symbols:\n${symbolList}${truncationNote(result)}`,
             },
           ],
         };
@@ -176,7 +178,7 @@ Returns symbol references that can be used directly in schematics.`,
   // Get detailed information about a specific symbol
   server.tool(
     "get_symbol_info",
-    "Get detailed information about a specific symbol (global or project-scope when projectPath is supplied or a project has been opened).  The response includes the pin list in the symbol's local coordinate frame (.pins[] with number/name/x/y/angle/length/type), and the pin bounding box.  This lets a caller plan placement coordinates BEFORE running add_schematic_component, without the round-trip through get_schematic_pin_locations.",
+    "Get details for a specific symbol (global, or project-scope with projectPath / an open project). Returns the pin list in the symbol's local frame (.pins[] number/name/x/y/angle/length/type) and the pin bounding box — lets you plan placement coordinates before add_schematic_component without a round-trip through get_schematic_pin_locations.",
     {
       symbol: z
         .string()
@@ -297,7 +299,7 @@ Returns symbol references that can be used directly in schematics.`,
   // ``.kicad_sym`` on disk and rewrites the embedded copy.
   server.tool(
     "refresh_schematic_lib_symbols",
-    "Re-inject every embedded ``lib_symbols`` entry in a .kicad_sch from the current on-disk .kicad_sym library.  Silences kicad-cli ERC's ``lib_symbol_mismatch`` warnings caused by stale snapshots after a KiCad library upgrade or hand-edit.  Returns ``refreshed`` / ``unchanged`` / ``missing`` lists by ``Library:Name``.  Different from ``refresh_symbol_libraries``, which only rebuilds the MCP's library index — this one actually rewrites the schematic.",
+    "Re-inject every embedded lib_symbols entry in a .kicad_sch from the on-disk .kicad_sym. Silences kicad-cli ERC lib_symbol_mismatch warnings from stale snapshots after a library upgrade or hand-edit. Returns refreshed/unchanged/missing lists by Library:Name. Unlike refresh_symbol_libraries (which only rebuilds the MCP index), this rewrites the schematic.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file to refresh"),
     },

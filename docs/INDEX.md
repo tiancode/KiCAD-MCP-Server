@@ -2,7 +2,7 @@
 
 KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 
-**Version:** 2.2.3 (Unreleased: see CHANGELOG) | **Tools:** 151 | **Last Updated:** 2026-05-27
+**Version:** 2.2.3 (Unreleased: see CHANGELOG) | **Tools:** 167 | **Last Updated:** 2026-05-28
 
 ---
 
@@ -21,7 +21,6 @@ KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 
 | Document                                                                | Description                                                 |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Tool Inventory](TOOL_INVENTORY.md)                                     | Complete list of all 151 tools with access types            |
 | [Schematic Tools Reference](SCHEMATIC_TOOLS_REFERENCE.md)               | 27 schematic tools -- components, wiring, analysis, export  |
 | [Routing Tools Reference](ROUTING_TOOLS_REFERENCE.md)                   | 13 routing tools -- traces, vias, differential pairs, zones |
 | [Footprint and Symbol Creator Guide](FOOTPRINT_SYMBOL_CREATOR_GUIDE.md) | 8 tools for creating custom footprints and symbols          |
@@ -49,9 +48,6 @@ KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 | [Realtime Workflow](REALTIME_WORKFLOW.md)     | Working with IPC backend for live updates |
 | [Visual Feedback](VISUAL_FEEDBACK.md)         | UI visual feedback guide                  |
 | [UI Auto Launch](UI_AUTO_LAUNCH.md)           | Automatic KiCAD UI launch feature         |
-| [Router Guide](mcp-router-guide.md)           | Tool router pattern usage                 |
-| [Router Architecture](ROUTER_ARCHITECTURE.md) | Router pattern design                     |
-| [Router Quick Start](ROUTER_QUICK_START.md)   | Quick start for the router pattern        |
 
 ---
 
