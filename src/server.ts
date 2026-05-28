@@ -751,6 +751,40 @@ export class KiCADMcpServer {
   }
 
   /**
+   * Tear down a Python worker that is wedged on a timed-out command.
+   *
+   * SIGTERM first; if the process hasn't exited within a short grace window
+   * (a blocked pcbnew C call can ignore SIGTERM), escalate to SIGKILL. The
+   * process's 'exit' handler then nulls the reference and drains the queue, so
+   * the next callKicadScript respawns a clean worker. Without the SIGKILL
+   * escalation a truly hung process would never exit, ensurePythonProcess
+   * would keep returning the same dead worker, and the session would stay
+   * wedged.
+   */
+  private killPythonForTimeout(): void {
+    const proc = this.pythonProcess;
+    if (!proc) return;
+    logger.warn("Restarting the Python worker after a command timeout");
+    try {
+      proc.kill("SIGTERM");
+    } catch (e) {
+      logger.warn(`SIGTERM of timed-out worker failed: ${e}`);
+    }
+    setTimeout(() => {
+      // exit handler nulls this.pythonProcess; if it's still the same object,
+      // the process ignored SIGTERM and must be force-killed.
+      if (this.pythonProcess === proc) {
+        logger.warn("Worker ignored SIGTERM after timeout; sending SIGKILL");
+        try {
+          proc.kill("SIGKILL");
+        } catch (e) {
+          logger.warn(`SIGKILL of timed-out worker failed: ${e}`);
+        }
+      }
+    }, 2000);
+  }
+
+  /**
    * Stop the MCP server and clean up resources
    */
   async stop(): Promise<void> {
@@ -1098,10 +1132,23 @@ export class KiCADMcpServer {
         this.processingRequest = false;
 
         // Reject the promise
-        reject(new Error(`Command timeout after ${timeoutDuration / 1000}s: ${request.command}`));
+        reject(
+          new Error(
+            `Command timeout after ${timeoutDuration / 1000}s: ${request.command}. ` +
+              "The KiCAD worker was restarted; if you were mid-edit, reopen the " +
+              "project (open_project) before retrying.",
+          ),
+        );
 
-        // Process next request
-        setTimeout(() => this.processNextRequest(), 0);
+        // The Python worker has no cancellation and reads stdin serially, so
+        // it is still blocked on this command. Dispatching the next request
+        // into it would pile commands up behind a possibly-wedged one, and a
+        // truly hung command would dead-end the whole session. Tear the worker
+        // down instead: the 'exit' handler nulls the process and drains/rejects
+        // the queue, and the next callKicadScript respawns a clean process.
+        // (SWIG board state rebuilds from disk on the next open_project —
+        // auto-save persists every mutation; IPC keeps its board in KiCad.)
+        this.killPythonForTimeout();
       }, timeoutDuration);
 
       // Store the current request handler
