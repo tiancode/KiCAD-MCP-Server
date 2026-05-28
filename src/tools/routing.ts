@@ -143,6 +143,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       layer: z.string().describe("PCB layer"),
       net: z.string().describe("Net name"),
       clearance: z.number().optional().describe("Clearance in mm"),
+      minWidth: z.number().optional().describe("Minimum fill width in mm (default 0.2)"),
       outline: z
         .array(z.object({ x: z.number(), y: z.number() }))
         .optional()
@@ -218,6 +219,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Filter by bounding box region"),
       unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit for coordinates"),
+      includeVias: z.boolean().optional().describe("Also return vias (default false)"),
       ...paginationParams,
     },
     async (args: any) => {
