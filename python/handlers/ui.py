@@ -11,6 +11,7 @@ that stay on `KiCADInterface` (`_try_enable_ipc_backend`,
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
@@ -95,11 +96,7 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         # specific file, forward the file-open.  Skip when there's no
         # path (caller just wanted to bring KiCad up) or when launch()
         # itself spawned the process (it already had the path on argv).
-        if (
-            path_obj is not None
-            and result.get("alreadyRunning")
-            and not result.get("launched")
-        ):
+        if path_obj is not None and result.get("alreadyRunning") and not result.get("launched"):
             forwarded = _forward_file_open_to_running_kicad(iface, path_obj)
             result.update(forwarded)
 
@@ -119,8 +116,12 @@ def _path_already_open(iface: "KiCADInterface", target: Path) -> bool:
     kicad = getattr(ipc_backend, "_kicad", None)
     if kicad is None:
         return False
+    # kipy 10's get_open_documents(doc_type) requires the arg — query all
+    # known types via the compat helper instead of the broken no-arg call.
+    from kicad_api.ipc_backend import get_open_documents_compat
+
     try:
-        docs = kicad.get_open_documents() or ()
+        docs = get_open_documents_compat(kicad)
     except Exception:
         return False
     try:
@@ -134,15 +135,19 @@ def _path_already_open(iface: "KiCADInterface", target: Path) -> bool:
     sibling_pcb = target_resolved.with_suffix(".kicad_pcb")
     candidate_strs.add(str(sibling_pcb))
     for doc in docs:
-        path = getattr(doc, "path", None) or getattr(doc, "board_filename", None)
-        if path and any(str(path).endswith(c) for c in candidate_strs):
-            return True
+        # Docs carry board_filename (relative) + project.path (dir); also
+        # accept a bare ``path`` attr if a future kipy exposes one.
+        fname = getattr(doc, "board_filename", None) or getattr(doc, "path", None)
+        proj = getattr(doc, "project", None)
+        proj_dir = getattr(proj, "path", "") if proj is not None else ""
+        full = os.path.join(proj_dir, str(fname)) if (proj_dir and fname) else (fname or "")
+        for cand in (str(fname or ""), str(full)):
+            if cand and any(cand.endswith(c) for c in candidate_strs):
+                return True
     return False
 
 
-def _forward_file_open_to_running_kicad(
-    iface: "KiCADInterface", path: Path
-) -> Dict[str, Any]:
+def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> Dict[str, Any]:
     """Best-effort: ask the running KiCad to open ``path``.
 
     Tries IPC ``run_action`` first (action names are KiCad-internal and
@@ -328,9 +333,7 @@ def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
         return {"success": False, "action": action, "message": str(e)}
 
 
-def handle_reconcile_backends(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Flush pending changes between the SWIG and IPC backends, if possible.
 
     ``direction`` (required) is ``ipc_to_swig`` or ``swig_to_ipc``.
@@ -349,8 +352,7 @@ def handle_reconcile_backends(
         return {
             "success": False,
             "message": (
-                "reconcile_backends requires direction='ipc_to_swig' or "
-                "direction='swig_to_ipc'"
+                "reconcile_backends requires direction='ipc_to_swig' or " "direction='swig_to_ipc'"
             ),
         }
 
@@ -393,9 +395,7 @@ def handle_reconcile_backends(
             return {
                 "success": False,
                 "direction": "ipc_to_swig",
-                "message": (
-                    "Cannot flush IPC to disk: IPC isn't reachable. " + reason
-                ),
+                "message": ("Cannot flush IPC to disk: IPC isn't reachable. " + reason),
             }
         try:
             saved = iface.ipc_board_api.save()

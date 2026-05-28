@@ -29,6 +29,85 @@ MM_TO_NM = 1_000_000
 INCH_TO_NM = 25_400_000
 
 
+def get_open_documents_compat(kicad: Any, doc_type: Any = None) -> List[Any]:
+    """Call ``KiCad.get_open_documents`` across kipy 9 and 10.
+
+    kipy 10's signature is ``get_open_documents(doc_type)`` — the arg is
+    REQUIRED, so the older no-arg call raises ``TypeError`` and (when
+    swallowed) made every "is a board open?" check report False even with
+    the PCB editor open.  kipy 9 took no argument.
+
+    * ``doc_type`` given → query just that type (kipy 10), falling back to
+      the no-arg form on kipy 9.
+    * ``doc_type`` None → aggregate across PCB / schematic / project so
+      callers that want "any open document" still work.
+    """
+    DocumentType = _document_type_enum()
+
+    def _query(dt: Any) -> List[Any]:
+        try:
+            return list(kicad.get_open_documents(dt) or [])
+        except TypeError:
+            # kipy 9: no-arg signature.
+            try:
+                return list(kicad.get_open_documents() or [])
+            except Exception:
+                return []
+        except Exception as e:
+            logger.debug(f"get_open_documents({dt}) failed: {e}")
+            return []
+
+    if doc_type is not None:
+        return _query(doc_type)
+
+    if DocumentType is not None:
+        out: List[Any] = []
+        for dt in (
+            DocumentType.DOCTYPE_PCB,
+            DocumentType.DOCTYPE_SCHEMATIC,
+            DocumentType.DOCTYPE_PROJECT,
+        ):
+            out.extend(_query(dt))
+        return out
+
+    # No DocumentType enum importable — last resort: kipy 9 no-arg.
+    try:
+        return list(kicad.get_open_documents() or [])
+    except Exception:
+        return []
+
+
+def _document_type_enum() -> Any:
+    """Return kipy's ``DocumentType`` enum, or None if unavailable."""
+    try:
+        from kipy.proto.common.types import DocumentType
+
+        return DocumentType
+    except Exception:
+        return None
+
+
+def has_open_pcb_document(kicad: Any) -> bool:
+    """True iff KiCAD has at least one ``.kicad_pcb`` document open over IPC."""
+    DocumentType = _document_type_enum()
+    doc_type = DocumentType.DOCTYPE_PCB if DocumentType is not None else None
+    for doc in get_open_documents_compat(kicad, doc_type):
+        # Real kipy docs expose ``board_filename`` (+ ``project.path``); some
+        # call paths / older stubs expose a single ``path``.  Accept either.
+        for attr in ("board_filename", "path"):
+            value = getattr(doc, attr, "") or ""
+            if str(value).endswith(".kicad_pcb"):
+                return True
+        dtype = getattr(doc, "type", None)
+        # When we queried DOCTYPE_PCB explicitly, any returned doc is a PCB.
+        if doc_type is not None and dtype == doc_type:
+            return True
+        type_name = getattr(dtype, "name", "") if dtype is not None else ""
+        if type_name in {"DOCTYPE_PCB", "PCB"}:
+            return True
+    return False
+
+
 class IPCBackend(KiCADBackend):
     """
     KiCAD IPC API backend for real-time UI synchronization.
@@ -239,8 +318,8 @@ class IPCBackend(KiCADBackend):
             raise ConnectionError("Not connected to KiCAD")
 
         try:
-            # Check for open documents
-            documents = self._kicad.get_open_documents()
+            # Check for open documents (kipy 10 requires a doc_type arg).
+            documents = get_open_documents_compat(self._kicad)
 
             # Look for matching project
             path_str = str(path)
@@ -811,39 +890,25 @@ class IPCBoardAPI(BoardAPI):
         try:
             import pcbnew
 
-            # Parse library and footprint name
-            if ":" in footprint_path:
-                lib_name, fp_name = footprint_path.split(":", 1)
-            else:
-                # Try to find the footprint in all libraries
-                lib_name = None
-                fp_name = footprint_path
+            from commands.library import LibraryManager
 
-            # Get the footprint library table
-            fp_lib_table = pcbnew.GetGlobalFootprintLib()
+            # ``pcbnew.GetGlobalFootprintLib()`` does NOT exist in KiCad 9/10
+            # — the old code AttributeError'd here, so every IPC placement
+            # silently failed.  Resolve the nickname to its ``.pretty``
+            # directory via the library table (same path the working SWIG
+            # place_component uses) and load by path.
+            resolved = LibraryManager().find_footprint(footprint_path)
+            if not resolved:
+                logger.warning(f"Footprint '{footprint_path}' not found in any library")
+                return None
 
-            if lib_name:
-                # Load from specific library
-                try:
-                    loaded_fp = pcbnew.FootprintLoad(fp_lib_table, lib_name, fp_name)
-                    if loaded_fp:
-                        logger.info(f"Loaded footprint '{fp_name}' from library '{lib_name}'")
-                        return loaded_fp
-                except Exception as e:
-                    logger.warning(f"Could not load from {lib_name}: {e}")
-            else:
-                # Search all libraries for the footprint
-                lib_names = fp_lib_table.GetLogicalLibs()
-                for lib in lib_names:
-                    try:
-                        loaded_fp = pcbnew.FootprintLoad(fp_lib_table, lib, fp_name)
-                        if loaded_fp:
-                            logger.info(f"Found footprint '{fp_name}' in library '{lib}'")
-                            return loaded_fp
-                    except:
-                        continue
+            library_path, fp_name = resolved
+            loaded_fp = pcbnew.FootprintLoad(library_path, fp_name)
+            if loaded_fp:
+                logger.info(f"Loaded footprint '{fp_name}' from '{library_path}'")
+                return loaded_fp
 
-            logger.warning(f"Footprint '{footprint_path}' not found in any library")
+            logger.warning(f"FootprintLoad returned None for {library_path}/{fp_name}")
             return None
 
         except ImportError:
@@ -879,13 +944,21 @@ class IPCBoardAPI(BoardAPI):
             project = board.get_project()
             board_path = None
 
-            # Try to get the board path from kipy
+            # Try to get the board path from kipy.  Docs expose
+            # ``board_filename`` (relative) + ``project.path`` (dir), not a
+            # single ``path`` attribute; stitch them.
             try:
-                docs = self._kicad.get_open_documents()
-                for doc in docs:
-                    if hasattr(doc, "path") and str(doc.path).endswith(".kicad_pcb"):
-                        board_path = str(doc.path)
-                        break
+                DocumentType = _document_type_enum()
+                dt = DocumentType.DOCTYPE_PCB if DocumentType is not None else None
+                for doc in get_open_documents_compat(self._kicad, dt):
+                    fname = getattr(doc, "board_filename", "") or ""
+                    if not str(fname).endswith(".kicad_pcb"):
+                        continue
+                    proj = getattr(doc, "project", None)
+                    proj_dir = getattr(proj, "path", "") if proj is not None else ""
+                    candidate = os.path.join(proj_dir, fname) if proj_dir else fname
+                    board_path = candidate
+                    break
             except Exception as e:
                 logger.debug(f"Could not get board path from IPC: {e}")
 

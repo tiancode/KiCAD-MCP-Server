@@ -831,20 +831,16 @@ class KiCADInterface:
         kicad = getattr(ipc_backend, "_kicad", None)
         if kicad is None:
             return False
+        # kipy 10's get_open_documents(doc_type) REQUIRES the arg; the old
+        # no-arg call raised TypeError, was swallowed here, and the gate
+        # then claimed "no board open" even with the PCB editor open.
+        from kicad_api.ipc_backend import has_open_pcb_document
+
         try:
-            docs = kicad.get_open_documents()
+            return has_open_pcb_document(kicad)
         except Exception as e:
-            logger.debug(f"get_open_documents failed: {e}")
+            logger.debug(f"has_open_pcb_document failed: {e}")
             return False
-        for doc in docs or ():
-            path = getattr(doc, "path", None) or getattr(doc, "board_filename", None)
-            if path and str(path).endswith(".kicad_pcb"):
-                return True
-            doc_type = getattr(doc, "type", None)
-            type_name = getattr(doc_type, "name", "") if doc_type is not None else ""
-            if type_name in {"DOCTYPE_PCB", "PCB"}:
-                return True
-        return False
 
     def require_ipc_board_op(self, *, allow_launch: bool = True) -> Dict[str, Any]:
         """Gate for handler-level IPC board ops.

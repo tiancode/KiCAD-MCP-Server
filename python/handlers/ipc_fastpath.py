@@ -322,8 +322,7 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             return _to_mm.get(str(p.get("unit", top_unit)).lower(), 1.0)
 
         formatted_points = [
-            {"x": p.get("x", 0) * _pt_scale(p), "y": p.get("y", 0) * _pt_scale(p)}
-            for p in points
+            {"x": p.get("x", 0) * _pt_scale(p), "y": p.get("y", 0) * _pt_scale(p)} for p in points
         ]
 
         success = iface.ipc_board_api.add_zone(
@@ -473,7 +472,10 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         }
     try:
         reference = params.get("reference", params.get("componentId", ""))
-        footprint = params.get("footprint", "")
+        # The MCP schema's primary footprint-library field is `componentId`
+        # ("Lib:Footprint"); `footprint` is an optional override.  Without
+        # this fallback the footprint arrived empty and placement failed.
+        footprint = params.get("footprint") or params.get("componentId", "")
         # ipc_backend expects mm — normalise whatever the caller sent.
         x, y, unit = extract_xy(params)
         x, y = to_mm(x, unit), to_mm(y, unit)
@@ -701,10 +703,31 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
     ``PCB_SHAPE`` arcs for rounded corners.
     """
     shape = params.get("shape", "rectangle")
-    if shape in ("rounded_rectangle", "rectangle"):
-        # IPC path only supports straight segments from a points list,
-        # but Claude sends rectangle/rounded_rectangle as shape+width+height.
-        # Fall back to the SWIG path which correctly handles both shapes.
+    # Unwrap nested params (Claude sends {"shape":..., "params":{...}})
+    inner = params.get("params", params)
+
+    # Assemble the outline as a closed list of corner points.  A rectangle
+    # is four corners derived from width/height/x/y — drawable as straight
+    # Edge.Cuts segments over IPC.  (The old code delegated rectangles to
+    # the SWIG path, which has no board loaded in IPC mode and failed with
+    # "No board is loaded".)
+    points = list(inner.get("points", params.get("points", [])) or [])
+    if shape == "rectangle" and not points:
+        x0 = inner.get("x", params.get("x", 0))
+        y0 = inner.get("y", params.get("y", 0))
+        w = inner.get("width", params.get("width"))
+        h = inner.get("height", params.get("height"))
+        if w is not None and h is not None:
+            points = [
+                {"x": x0, "y": y0},
+                {"x": x0 + w, "y": y0},
+                {"x": x0 + w, "y": y0 + h},
+                {"x": x0, "y": y0 + h},
+            ]
+
+    if not points:
+        # rounded_rectangle / circle need arcs the IPC BoardSegment type
+        # can't express — delegate to the SWIG path (needs a SWIG board).
         logger.info(f"handle_add_board_outline (IPC): delegating {shape} to SWIG path")
         return iface.board_commands.add_board_outline(params)
 
@@ -716,10 +739,8 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
 
         board = iface.ipc_board_api._get_board()
 
-        # Unwrap nested params (Claude sends {"shape":..., "params":{...}})
-        inner = params.get("params", params)
-        points = inner.get("points", params.get("points", []))
-        width = inner.get("width", params.get("width", 0.1))
+        # Edge.Cuts stroke width (mm) — NOT the rectangle's width dimension.
+        stroke_width = inner.get("lineWidth", params.get("lineWidth", 0.1))
 
         if len(points) < 2:
             return {
@@ -739,7 +760,7 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
             segment.start = Vector2.from_xy(from_mm(start.get("x", 0)), from_mm(start.get("y", 0)))
             segment.end = Vector2.from_xy(from_mm(end.get("x", 0)), from_mm(end.get("y", 0)))
             segment.layer = BoardLayer.BL_Edge_Cuts
-            segment.attributes.stroke.width = from_mm(width)
+            segment.attributes.stroke.width = from_mm(stroke_width)
 
             board.create_items(segment)
             lines_created += 1
