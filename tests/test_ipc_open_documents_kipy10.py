@@ -65,13 +65,13 @@ def test_compat_falls_back_to_kipy9_no_arg():
     assert docs == [doc]
 
 
-def test_has_open_pcb_document_true_for_open_board():
+def test_has_open_pcb_document_true_for_open_board(real_kipy):
     from kicad_api.ipc_backend import has_open_pcb_document
 
     assert has_open_pcb_document(_Kipy10([_PcbDoc("example.kicad_pcb")])) is True
 
 
-def test_has_open_pcb_document_false_when_no_pcb():
+def test_has_open_pcb_document_false_when_no_pcb(real_kipy):
     from kicad_api.ipc_backend import has_open_pcb_document
 
     # A schematic-only doc must not satisfy a PCB-editor gate.
@@ -81,7 +81,7 @@ def test_has_open_pcb_document_false_when_no_pcb():
     assert has_open_pcb_document(_Kipy10([sch])) is False
 
 
-def test_has_open_pcb_document_false_on_empty():
+def test_has_open_pcb_document_false_on_empty(real_kipy):
     from kicad_api.ipc_backend import has_open_pcb_document
 
     assert has_open_pcb_document(_Kipy10([])) is False

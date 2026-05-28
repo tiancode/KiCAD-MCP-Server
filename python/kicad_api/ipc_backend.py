@@ -1503,9 +1503,9 @@ class IPCBoardAPI(BoardAPI):
             name: Optional zone name
         """
         try:
-            from kipy.board_types import Zone, ZoneFillMode, ZoneType
+            from kipy.board_types import Zone, ZoneType
             from kipy.geometry import PolyLine, PolyLineNode, Vector2
-            from kipy.proto.board.board_types_pb2 import BoardLayer
+            from kipy.proto.board.board_types_pb2 import BoardLayer, ZoneFillMode
             from kipy.util.units import from_mm
 
             board = self._get_board()
@@ -1545,11 +1545,13 @@ class IPCBoardAPI(BoardAPI):
             if name:
                 zone.name = name
 
-            # Set fill mode
-            if fill_mode == "hatched":
-                zone.fill_mode = ZoneFillMode.ZFM_HATCHED
-            else:
-                zone.fill_mode = ZoneFillMode.ZFM_SOLID
+            # Set fill mode.  kipy 10 made Zone.fill_mode getter-only, so
+            # assign the underlying proto enum directly (the old
+            # `zone.fill_mode = ...` raised "property has no setter" and
+            # every copper pour silently failed).
+            zone._proto.copper_settings.fill_mode = (
+                ZoneFillMode.ZFM_HATCHED if fill_mode == "hatched" else ZoneFillMode.ZFM_SOLID
+            )
 
             # Create outline polyline
             outline = PolyLine()
