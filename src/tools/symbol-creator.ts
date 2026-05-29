@@ -162,7 +162,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
   // ── list_symbols_in_library ──────────────────────────────────────────── //
   server.tool(
     "list_symbols_in_library",
-    "List all symbol names in a .kicad_sym library file.",
+    "List the SYMBOL names in a single .kicad_sym library FILE given its path (libraryPath). Use for an unregistered/standalone file (e.g. right after create_symbol); if the library is registered and you only have its nickname, use list_library_symbols instead.",
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file"),
     },

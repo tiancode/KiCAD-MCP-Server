@@ -197,8 +197,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
   // ── list_footprint_libraries ─────────────────────────────────────────── //
   server.tool(
     "list_footprint_libraries",
-    "List available .pretty footprint libraries and their contents (first 20 footprints per library). " +
-      "Searches KiCAD standard install paths by default.",
+    "Discover FOOTPRINT libraries by SCANNING THE FILESYSTEM for .pretty directories, with a preview of the first 20 footprints in each. Use when libraries may not be registered in the fp-lib-table; for registered library names only use list_libraries, and for the full contents of ONE library use list_library_footprints.",
     {
       searchPaths: z
         .array(z.string())

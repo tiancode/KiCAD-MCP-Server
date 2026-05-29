@@ -11,7 +11,7 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Functio
   // List available footprint libraries
   server.tool(
     "list_libraries",
-    "List all available KiCAD footprint libraries",
+    "List the NAMES of all installed FOOTPRINT libraries (nicknames from the fp-lib-table). Names only — to see the footprints INSIDE one library use list_library_footprints; for the SYMBOL-library equivalent use list_symbol_libraries.",
     {
       search_paths: z
         .array(z.string())
@@ -86,7 +86,7 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Functio
   // List footprints in a specific library
   server.tool(
     "list_library_footprints",
-    "List all footprints in a specific KiCAD library",
+    "List the FOOTPRINTS contained in ONE named footprint library (library_name required, e.g. 'Resistor_SMD'). To list the available libraries instead of their contents, use list_libraries.",
     {
       library_name: z.string().describe("Name of the library to list footprints from"),
       filter: z.string().optional().describe("Optional filter pattern for footprint names"),

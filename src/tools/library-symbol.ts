@@ -11,7 +11,7 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: F
   // List available symbol libraries
   server.tool(
     "list_symbol_libraries",
-    "List all available KiCAD symbol libraries from global sym-lib-table, plus the project's sym-lib-table when projectPath (or any related file) is supplied or a project has been opened.",
+    "List the NAMES of all available SYMBOL libraries (nicknames from the global sym-lib-table, plus the project's when projectPath is supplied or a project is open). Names only — to see the symbols INSIDE one library use list_library_symbols; for the FOOTPRINT-library equivalent use list_libraries.",
     {
       projectPath: z
         .string()
@@ -133,7 +133,7 @@ Returns symbol references that can be used directly in schematics.`,
   // List symbols in a specific library
   server.tool(
     "list_library_symbols",
-    "List all symbols in a specific KiCAD symbol library (global or project-scope when projectPath is supplied or a project has been opened).",
+    "List the SYMBOLS contained in ONE symbol library identified by its NICKNAME (e.g. 'Device'), resolved via the global/project sym-lib-table. To list the symbol libraries themselves use list_symbol_libraries; if you have a .kicad_sym FILE PATH rather than a nickname, use list_symbols_in_library.",
     {
       library: z.string().describe("Library name (e.g., 'Device', 'PCM_JLCPCB-MCUs')"),
       projectPath: z
@@ -265,9 +265,7 @@ Returns symbol references that can be used directly in schematics.`,
     async (args: { projectPath?: string }) => {
       const result = await callKicadScript("refresh_symbol_libraries", args);
       if (result.success) {
-        const lines = [
-          `Rebuilt symbol library index: ${result.count} libraries`,
-        ];
+        const lines = [`Rebuilt symbol library index: ${result.count} libraries`];
         if (result.source === "directory_scan_fallback") {
           lines.push(
             `Note: sym-lib-table yielded 0 usable libraries; ${
@@ -306,9 +304,7 @@ Returns symbol references that can be used directly in schematics.`,
     async (args: { schematicPath: string }) => {
       const result = await callKicadScript("refresh_schematic_lib_symbols", args);
       if (result.success) {
-        const lines = [
-          result.message ?? "refresh_schematic_lib_symbols completed.",
-        ];
+        const lines = [result.message ?? "refresh_schematic_lib_symbols completed."];
         if ((result.refreshed ?? []).length > 0) {
           lines.push(`Refreshed: ${result.refreshed.join(", ")}`);
         }
