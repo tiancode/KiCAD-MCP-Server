@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { formatKicadResult } from "./tool-response.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -58,14 +59,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         useAuxOrigin,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -98,14 +92,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         pageSize,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -133,14 +120,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         includeComponents,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -176,14 +156,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         includeSilkscreen,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -211,14 +184,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         includeAttributes,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -244,14 +210,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         format,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -279,14 +238,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         side,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -312,14 +264,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         useRelativePaths,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 

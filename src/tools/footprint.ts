@@ -8,6 +8,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { formatKicadResult } from "./tool-response.js";
 
 // ---- shared sub-schemas ------------------------------------------------- //
 
@@ -116,9 +117,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
       overwrite?: boolean;
     }) => {
       const result = await callKicadScript("create_footprint", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -152,9 +151,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
       shape?: string;
     }) => {
       const result = await callKicadScript("edit_footprint_pad", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -193,9 +190,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
       projectPath?: string;
     }) => {
       const result = await callKicadScript("register_footprint_library", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -214,9 +209,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
     },
     async (args: { searchPaths?: string[] }) => {
       const result = await callKicadScript("list_footprint_libraries", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 }

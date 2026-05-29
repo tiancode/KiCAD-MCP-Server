@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { paginationParams } from "./pagination-params.js";
+import { formatKicadResult } from "./tool-response.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -64,14 +65,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
       `Placing component: ${args.componentId} at ${args.position.x},${args.position.y} ${args.position.unit}`,
     );
     const result = await callKicadScript("place_component", args);
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return formatKicadResult(result);
   };
 
   server.tool(
@@ -123,14 +117,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         layer,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -151,14 +138,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         angle,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -177,14 +157,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
       logger.debug(`Deleting component: ${reference}`);
       const result = await callKicadScript("delete_component", { reference });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -209,14 +182,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         footprint,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -239,14 +205,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         value,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -265,14 +224,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         reference,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -298,14 +250,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         visible,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -326,14 +271,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         groupName,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -358,14 +296,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         newValue,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -386,14 +317,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         unit: unit || "mm",
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -428,14 +352,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         offset,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -458,14 +375,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         unit: unit || "mm",
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -519,14 +429,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         rotation,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -551,14 +454,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         referenceComponent,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -615,14 +511,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         })`,
       );
       const result = await callKicadScript("check_courtyard_overlaps", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -653,14 +542,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         count,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 

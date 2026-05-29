@@ -5,6 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams } from "./pagination-params.js";
+import { formatKicadResult } from "./tool-response.js";
 
 export function registerRoutingTools(server: McpServer, callKicadScript: Function) {
   // Add net tool
@@ -17,14 +18,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: { name: string; netClass?: string }) => {
       const result = await callKicadScript("add_net", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -53,14 +47,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("route_trace", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -96,14 +83,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("route_arc_trace", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -124,14 +104,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("add_via", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -159,14 +132,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("add_copper_pour", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -190,14 +156,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("delete_trace", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -224,14 +183,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("query_traces", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -258,14 +210,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("query_zones", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -291,9 +236,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       gndNet: z
         .string()
         .optional()
-        .describe(
-          "Name of the ground net (default: auto-detect GND / GROUND / VSS / /GND).",
-        ),
+        .describe("Name of the ground net (default: auto-detect GND / GROUND / VSS / /GND)."),
       strategies: z
         .array(z.enum(["grid", "around_refs", "in_zones"]))
         .optional()
@@ -314,9 +257,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       spacing: z
         .number()
         .optional()
-        .describe(
-          "Grid spacing in mm for `grid` and `around_refs` strategies (default 5.0).",
-        ),
+        .describe("Grid spacing in mm for `grid` and `around_refs` strategies (default 5.0)."),
       densifyRefs: z
         .array(z.string())
         .optional()
@@ -348,14 +289,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("add_gnd_stitching_vias", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -373,14 +307,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("get_nets_list", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -396,14 +323,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("modify_trace", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -420,14 +340,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("create_netclass", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -456,14 +369,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("route_differential_pair", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -481,14 +387,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
     async (args: any) => {
       const result = await callKicadScript("refill_zones", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -526,9 +425,7 @@ Looks up pad positions, detects the net from the source pad, and inserts a via i
     },
     async (args: any) => {
       const result = await callKicadScript("route_pad_to_pad", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -553,14 +450,7 @@ Looks up pad positions, detects the net from the source pad, and inserts a via i
     },
     async (args: any) => {
       const result = await callKicadScript("copy_routing_pattern", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 }

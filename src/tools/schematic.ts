@@ -5,6 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams, truncationNote } from "./pagination-params.js";
+import { formatKicadResult } from "./tool-response.js";
 
 export function registerSchematicTools(server: McpServer, callKicadScript: Function) {
   // Create schematic tool
@@ -17,14 +18,7 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
     },
     async (args: { name: string; path?: string }) => {
       const result = await callKicadScript("create_schematic", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -130,6 +124,7 @@ useful when reproducing an existing sub-grid placement).`,
               text: `Failed to add component: ${result.message || JSON.stringify(result)}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -170,6 +165,7 @@ To remove a footprint from a PCB, use delete_component instead.`,
             text: `Failed to remove component: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -488,6 +484,7 @@ edit_schematic_component and set its value to an empty string.`,
             text: `Failed to get component: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -591,14 +588,7 @@ edit_schematic_component and set its value to an empty string.`,
     }) => {
       const result = await callKicadScript("add_schematic_net_label", args);
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result),
-            },
-          ],
-        };
+        return formatKicadResult(result);
       } else {
         return {
           content: [
@@ -607,6 +597,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to add net label: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -643,9 +634,7 @@ edit_schematic_component and set its value to an empty string.`,
     }) => {
       const result = await callKicadScript("add_no_connect", args);
       if (result.success) {
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-        };
+        return formatKicadResult(result);
       } else {
         return {
           content: [
@@ -654,6 +643,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to add no-connect: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -679,14 +669,7 @@ edit_schematic_component and set its value to an empty string.`,
     }) => {
       const result = await callKicadScript("connect_to_net", args);
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result),
-            },
-          ],
-        };
+        return formatKicadResult(result);
       } else {
         return {
           content: [
@@ -695,6 +678,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to connect to net: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -730,6 +714,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to get net connections: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -793,6 +778,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to get wire connections: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -829,6 +815,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to get pin locations: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -878,6 +865,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Passthrough failed: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -893,9 +881,7 @@ edit_schematic_component and set its value to an empty string.`,
     },
     async (args: { schematicPath: string }) => {
       const result = await callKicadScript("get_schematic_overview", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -1555,6 +1541,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `ERC failed: ${result.message || "Unknown error"}${result.errorDetails ? "\n" + result.errorDetails : ""}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -1603,6 +1590,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to generate netlist: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -1618,9 +1606,7 @@ edit_schematic_component and set its value to an empty string.`,
     },
     async (args: { schematicPath: string; boardPath: string }) => {
       const result = await callKicadScript("sync_schematic_to_board", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -1669,6 +1655,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1719,6 +1706,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1770,6 +1758,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1796,6 +1785,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1828,6 +1818,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1860,6 +1851,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1892,6 +1884,7 @@ edit_schematic_component and set its value to an empty string.`,
       }
       return {
         content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
+        isError: true,
       };
     },
   );
@@ -1931,6 +1924,7 @@ edit_schematic_component and set its value to an empty string.`,
               text: `Failed to get net at point: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },

@@ -4,6 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { formatKicadResult } from "./tool-response.js";
 
 export function registerProjectTools(server: McpServer, callKicadScript: Function) {
   // Create project tool
@@ -22,14 +23,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
     },
     async (args: { path: string; name: string; autoLaunch?: boolean }) => {
       const result = await callKicadScript("create_project", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -48,14 +42,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
     },
     async (args: { filename: string; autoLaunch?: boolean }) => {
       const result = await callKicadScript("open_project", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -68,14 +55,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
     },
     async (args: { path?: string }) => {
       const result = await callKicadScript("save_project", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -86,14 +66,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
     {},
     async () => {
       const result = await callKicadScript("get_project_info", {});
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -115,14 +88,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
     },
     async (args: { step: string; label: string; prompt?: string }) => {
       const result = await callKicadScript("snapshot_project", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 }

@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { passthroughCall } from "./tool-response.js";
+import { formatKicadResult, passthroughCall } from "./tool-response.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -47,14 +47,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         clearExisting,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -79,14 +72,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         number,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -103,14 +89,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       logger.debug(`Setting active layer to: ${layer}`);
       const result = await callKicadScript("set_active_layer", { layer });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -125,14 +104,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       logger.debug("Getting board information");
       const result = await callKicadScript("get_board_info", {});
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -147,14 +119,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       logger.debug("Getting layer list");
       const result = await callKicadScript("get_layer_list", {});
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -202,14 +167,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         ...params,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -238,14 +196,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         padDiameter,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -282,14 +233,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         style,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -306,14 +250,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       logger.debug("Getting board extents");
       const result = await callKicadScript("get_board_extents", { unit });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -363,14 +300,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         cropMarginPx,
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -507,10 +437,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       revision: z.string().optional().describe("Revision (e.g. 'A', 'v1.2')."),
       company: z.string().optional().describe("Company / author name."),
       comments: z
-        .union([
-          z.record(z.string(), z.string()),
-          z.array(z.string()).max(9),
-        ])
+        .union([z.record(z.string(), z.string()), z.array(z.string()).max(9)])
         .optional()
         .describe("Comments. Dict keyed '1'..'9' or positional list (max 9)."),
     },

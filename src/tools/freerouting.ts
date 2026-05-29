@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { formatKicadResult } from "./tool-response.js";
 
 export function registerFreeroutingTools(server: McpServer, callKicadScript: Function) {
   // Full autoroute: export DSN -> run Freerouting -> import SES
@@ -28,9 +29,12 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
         .describe(
           "Path to freerouting.jar (default: ~/.kicad-mcp/freerouting.jar or FREEROUTING_JAR env)",
         ),
-      maxPasses: z.number().optional().describe(
-        "Maximum routing passes for single-attempt mode (default: 20). Ignored when `attempts` > 1; use `passSchedule` instead.",
-      ),
+      maxPasses: z
+        .number()
+        .optional()
+        .describe(
+          "Maximum routing passes for single-attempt mode (default: 20). Ignored when `attempts` > 1; use `passSchedule` instead.",
+        ),
       timeout: z.number().optional().describe("Per-attempt timeout in seconds (default: 300)"),
       attempts: z
         .number()
@@ -55,14 +59,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
     },
     async (args: any) => {
       const result = await callKicadScript("autoroute", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -79,14 +76,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
     },
     async (args: any) => {
       const result = await callKicadScript("export_dsn", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -100,14 +90,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
     },
     async (args: any) => {
       const result = await callKicadScript("import_ses", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -126,7 +109,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
       lines.push(`  Execution mode: ${result.execution_mode}`);
       if (result.java) {
         lines.push(
-          `  Java: ${result.java.found ? result.java.version ?? "found" : "not found"}` +
+          `  Java: ${result.java.found ? (result.java.version ?? "found") : "not found"}` +
             (result.java.java_21_ok ? "  (≥21 ✓)" : "  (<21 ✗)"),
         );
       }
@@ -158,15 +141,11 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
           if (step.download_page) lines.push(`     download: ${step.download_page}`);
           if (step.shell_unix && Array.isArray(step.shell_unix)) {
             lines.push("     shell (Linux/macOS):");
-            step.shell_unix.forEach((cmd: string) =>
-              lines.push(`       ${cmd}`),
-            );
+            step.shell_unix.forEach((cmd: string) => lines.push(`       ${cmd}`));
           }
           if (step.shell_windows && Array.isArray(step.shell_windows)) {
             lines.push("     shell (Windows):");
-            step.shell_windows.forEach((cmd: string) =>
-              lines.push(`       ${cmd}`),
-            );
+            step.shell_windows.forEach((cmd: string) => lines.push(`       ${cmd}`));
           }
           if (step.override_with_env) {
             lines.push(`     override path via env: ${step.override_with_env}`);

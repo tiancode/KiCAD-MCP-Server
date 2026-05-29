@@ -42,8 +42,6 @@ export function passthroughCall(
 ) {
   return async (args: Record<string, unknown> = {}) => {
     const result = await callKicadScript(command, args);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+    return formatKicadResult(result);
   };
 }

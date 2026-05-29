@@ -5,7 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { passthroughCall } from "./tool-response.js";
+import { formatKicadResult, passthroughCall } from "./tool-response.js";
 
 export function registerUITools(server: McpServer, callKicadScript: Function) {
   const passthrough = (command: string) =>
@@ -53,14 +53,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
         `Launching KiCAD UI${args.projectPath ? " with project: " + args.projectPath : ""}`,
       );
       const result = await callKicadScript("launch_kicad_ui", args);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result),
-          },
-        ],
-      };
+      return formatKicadResult(result);
     },
   );
 

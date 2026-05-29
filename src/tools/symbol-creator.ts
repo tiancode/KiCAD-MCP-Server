@@ -9,6 +9,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { formatKicadResult } from "./tool-response.js";
 
 const PinSchema = z.object({
   name: z.string().describe("Pin name, e.g. 'VCC', 'GND', 'IN+', '~' for unnamed"),
@@ -140,9 +141,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
       overwrite?: boolean;
     }) => {
       const result = await callKicadScript("create_symbol", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -156,9 +155,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     },
     async (args: { libraryPath: string; name: string }) => {
       const result = await callKicadScript("delete_symbol", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -171,9 +168,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     },
     async (args: { libraryPath: string }) => {
       const result = await callKicadScript("list_symbols_in_library", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 
@@ -206,9 +201,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
       projectPath?: string;
     }) => {
       const result = await callKicadScript("register_symbol_library", args);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+      return formatKicadResult(result);
     },
   );
 }
