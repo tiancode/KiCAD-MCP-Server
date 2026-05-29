@@ -25,6 +25,12 @@ logger = logging.getLogger("kicad_interface")
 class BoardPersistenceMixin:
     """SWIG-path board auto-save + on-disk content-signature tracking."""
 
+    # Provided by the host ``KiCADInterface`` (assigned in its ``__init__``).
+    # Declared here so mypy can type ``self.board`` inside the mixin instead of
+    # failing with has-type "Cannot determine type of board" — the attribute is
+    # only ever read here, never owned by the mixin.
+    board: Any
+
     @staticmethod
     def _disk_signature(path: str) -> Optional[Tuple[int, str]]:
         """Return (mtime_ns, sha256_hex) for the file, or None if missing/unreadable.

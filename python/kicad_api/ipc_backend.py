@@ -120,7 +120,7 @@ class IPCBackend(KiCADBackend):
     """
 
     def __init__(self) -> None:
-        self._kicad = None
+        self._kicad: Any = None  # kipy.KiCad once connected (kipy is imported lazily)
         self._connected = False
         self._version: Optional[str] = None
         self._on_change_callbacks: List[Callable] = []
@@ -889,7 +889,6 @@ class IPCBoardAPI(BoardAPI):
         """
         try:
             import pcbnew
-
             from commands.library import LibraryManager
 
             # ``pcbnew.GetGlobalFootprintLib()`` does NOT exist in KiCad 9/10

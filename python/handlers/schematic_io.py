@@ -13,7 +13,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pcbnew  # type: ignore[import-not-found]
 import sexpdata
@@ -511,9 +511,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 sch_path_obj = Path(schematic_path)
                 project_dir = sch_path_obj.parent
                 for ancestor in sch_path_obj.parents:
-                    if (ancestor / "sym-lib-table").exists() or list(
-                        ancestor.glob("*.kicad_pro")
-                    ):
+                    if (ancestor / "sym-lib-table").exists() or list(ancestor.glob("*.kicad_pro")):
                         project_dir = ancestor
                         break
                 lib_symbols_refresh = DynamicSymbolLoader(

@@ -240,18 +240,25 @@ class BoardAPI(ABC):
         """
         raise NotImplementedError()
 
-    # Transaction support for undo/redo
-    def begin_transaction(self, description: str = "MCP Operation") -> None:
+    # Transaction support for undo/redo.
+    # Optional per backend. The base implementations report "unsupported"
+    # rather than silently no-op'ing, and return the same dict shape the IPC
+    # backend produces so handlers consume one contract regardless of backend.
+    def begin_transaction(self, description: str = "MCP Operation") -> Dict[str, Any]:
         """Begin a transaction for grouping operations."""
-        pass  # Optional - not all backends support this
+        return {"success": False, "message": "Transactions not supported by this backend"}
 
-    def commit_transaction(self, description: str = "MCP Operation") -> None:
+    def commit_transaction(self, description: str = "MCP Operation") -> Dict[str, Any]:
         """Commit the current transaction."""
-        pass  # Optional
+        return {"success": False, "message": "Transactions not supported by this backend"}
 
-    def rollback_transaction(self) -> None:
+    def rollback_transaction(self) -> Dict[str, Any]:
         """Roll back the current transaction."""
-        pass  # Optional
+        return {"success": False, "message": "Transactions not supported by this backend"}
+
+    def get_transaction_status(self) -> Dict[str, Any]:
+        """Report whether a transaction is currently open."""
+        return {"success": False, "message": "Transactions not supported by this backend"}
 
     def save(self) -> bool:
         """Save the board."""

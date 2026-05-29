@@ -466,7 +466,10 @@ class KiCADInterface(BoardPersistenceMixin):
         self._ipc_change_callback_registered = False
         self.use_ipc = USE_IPC_BACKEND
         self.ipc_backend = ipc_backend
-        self.ipc_board_api = None
+        # Typed Any: a kipy-backed BoardAPI when IPC is live, else None. The
+        # backend is accessed dynamically across many handlers; Any keeps mypy
+        # from forcing Optional-narrowing at every call site.
+        self.ipc_board_api: Any = None
 
         if self.use_ipc:
             logger.info("Initializing with IPC backend (real-time UI sync enabled)")
