@@ -150,31 +150,29 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   };
 
   server.tool(
-    "get_selection",
-    "Return the items currently selected in the KiCAD board editor (IPC-only). Each item carries id, type, and optional reference/value/position/layer.",
-    {},
-    passthrough("get_selection"),
-  );
-
-  server.tool(
-    "clear_selection",
-    "Deselect everything in the KiCAD board editor (IPC-only).",
-    {},
-    passthrough("clear_selection"),
-  );
-
-  server.tool(
-    "add_to_selection",
-    "Add board items to the selection by KIID and/or footprint reference (IPC-only). Both forms can be mixed; the resolver de-duplicates.",
-    itemRefSchema,
-    passthrough("add_to_selection"),
-  );
-
-  server.tool(
-    "remove_from_selection",
-    "Remove board items from the selection by KIID and/or footprint reference (IPC-only).",
-    itemRefSchema,
-    passthrough("remove_from_selection"),
+    "manage_selection",
+    "Manage the KiCAD board editor selection (IPC-only). `action`: 'get' returns the currently selected items (each with id, type, and optional reference/value/position/layer); 'clear' deselects everything; 'add' selects items by ids and/or footprint references (forms can be mixed; the resolver de-duplicates); 'remove' deselects items by ids and/or references. `ids`/`references` are used only by 'add' and 'remove'.",
+    {
+      action: z
+        .enum(["get", "clear", "add", "remove"])
+        .describe("Selection operation: get | clear | add | remove."),
+      ...itemRefSchema,
+    },
+    async (args: {
+      action: "get" | "clear" | "add" | "remove";
+      ids?: string[];
+      references?: string[];
+    }) => {
+      const commandByAction = {
+        get: "get_selection",
+        clear: "clear_selection",
+        add: "add_to_selection",
+        remove: "remove_from_selection",
+      } as const;
+      const { action, ...rest } = args;
+      const result = await callKicadScript(commandByAction[action], rest);
+      return formatKicadResult(result);
+    },
   );
 
   server.tool(

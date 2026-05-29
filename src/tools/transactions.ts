@@ -7,12 +7,12 @@
  * not five.
  *
  * Workflow:
- *   1. begin_transaction({description: "Move power section"})
+ *   1. transaction({action: "begin", description: "Move power section"})
  *   2. move_component / route_trace / add_via / ...   (any number)
- *   3. commit_transaction() — atomic undo step lands
+ *   3. transaction({action: "commit"}) — atomic undo step lands
  *
- * If anything fails partway through, call rollback_transaction() to
- * discard everything since begin.
+ * If anything fails partway through, call transaction({action: "rollback"})
+ * to discard everything since begin.
  *
  * Caveat: only create / update / remove of board items participate.
  * set_origin and set_title_block_info are sent as direct kipy property
@@ -22,53 +22,35 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { passthroughCall } from "./tool-response.js";
+import { formatKicadResult } from "./tool-response.js";
 
 export function registerTransactionTools(server: McpServer, callKicadScript: Function) {
-  const passthrough = (command: string) =>
-    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
-
   server.tool(
-    "begin_transaction",
-    "Open a KiCad transaction (IPC-only). Mutating calls made after this collapse into a single Ctrl-Z undo step until you call commit_transaction. Refuses to nest — commit or rollback the existing transaction first.",
+    "transaction",
+    "Manage a KiCad transaction / undo group (IPC-only). `action`: 'begin' opens a transaction so subsequent mutating calls collapse into a single Ctrl-Z undo step (refuses to nest — commit or rollback the open one first); 'commit' lands it as one atomic undo step (fails if none open); 'rollback' discards every change since begin (fails if none open); 'status' reports whether one is open and its label. 'begin'/'commit' accept an optional `description` label.",
     {
+      action: z
+        .enum(["begin", "commit", "rollback", "status"])
+        .describe("Transaction operation: begin | commit | rollback | status."),
       description: z
         .string()
         .optional()
         .describe(
-          "Label shown in KiCad's undo history (default 'MCP Operation'). Use something the human will recognize.",
+          "Undo-history label. On 'begin' sets the label (default 'MCP Operation'); on 'commit' overrides the begin label. Ignored by 'rollback'/'status'.",
         ),
     },
-    passthrough("begin_transaction"),
-  );
-
-  server.tool(
-    "commit_transaction",
-    "Push the currently open transaction to KiCad as one atomic undo step (IPC-only). Fails if no transaction is open.",
-    {
-      description: z
-        .string()
-        .optional()
-        .describe(
-          "Override the label set at begin_transaction. Omit to keep the original label.",
-        ),
+    async (args: { action: "begin" | "commit" | "rollback" | "status"; description?: string }) => {
+      const commandByAction = {
+        begin: "begin_transaction",
+        commit: "commit_transaction",
+        rollback: "rollback_transaction",
+        status: "get_transaction_status",
+      } as const;
+      const { action, ...rest } = args;
+      const result = await callKicadScript(commandByAction[action], rest);
+      return formatKicadResult(result);
     },
-    passthrough("commit_transaction"),
   );
 
-  server.tool(
-    "rollback_transaction",
-    "Discard the currently open transaction — every change since begin_transaction is reverted (IPC-only). Fails if no transaction is open.",
-    {},
-    passthrough("rollback_transaction"),
-  );
-
-  server.tool(
-    "get_transaction_status",
-    "Report whether a transaction is currently open and its description label (IPC-only).",
-    {},
-    passthrough("get_transaction_status"),
-  );
-
-  logger.info("Transaction tools registered (4 tools)");
+  logger.info("Transaction tools registered (1 tool)");
 }

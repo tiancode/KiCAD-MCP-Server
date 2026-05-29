@@ -23,8 +23,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   // Place Component Tool
   // ------------------------------------------------------
-  // Shared schema/handler so place_component and the add_footprint alias
-  // both dispatch to the same Python command without duplicating fields.
   const placeComponentSchema = {
     componentId: z
       .string()
@@ -71,16 +69,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   server.tool(
     "place_component",
     "Add a NEW footprint instance to the PCB at the given position. Errors if the reference already exists — use move_component to relocate an existing part. Optionally set reference, value, footprint, rotation and layer.",
-    placeComponentSchema,
-    placeComponentHandler,
-  );
-
-  // Alias so the "add" intent is unambiguous; place_component is misleading
-  // because it sounds like "place this existing part somewhere" rather than
-  // "add a fresh instance from the library".
-  server.tool(
-    "add_footprint",
-    "Add a new footprint to the PCB by library ID (alias of place_component). Same schema; this name reflects what the operation actually does.",
     placeComponentSchema,
     placeComponentHandler,
   );
