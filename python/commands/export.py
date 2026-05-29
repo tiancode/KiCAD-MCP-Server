@@ -622,6 +622,127 @@ class ExportCommands:
                 "errorDetails": str(e),
             }
 
+    def export_position_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Export a component placement / pick-and-place file via kicad-cli.
+
+        Wraps ``kicad-cli pcb export pos``. Format CSV|ASCII, units mm/mil/inch,
+        side top/bottom/both.
+        """
+        import subprocess
+
+        try:
+            if not self.board:
+                return {
+                    "success": False,
+                    "message": "No board is loaded",
+                    "errorDetails": "Load or create a board first",
+                }
+
+            output_path = params.get("outputPath")
+            fmt = str(params.get("format", "CSV")).lower()
+            units = str(params.get("units", "mm")).lower()
+            side = str(params.get("side", "both")).lower()
+
+            if not output_path:
+                return {
+                    "success": False,
+                    "message": "Missing output path",
+                    "errorDetails": "outputPath parameter is required",
+                }
+
+            board_file = self.board.GetFileName()
+            if not board_file or not os.path.exists(board_file):
+                return {
+                    "success": False,
+                    "message": "Board file not found",
+                    "errorDetails": "Board must be saved before exporting a position file",
+                }
+
+            output_path = os.path.abspath(os.path.expanduser(output_path))
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            kicad_cli = self._find_kicad_cli()
+            if not kicad_cli:
+                return {
+                    "success": False,
+                    "message": "kicad-cli not found",
+                    "errorDetails": "KiCAD CLI tool not found. Install KiCAD 8.0+ or set PATH.",
+                }
+
+            # Map MCP enums onto kicad-cli's vocabulary. kicad-cli pos only
+            # speaks mm/in, front/back/both, csv/ascii/gerber.
+            cli_format = "ascii" if fmt == "ascii" else ("gerber" if fmt == "gerber" else "csv")
+            cli_units = "in" if units in ("in", "inch", "mil") else "mm"
+            cli_side = {"top": "front", "bottom": "back", "both": "both"}.get(side, "both")
+
+            cmd = [
+                kicad_cli,
+                "pcb",
+                "export",
+                "pos",
+                "--output",
+                output_path,
+                "--format",
+                cli_format,
+                "--units",
+                cli_units,
+                "--side",
+                cli_side,
+                board_file,
+            ]
+
+            logger.info(f"Running position-file export command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+            if result.returncode != 0:
+                logger.error(f"Position-file export failed: {result.stderr}")
+                return {
+                    "success": False,
+                    "message": "Position-file export command failed",
+                    "errorDetails": result.stderr.strip() or "kicad-cli returned non-zero",
+                }
+
+            if not os.path.exists(output_path):
+                return {
+                    "success": False,
+                    "message": "Export reported success but no file on disk",
+                    "errorDetails": (
+                        f"kicad-cli exit 0 but {output_path} is missing. "
+                        f"stderr: {result.stderr.strip() or '(empty)'}"
+                    ),
+                }
+
+            try:
+                size_bytes = os.path.getsize(output_path)
+            except OSError:
+                size_bytes = 0
+
+            return {
+                "success": True,
+                "message": "Exported position file",
+                "file": {
+                    "path": output_path,
+                    "format": cli_format,
+                    "units": cli_units,
+                    "side": cli_side,
+                    "size_bytes": size_bytes,
+                },
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "message": "Position-file export timed out",
+                "errorDetails": "Export took longer than 2 minutes",
+            }
+        except Exception as e:
+            logger.error(f"Error exporting position file: {str(e)}")
+            return {
+                "success": False,
+                "message": "Failed to export position file",
+                "errorDetails": str(e),
+            }
+
     def export_bom(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export Bill of Materials"""
         try:

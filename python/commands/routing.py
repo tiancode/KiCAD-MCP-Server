@@ -767,7 +767,86 @@ class RoutingCommands:
                     "errorDetails": "One of traceUuid, position, or net must be provided",
                 }
 
-            # Delete by net name (bulk delete), use "*" to delete all tracks
+            # NOTE on Remove vs Delete: the KiCAD 10 SWIG bindings leak the
+            # detached C++ object on board.Remove() ("memory leak of type
+            # 'PCB_TRACK *', no destructor found") and the dangling wrapper can
+            # corrupt the SWIG object table, after which every later board call
+            # returns a raw SwigPyObject or segfaults. board.Delete() frees the
+            # object cleanly, so we Delete throughout this method.
+
+            # 1) Delete by UUID (most specific).
+            if trace_uuid:
+                track = None
+                for item in list(self.board.Tracks()):
+                    if item.m_Uuid.AsString() == trace_uuid:
+                        track = item
+                        break
+
+                if not track:
+                    return {
+                        "success": False,
+                        "message": "Track not found",
+                        "errorDetails": f"Could not find track with UUID: {trace_uuid}",
+                    }
+
+                self.board.Delete(track)
+                track = None
+                self.board.SetModified()
+                return {"success": True, "message": f"Deleted track: {trace_uuid}"}
+
+            # 2) Delete the SINGLE nearest item to a position.
+            #
+            # Position takes precedence over the bulk `net` delete below: passing
+            # position + net means "delete the nearest trace ON that net" (one
+            # item), NOT "bulk-delete the entire net". The old order treated any
+            # net argument as bulk and silently wiped a fully-routed net when a
+            # caller passed both — a data-loss footgun.
+            if position:
+                scale = (
+                    1000000
+                    if position.get("unit") == "mm"
+                    else (25400 if position.get("unit") == "mil" else 25400000)
+                )  # mm, mil, or inch to nm
+                x_nm = int(position["x"] * scale)
+                y_nm = int(position["y"] * scale)
+                point = pcbnew.VECTOR2I(x_nm, y_nm)
+
+                closest_track = None
+                min_distance = float("inf")
+                for track in list(self.board.Tracks()):
+                    is_via = track.Type() == pcbnew.PCB_VIA_T
+                    # Honour the same filters as the bulk path so callers can
+                    # target "the nearest VIN trace" or "the via here".
+                    if is_via and not include_vias:
+                        continue
+                    if net_name and net_name != "*" and track.GetNetname() != net_name:
+                        continue
+                    if layer and not is_via:
+                        if track.GetLayer() != self.board.GetLayerID(layer):
+                            continue
+                    dist = self._point_to_track_distance(point, track)
+                    if dist < min_distance:
+                        min_distance = dist
+                        closest_track = track
+
+                if closest_track is not None and min_distance < 1000000:  # within 1mm
+                    was_via = closest_track.Type() == pcbnew.PCB_VIA_T
+                    self.board.Delete(closest_track)
+                    closest_track = None
+                    self.board.SetModified()
+                    return {
+                        "success": True,
+                        "message": f"Deleted {'via' if was_via else 'track'} at specified position",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": "No track found",
+                        "errorDetails": "No track/via found near specified position matching the filters",
+                    }
+
+            # 3) Bulk delete by net name (only when neither uuid nor position
+            #    was given). Use "*" to delete every track.
             if net_name:
                 tracks_to_remove = []
                 for track in list(self.board.Tracks()):
@@ -789,7 +868,7 @@ class RoutingCommands:
 
                 deleted_count = len(tracks_to_remove)
                 for track in tracks_to_remove:
-                    self.board.Remove(track)
+                    self.board.Delete(track)
                 tracks_to_remove.clear()
                 self.board.SetModified()
 
@@ -799,68 +878,12 @@ class RoutingCommands:
                     "deletedCount": deleted_count,
                 }
 
-            # Find track by UUID
-            if trace_uuid:
-                track = None
-                for item in list(self.board.Tracks()):
-                    if item.m_Uuid.AsString() == trace_uuid:
-                        track = item
-                        break
-
-                if not track:
-                    return {
-                        "success": False,
-                        "message": "Track not found",
-                        "errorDetails": f"Could not find track with UUID: {trace_uuid}",
-                    }
-
-                self.board.Remove(track)
-                track = None
-                self.board.SetModified()
-                return {"success": True, "message": f"Deleted track: {trace_uuid}"}
-
             # No valid parameters provided
-            if not position:
-                return {
-                    "success": False,
-                    "message": "No valid search parameter provided",
-                    "errorDetails": "Provide traceUuid, position, or net parameter",
-                }
-
-            # Find track by position
-            if position:
-                scale = (
-                    1000000
-                    if position["unit"] == "mm"
-                    else (25400 if position["unit"] == "mil" else 25400000)
-                )  # mm, mil, or inch to nm
-                x_nm = int(position["x"] * scale)
-                y_nm = int(position["y"] * scale)
-                point = pcbnew.VECTOR2I(x_nm, y_nm)
-
-                # Find closest track
-                closest_track = None
-                min_distance = float("inf")
-                for track in list(self.board.Tracks()):
-                    dist = self._point_to_track_distance(point, track)
-                    if dist < min_distance:
-                        min_distance = dist
-                        closest_track = track
-
-                if closest_track and min_distance < 1000000:  # Within 1mm
-                    self.board.Remove(closest_track)
-                    closest_track = None
-                    self.board.SetModified()
-                    return {
-                        "success": True,
-                        "message": "Deleted track at specified position",
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "message": "No track found",
-                        "errorDetails": "No track found near specified position",
-                    }
+            return {
+                "success": False,
+                "message": "No valid search parameter provided",
+                "errorDetails": "Provide traceUuid, position, or net parameter",
+            }
 
         except Exception as e:
             logger.error(f"Error deleting trace: {str(e)}")

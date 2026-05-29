@@ -797,7 +797,10 @@ edit_schematic_component and set its value to an empty string.`,
       if (result.success && result.pins) {
         const lines = Object.entries(result.pins as Record<string, any>).map(
           ([pinNum, data]: [string, any]) =>
-            `  Pin ${pinNum} (${data.name || pinNum}): x=${data.x}, y=${data.y}, angle=${data.angle ?? 0}°`,
+            `  Pin ${pinNum} (${data.name || pinNum}): x=${data.x}, y=${data.y}, angle=${data.angle ?? 0}°` +
+            // Multi-unit parts place each unit separately — surface the unit so
+            // an agent labelling by pin number lands on the right channel.
+            (data.unit != null ? ` [unit ${data.unit}]` : ""),
         );
         return {
           content: [

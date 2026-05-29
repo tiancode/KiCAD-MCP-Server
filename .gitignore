@@ -98,3 +98,7 @@ CLAUDE.md
 inspect-tools.mjs
 resources/images/icon_b64.txt
 .venv-test/
+
+# Ad-hoc MCP test-run plans and outputs (scratch); the .mjs harness is tracked
+scripts/*.json
+*.rpt

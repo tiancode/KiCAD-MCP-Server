@@ -7,6 +7,7 @@ Uses S-expression parsing to extract pin data from symbol definitions.
 
 import logging
 import math
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,6 +17,11 @@ from sexpdata import Symbol
 from skip import Schematic
 
 logger = logging.getLogger("kicad_interface")
+
+# Multi-unit symbol sub-definitions are named "<base>_<unit>_<bodystyle>"
+# (e.g. "LM2904_2_1" = unit 2, body style 1). The trailing two integer groups
+# are always unit/style; the base name itself may contain "_<digits>".
+_UNIT_SUFFIX_RE = re.compile(r"_(\d+)_(\d+)$")
 
 
 class PinLocator:
@@ -38,19 +44,34 @@ class PinLocator:
         Returns:
             Dictionary mapping pin number -> pin data:
             {
-                "1": {"x": 0, "y": 3.81, "angle": 270, "length": 1.27, "name": "~", "type": "passive"},
-                "2": {"x": 0, "y": -3.81, "angle": 90, "length": 1.27, "name": "~", "type": "passive"}
+                "1": {"x": 0, "y": 3.81, "angle": 270, "length": 1.27, "name": "~", "type": "passive", "unit": 1},
+                "2": {"x": 0, "y": -3.81, "angle": 90, "length": 1.27, "name": "~", "type": "passive", "unit": 1}
             }
+
+        Each pin carries ``unit`` — the symbol unit that owns it, parsed from
+        the ``<base>_<unit>_<bodystyle>`` sub-symbol naming convention. For a
+        multi-unit part (op-amp, gate array) different pins belong to different
+        units, and each unit is placed as a separate instance at its own
+        location; callers must transform a pin by *its* unit's instance, not
+        unit 1's, or pins collapse onto the first unit's coordinates. Pins not
+        nested under a unit sub-symbol get unit 0 (common/graphic-only).
         """
         pins: Dict[str, Dict[str, Any]] = {}
 
-        def extract_pins_recursive(sexp: Any) -> None:
-            """Recursively search for pin definitions"""
-            if not isinstance(sexp, list):
+        def extract_pins_recursive(sexp: Any, current_unit: int) -> None:
+            """Recursively search for pin definitions, tracking the unit context"""
+            if not isinstance(sexp, list) or len(sexp) == 0:
                 return
 
+            # Descending into a unit sub-symbol ("<base>_<unit>_<style>")
+            # switches the unit context for every pin nested inside it.
+            if sexp[0] == Symbol("symbol") and len(sexp) > 1:
+                match = _UNIT_SUFFIX_RE.search(str(sexp[1]).strip('"'))
+                if match:
+                    current_unit = int(match.group(1))
+
             # Check if this is a pin definition
-            if len(sexp) > 0 and sexp[0] == Symbol("pin"):
+            if sexp[0] == Symbol("pin"):
                 # Pin format: (pin type shape (at x y angle) (length len) (name "name") (number "num"))
                 pin_data = {
                     "x": 0,
@@ -60,6 +81,7 @@ class PinLocator:
                     "name": "",
                     "number": "",
                     "type": str(sexp[1]) if len(sexp) > 1 else "passive",
+                    "unit": current_unit,
                 }
 
                 # Extract pin attributes
@@ -96,12 +118,12 @@ class PinLocator:
                     if existing is None or pin_data["length"] > existing["length"]:
                         pins[pin_data["number"]] = pin_data
 
-            # Recurse into sublists
+            # Recurse into sublists, carrying the current unit context.
             for item in sexp:
                 if isinstance(item, list):
-                    extract_pins_recursive(item)
+                    extract_pins_recursive(item, current_unit)
 
-        extract_pins_recursive(symbol_def)
+        extract_pins_recursive(symbol_def, 0)
         return pins
 
     def get_symbol_pins(self, schematic_path: Path, lib_id: str) -> Dict[str, Dict]:
@@ -234,7 +256,7 @@ class PinLocator:
         return None
 
     def _get_symbol_transform(
-        self, schematic_path: Path, symbol_reference: str
+        self, schematic_path: Path, symbol_reference: str, pin_unit: Optional[int] = None
     ) -> Optional[Tuple[float, float, float, bool, bool, str]]:
         """
         Read symbol position, rotation, mirror flags, and lib_id directly from the
@@ -242,6 +264,15 @@ class PinLocator:
         does not reflect mirror/rotation changes made by rotate_schematic_component).
 
         Returns (x, y, rotation, mirror_x, mirror_y, lib_id) or None.
+
+        ``pin_unit`` selects which unit's instance to read for a multi-unit part.
+        Each unit is placed separately (own position/rotation/mirror), so a pin
+        must be transformed by *its* unit's instance. When ``pin_unit`` is None,
+        or the part has a single placed instance, the first instance is used
+        (back-compatible). When the part has multiple instances and the
+        requested unit is not on the sheet, returns None rather than silently
+        mislocating the pin onto another unit — except unit 0 (common /
+        graphic-only pins), which falls back to the first instance.
         """
         import sexpdata as _sexpdata
         from commands.wire_dragger import WireDragger
@@ -257,11 +288,27 @@ class PinLocator:
             logger.error(f"_get_symbol_transform: failed to parse {schematic_path}: {e}")
             return None
 
-        found = WireDragger.find_symbol(self._sexp_cache[sch_key], symbol_reference)
-        if found is None:
+        instances = WireDragger.find_symbol_instances(self._sexp_cache[sch_key], symbol_reference)
+        if not instances:
             return None
 
-        _, sym_x, sym_y, rotation, lib_id, mirror_x, mirror_y = found
+        if pin_unit is None or len(instances) == 1:
+            chosen = instances[0]
+        else:
+            chosen = next((inst for inst in instances if inst[7] == pin_unit), None)
+            if chosen is None:
+                if pin_unit == 0:
+                    # Common / graphic-only pins are drawn on every unit; there
+                    # is no dedicated instance, so fall back to the first one.
+                    chosen = instances[0]
+                else:
+                    logger.debug(
+                        f"{symbol_reference}: unit {pin_unit} not placed "
+                        f"(present units: {sorted(inst[7] for inst in instances)})"
+                    )
+                    return None
+
+        _, sym_x, sym_y, rotation, lib_id, mirror_x, mirror_y, _unit = chosen
         return sym_x, sym_y, rotation, mirror_x, mirror_y, lib_id
 
     def get_pin_angle(
@@ -294,6 +341,17 @@ class PinLocator:
                     pin_number = matched_num
                 else:
                     return None
+
+            # Re-resolve the transform for the unit that actually owns this pin
+            # — units can be placed with different rotations/mirrors.
+            pin_unit = pins[pin_number].get("unit")
+            if pin_unit is not None:
+                unit_transform = self._get_symbol_transform(
+                    schematic_path, symbol_reference, pin_unit=pin_unit
+                )
+                if unit_transform is None:
+                    return None
+                _, _, symbol_rotation, mirror_x, mirror_y, _ = unit_transform
 
             pin_def_angle = pins[pin_number].get("angle", 0)
 
@@ -408,6 +466,24 @@ class PinLocator:
 
             pin_data = pins[pin_number]
             from commands.wire_dragger import WireDragger
+
+            # Multi-unit parts place each unit as a separate instance at its own
+            # location. The pin's library coordinate is relative to *its* unit's
+            # origin, so transform it by that unit's instance — not unit 1's, or
+            # pins on units B/C/D collapse onto unit A's position (silently
+            # shorting nets when a label snaps to the wrong pin).
+            pin_unit = pin_data.get("unit")
+            if pin_unit is not None:
+                unit_transform = self._get_symbol_transform(
+                    schematic_path, symbol_reference, pin_unit=pin_unit
+                )
+                if unit_transform is None:
+                    logger.error(
+                        f"Pin {symbol_reference}/{pin_number} belongs to unit {pin_unit}, "
+                        f"which is not placed on the schematic"
+                    )
+                    return None
+                symbol_x, symbol_y, symbol_rotation, mirror_x, mirror_y, _ = unit_transform
 
             abs_x, abs_y = WireDragger.pin_world_xy(
                 pin_data["x"],

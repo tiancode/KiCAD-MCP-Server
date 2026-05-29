@@ -725,6 +725,12 @@ def handle_get_schematic_pin_locations(
                 entry["angle"] = (
                     locator.get_pin_angle(Path(schematic_path), reference, pin_num) or 0
                 )
+                # Which symbol unit owns this pin. For multi-unit parts (op-amp,
+                # gate array) different pins live on different units, each placed
+                # at its own location — callers shorting nets by pin number alone
+                # need this to tell unit A's pins from unit B's.
+                if pins_def[pin_num].get("unit") is not None:
+                    entry["unit"] = pins_def[pin_num]["unit"]
             result[pin_num] = entry
 
         return {"success": True, "reference": reference, "pins": result}

@@ -53,7 +53,15 @@ class BoardSizeCommands:
                 for d in list(self.board.GetDrawings()):
                     try:
                         if d.GetLayer() == pcbnew.Edge_Cuts:
-                            self.board.Remove(d)
+                            # Use Delete (not Remove): on the KiCAD 10 SWIG
+                            # bindings Remove() detaches the C++ object but the
+                            # Python wrapper has no destructor ("memory leak of
+                            # type 'PCB_SHAPE *'"), and the dangling object
+                            # non-deterministically corrupts the SWIG object
+                            # table — every later board call then returns a raw
+                            # SwigPyObject (Tracks() not iterable, etc.) or
+                            # segfaults. Delete() frees the object cleanly.
+                            self.board.Delete(d)
                             removed += 1
                     except Exception:
                         # PCB_SHAPE accessors are sometimes wonky on SWIG; skip

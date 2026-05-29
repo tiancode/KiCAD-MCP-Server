@@ -332,8 +332,10 @@ class ComponentCommands:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            # Remove from board
-            self.board.Remove(module)
+            # Delete (not Remove): Remove() leaks the detached C++ FOOTPRINT on
+            # the KiCAD 10 SWIG bindings and can corrupt the SWIG object table;
+            # Delete() frees it cleanly. See board/size.py for the full note.
+            self.board.Delete(module)
 
             return {"success": True, "message": f"Deleted component: {reference}"}
 
@@ -722,11 +724,7 @@ class ComponentCommands:
             # MCP clients send); the SWIG handler originally read
             # ``padName`` / ``padNumber``.  Accept all three so the
             # documented name works and legacy callers don't break.
-            pad_name = (
-                params.get("pad")
-                or params.get("padName")
-                or params.get("padNumber")
-            )
+            pad_name = params.get("pad") or params.get("padName") or params.get("padNumber")
 
             if not reference:
                 return {

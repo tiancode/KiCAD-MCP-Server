@@ -32,6 +32,7 @@ _K = {
         "width",
         "type",
         "uuid",
+        "unit",
     ]
 }
 
@@ -55,65 +56,112 @@ class WireDragger:
     """Pure-logic helpers for wire-endpoint dragging during component moves."""
 
     @staticmethod
-    def find_symbol(sch_data: list, reference: str) -> Any:
+    def _parse_symbol_instance(item: Any, reference: str) -> Optional[Tuple]:
         """
-        Find a placed symbol by reference designator.
+        Parse one ``(symbol …)`` instance if it matches ``reference``.
 
-        Returns (symbol_item, old_x, old_y, rotation, lib_id, mirror_x, mirror_y)
-        or None if the reference is not found.
+        Returns (symbol_item, x, y, rotation, lib_id, mirror_x, mirror_y, unit)
+        or None when ``item`` is not a placed symbol carrying that reference.
 
-        mirror_x=True means the symbol has (mirror x) — flips the X local axis.
-        mirror_y=True means the symbol has (mirror y) — flips the Y local axis.
+        ``unit`` is the ``(unit N)`` value (defaults to 1 when absent — KiCad's
+        default for single-unit symbols). A multi-unit part is placed as one
+        ``(symbol …)`` per unit, all sharing the reference but each with its own
+        ``(at …)`` and ``(unit N)``; the unit is what tells callers which
+        physical instance owns a given pin.
         """
         sym_k = _K["symbol"]
         prop_k = _K["property"]
         at_k = _K["at"]
         lib_id_k = _K["lib_id"]
         mirror_k = _K["mirror"]
+        unit_k = _K["unit"]
 
+        if not (isinstance(item, list) and item and item[0] == sym_k):
+            return None
+
+        # Check Reference property.
+        # kicad-skip may write a trailing "_" on references (e.g. "R1_") when
+        # cloning symbols; strip it so callers passing the canonical "R1"
+        # still find the symbol. Mirrors the rstrip in PinLocator.get_pin_location.
+        ref_val = None
+        for sub in item[1:]:
+            if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
+                if str(sub[1]).strip('"') == "Reference":
+                    ref_val = str(sub[2]).strip('"')
+                    break
+        if ref_val is None or ref_val.rstrip("_") != reference:
+            return None
+
+        old_x = old_y = rotation = 0.0
+        lib_id = ""
+        mirror_x = mirror_y = False
+        unit = 1
+
+        for sub in item[1:]:
+            if not isinstance(sub, list) or not sub:
+                continue
+            tag = sub[0]
+            if tag == at_k:
+                if len(sub) >= 3:
+                    old_x = float(sub[1])
+                    old_y = float(sub[2])
+                if len(sub) >= 4:
+                    rotation = float(sub[3])
+            elif tag == lib_id_k and len(sub) >= 2:
+                lib_id = str(sub[1]).strip('"')
+            elif tag == mirror_k and len(sub) >= 2:
+                mv = str(sub[1])
+                if mv == "x":
+                    mirror_x = True
+                elif mv == "y":
+                    mirror_y = True
+            elif tag == unit_k and len(sub) >= 2:
+                try:
+                    unit = int(sub[1])
+                except (TypeError, ValueError):
+                    unit = 1
+
+        return item, old_x, old_y, rotation, lib_id, mirror_x, mirror_y, unit
+
+    @staticmethod
+    def find_symbol(sch_data: list, reference: str) -> Any:
+        """
+        Find a placed symbol by reference designator.
+
+        Returns (symbol_item, old_x, old_y, rotation, lib_id, mirror_x, mirror_y)
+        for the FIRST matching instance, or None if the reference is not found.
+
+        mirror_x=True means the symbol has (mirror x) — flips the X local axis.
+        mirror_y=True means the symbol has (mirror y) — flips the Y local axis.
+
+        Note: a multi-unit part is placed once per unit under the same
+        reference. This returns whichever unit appears first in the file; use
+        find_symbol_instances to get every unit's transform (needed to locate
+        pins that live on units other than the first — see PinLocator).
+        """
         for item in sch_data:
-            if not (isinstance(item, list) and item and item[0] == sym_k):
-                continue
-
-            # Check Reference property.
-            # kicad-skip may write a trailing "_" on references (e.g. "R1_") when
-            # cloning symbols; strip it so callers passing the canonical "R1"
-            # still find the symbol. Mirrors the rstrip in PinLocator.get_pin_location.
-            ref_val = None
-            for sub in item[1:]:
-                if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
-                    if str(sub[1]).strip('"') == "Reference":
-                        ref_val = str(sub[2]).strip('"')
-                        break
-            if ref_val is None or ref_val.rstrip("_") != reference:
-                continue
-
-            old_x = old_y = rotation = 0.0
-            lib_id = ""
-            mirror_x = mirror_y = False
-
-            for sub in item[1:]:
-                if not isinstance(sub, list) or not sub:
-                    continue
-                tag = sub[0]
-                if tag == at_k:
-                    if len(sub) >= 3:
-                        old_x = float(sub[1])
-                        old_y = float(sub[2])
-                    if len(sub) >= 4:
-                        rotation = float(sub[3])
-                elif tag == lib_id_k and len(sub) >= 2:
-                    lib_id = str(sub[1]).strip('"')
-                elif tag == mirror_k and len(sub) >= 2:
-                    mv = str(sub[1])
-                    if mv == "x":
-                        mirror_x = True
-                    elif mv == "y":
-                        mirror_y = True
-
-            return item, old_x, old_y, rotation, lib_id, mirror_x, mirror_y
-
+            parsed = WireDragger._parse_symbol_instance(item, reference)
+            if parsed is not None:
+                return parsed[:7]
         return None
+
+    @staticmethod
+    def find_symbol_instances(sch_data: list, reference: str) -> List[Tuple]:
+        """
+        Find every placed instance of ``reference`` (one per unit).
+
+        Returns a list of
+        (symbol_item, x, y, rotation, lib_id, mirror_x, mirror_y, unit),
+        in file order — one entry per placed unit. For a single-unit part this
+        is a one-element list; for a multi-unit part (op-amp, gate array) it
+        has one entry per unit instance present on the sheet.
+        """
+        out: List[Tuple] = []
+        for item in sch_data:
+            parsed = WireDragger._parse_symbol_instance(item, reference)
+            if parsed is not None:
+                out.append(parsed)
+        return out
 
     @staticmethod
     def get_pin_defs(sch_data: list, lib_id: str) -> Dict:

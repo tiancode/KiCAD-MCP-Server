@@ -890,41 +890,72 @@ class SymbolLibraryManager:
             logger.warning(f"Could not read {library_path}: {e}")
             return None
 
-        # Locate "(symbol \"<name>\" " and walk paren depth to the closing ).
-        needle = f'(symbol "{symbol_name}"'
-        start_pos = content.find(needle)
-        if start_pos == -1:
-            return None
-        depth = 0
-        end_pos = start_pos
-        i = start_pos
-        while i < len(content):
-            ch = content[i]
-            if ch == "(":
-                depth += 1
-            elif ch == ")":
-                depth -= 1
-                if depth == 0:
-                    end_pos = i + 1
-                    break
-            i += 1
-        if end_pos == start_pos:
-            logger.warning(
-                f"Malformed symbol block for '{symbol_name}' in {library_path}"
-            )
-            return None
+        import sexpdata
 
-        try:
-            import sexpdata
+        from commands.pin_locator import PinLocator
 
-            from commands.pin_locator import PinLocator
-
-            sexp = sexpdata.loads(content[start_pos:end_pos])
-        except Exception as e:
-            logger.warning(f"Could not parse symbol block for {symbol_name}: {e}")
+        def _slice_symbol_block(name: str) -> Optional[str]:
+            """Slice ``(symbol "name" …)`` from content by walking paren depth."""
+            needle = f'(symbol "{name}"'
+            start = content.find(needle)
+            if start == -1:
+                return None
+            d = 0
+            j = start
+            while j < len(content):
+                ch = content[j]
+                if ch == "(":
+                    d += 1
+                elif ch == ")":
+                    d -= 1
+                    if d == 0:
+                        return content[start : j + 1]
+                j += 1
+            logger.warning(f"Malformed symbol block for '{name}' in {library_path}")
             return None
 
-        pins_dict = PinLocator.parse_symbol_definition(sexp)
+        def _extends_parent(sexp: Any) -> Optional[str]:
+            """Return the parent name from a top-level ``(extends "parent")``."""
+            for item in sexp:
+                if (
+                    isinstance(item, list)
+                    and len(item) >= 2
+                    and item[0] == sexpdata.Symbol("extends")
+                ):
+                    return str(item[1]).strip('"')
+            return None
+
+        def _pins_for(name: str, seen: set) -> Optional[Dict[str, Dict[str, Any]]]:
+            """Parse pins for ``name``, following ``extends`` when it has none.
+
+            KiCad stores pin/graphic geometry only on the BASE symbol; a
+            derived symbol (``(extends "parent")`` — e.g.
+            ``Regulator_Linear:AMS1117-3.3`` extends ``AP1117-15``) carries
+            just overridden properties and NO pins of its own. Without
+            following the chain such symbols report 0 pins, which breaks
+            placement planning and wiring for regulators, transistors,
+            opamps and most multi-variant parts.
+            """
+            block = _slice_symbol_block(name)
+            if block is None:
+                return None
+            try:
+                sexp = sexpdata.loads(block)
+            except Exception as e:
+                logger.warning(f"Could not parse symbol block for {name}: {e}")
+                return None
+            pins = PinLocator.parse_symbol_definition(sexp)
+            if pins:
+                return pins
+            parent = _extends_parent(sexp)
+            if parent and parent not in seen:
+                seen.add(parent)
+                return _pins_for(parent, seen)
+            return pins  # empty dict — symbol genuinely defines no pins
+
+        pins_dict = _pins_for(symbol_name, {symbol_name})
+        if pins_dict is None:
+            return None
 
         # Return as a list sorted by pin number for stable output.  Try
         # numeric sort first; fall back to lexicographic for alphanumeric
