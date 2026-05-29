@@ -893,17 +893,13 @@ export class KiCADMcpServer {
     // respawn failure surfaces as a clean rejection instead of a hung
     // promise inside the queue handler.
     if (!this.pythonProcess) {
-      logger.info(
-        `Python process is not running — respawning before dispatching '${command}'`,
-      );
+      logger.info(`Python process is not running — respawning before dispatching '${command}'`);
       try {
         await this.ensurePythonProcess();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(`Failed to respawn Python process: ${msg}`);
-        throw new Error(
-          `Python process for KiCAD scripting could not be respawned: ${msg}`,
-        );
+        throw new Error(`Python process for KiCAD scripting could not be respawned: ${msg}`);
       }
     }
 

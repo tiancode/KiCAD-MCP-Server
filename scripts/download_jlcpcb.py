@@ -140,8 +140,7 @@ def convert_to_mcp_format() -> bool:
 
     # Create target DB in MCP format
     dst = sqlite3.connect(str(TARGET_DB))
-    dst.execute(
-        """
+    dst.execute("""
         CREATE TABLE components (
             lcsc TEXT PRIMARY KEY,
             category TEXT,
@@ -157,8 +156,7 @@ def convert_to_mcp_format() -> bool:
             price_json TEXT,
             last_updated INTEGER
         )
-    """
-    )
+    """)
     dst.execute("CREATE INDEX idx_category ON components(category, subcategory)")
     dst.execute("CREATE INDEX idx_package ON components(package)")
     dst.execute("CREATE INDEX idx_manufacturer ON components(manufacturer)")
@@ -259,14 +257,12 @@ def convert_to_mcp_format() -> bool:
 
     # Build FTS index
     print(f"  Building full-text search index...")
-    dst.execute(
-        """
+    dst.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS components_fts USING fts5(
             lcsc, description, mfr_part, manufacturer,
             content=components
         )
-    """
-    )
+    """)
     dst.execute("INSERT INTO components_fts(components_fts) VALUES('rebuild')")
     dst.commit()
 

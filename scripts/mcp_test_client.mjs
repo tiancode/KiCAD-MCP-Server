@@ -63,7 +63,10 @@ async function main() {
     stderr: "inherit",
   });
 
-  const client = new Client({ name: "kicad-mcp-test-client", version: "1.0.0" }, { capabilities: {} });
+  const client = new Client(
+    { name: "kicad-mcp-test-client", version: "1.0.0" },
+    { capabilities: {} },
+  );
 
   console.log(`▶ connecting to server: node ${serverEntry}`);
   const t0 = Date.now();
@@ -73,7 +76,12 @@ async function main() {
   if (plan.listTools) {
     const { tools } = await client.listTools();
     console.log(`TOOLS REGISTERED: ${tools.length}`);
-    console.log(tools.map((t) => t.name).sort().join(", "));
+    console.log(
+      tools
+        .map((t) => t.name)
+        .sort()
+        .join(", "),
+    );
     console.log("");
   }
 

@@ -74,13 +74,13 @@ def main():
     # We can't bypass commands/__init__.py at this point because it cascades
     # into board/view.py → PIL — already stubbed above, so it's safe to
     # import the package normally now.
+    import pcbnew
     from commands.board import BoardCommands
     from commands.component import ComponentCommands
     from commands.design_rules import DesignRuleCommands
     from commands.library import LibraryManager as FootprintLibraryManager
     from commands.project import ProjectCommands
     from commands.routing import RoutingCommands
-    import pcbnew
 
     # Step 0 — Clean any prior run so we start from a known state.
     for f in PROJECT_DIR.glob("mcp_smoke_test.*"):

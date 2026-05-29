@@ -43,11 +43,11 @@ KiCAD MCP Server -- AI-assisted PCB design via Model Context Protocol
 
 ## Workflows
 
-| Document                                      | Description                               |
-| --------------------------------------------- | ----------------------------------------- |
-| [Realtime Workflow](REALTIME_WORKFLOW.md)     | Working with IPC backend for live updates |
-| [Visual Feedback](VISUAL_FEEDBACK.md)         | UI visual feedback guide                  |
-| [UI Auto Launch](UI_AUTO_LAUNCH.md)           | Automatic KiCAD UI launch feature         |
+| Document                                  | Description                               |
+| ----------------------------------------- | ----------------------------------------- |
+| [Realtime Workflow](REALTIME_WORKFLOW.md) | Working with IPC backend for live updates |
+| [Visual Feedback](VISUAL_FEEDBACK.md)     | UI visual feedback guide                  |
+| [UI Auto Launch](UI_AUTO_LAUNCH.md)       | Automatic KiCAD UI launch feature         |
 
 ---
 

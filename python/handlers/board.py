@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
 import sexpdata
-
 from commands.component import ComponentCommands
 from commands.library import LibraryManager as FootprintLibraryManager
 from commands.schematic import SchematicManager

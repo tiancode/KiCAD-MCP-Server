@@ -685,9 +685,7 @@ class TestSearchSymbolsMultiToken:
         manager = _make_synthetic_manager(
             {
                 "Device": [_info("LED", "Device", description="Light emitting diode")],
-                "Logic": [
-                    _info("74HC", "Logic", description="some led-related description")
-                ],
+                "Logic": [_info("74HC", "Logic", description="some led-related description")],
             }
         )
 

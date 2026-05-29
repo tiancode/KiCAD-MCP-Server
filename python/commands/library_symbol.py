@@ -891,7 +891,6 @@ class SymbolLibraryManager:
             return None
 
         import sexpdata
-
         from commands.pin_locator import PinLocator
 
         def _slice_symbol_block(name: str) -> Optional[str]:

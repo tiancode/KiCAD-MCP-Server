@@ -454,9 +454,7 @@ class LibraryManager:
                 # Library-scope boost: when the caller used Lib:Name, hits
                 # in the matching library outrank hits in other libraries
                 # within the same band.
-                lib_boost = (
-                    1 if lib_scope is None or lib_scope in lib_lower else 0
-                )
+                lib_boost = 1 if lib_scope is None or lib_scope in lib_lower else 0
                 # Sort key: lower tuple sorts first; we negate the bands
                 # so larger-is-better becomes smaller-is-first.
                 key = (-band, -lib_boost, len(footprint), fp_lower)

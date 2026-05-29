@@ -22,19 +22,13 @@ def _make_component_commands(pad_by_number=None):
 
     fake_pad = MagicMock()
     fake_pad.GetNumber = MagicMock(return_value="1")
-    fake_pad.GetPosition = MagicMock(
-        return_value=SimpleNamespace(x=10_000_000, y=20_000_000)
-    )
-    fake_pad.GetSize = MagicMock(
-        return_value=SimpleNamespace(x=1_000_000, y=1_000_000)
-    )
+    fake_pad.GetPosition = MagicMock(return_value=SimpleNamespace(x=10_000_000, y=20_000_000))
+    fake_pad.GetSize = MagicMock(return_value=SimpleNamespace(x=1_000_000, y=1_000_000))
     fake_pad.GetNetname = MagicMock(return_value="GND")
     fake_pad.GetNetCode = MagicMock(return_value=42)
 
     fake_fp = MagicMock()
-    fake_fp.FindPadByNumber = MagicMock(
-        side_effect=lambda n: fake_pad if str(n) == "1" else None
-    )
+    fake_fp.FindPadByNumber = MagicMock(side_effect=lambda n: fake_pad if str(n) == "1" else None)
     fake_fp.Pads = MagicMock(return_value=[fake_pad])
 
     fake_board = MagicMock()
@@ -91,8 +85,6 @@ def test_pad_takes_precedence_when_multiple_given():
     the canonical ``pad`` wins (matches "the docs are authoritative")."""
     cc, _ = _make_component_commands()
 
-    out = cc.get_pad_position(
-        {"reference": "U1", "pad": "1", "padName": "DOES-NOT-EXIST"}
-    )
+    out = cc.get_pad_position({"reference": "U1", "pad": "1", "padName": "DOES-NOT-EXIST"})
 
     assert out["success"] is True

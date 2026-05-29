@@ -76,9 +76,7 @@ def test_already_open_path_is_a_noop(monkeypatch, tmp_path):
         def __init__(self, p):
             self.path = p
 
-    iface.ipc_backend._kicad.get_open_documents = MagicMock(
-        return_value=[_Doc(str(sch))]
-    )
+    iface.ipc_backend._kicad.get_open_documents = MagicMock(return_value=[_Doc(str(sch))])
 
     monkeypatch.setattr(ui_handler, "check_and_launch_kicad", _running_check_and_launch)
     monkeypatch.setattr(

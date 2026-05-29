@@ -339,9 +339,7 @@ def test_open_board_document_detection_handles_kipy_errors_gracefully():
     iface.ipc_backend = MagicMock()
     iface.ipc_backend.is_connected = MagicMock(return_value=True)
     iface.ipc_backend._kicad = MagicMock()
-    iface.ipc_backend._kicad.get_open_documents = MagicMock(
-        side_effect=RuntimeError("kipy stale")
-    )
+    iface.ipc_backend._kicad.get_open_documents = MagicMock(side_effect=RuntimeError("kipy stale"))
 
     assert KiCADInterface._ipc_has_open_board_document(iface) is False
 
@@ -402,9 +400,7 @@ def test_autolaunch_marks_pcb_document_open_false_with_warning(monkeypatch, tmp_
     iface = _bare_iface()
     iface._try_enable_ipc_backend = lambda force=False: True
     iface._current_board_path = lambda: None
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: False
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: False)
 
     result = project_handler._autolaunch_for_project(iface, project_file, {})
 
@@ -441,9 +437,7 @@ def test_autolaunch_marks_pcb_document_open_true_when_kipy_reports_it(monkeypatc
     iface = _bare_iface()
     iface._try_enable_ipc_backend = lambda force=False: True
     iface._current_board_path = lambda: str(board_file)
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: True)
 
     result = project_handler._autolaunch_for_project(iface, project_file, {})
 
@@ -538,9 +532,7 @@ def test_autolaunch_warning_has_no_self_contradicting_advice(monkeypatch, tmp_pa
 
     # _ipc_has_open_board_document always returns False — simulates the
     # case where the PM is up but no PCB editor frame ever opens.
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: False
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: False)
 
     # Every run_action candidate is rejected by this KiCad version
     # (RAS_INVALID).
@@ -584,9 +576,7 @@ def test_autolaunch_run_action_skipped_when_ipc_not_connected(monkeypatch, tmp_p
     iface = _bare_iface()
     iface._try_enable_ipc_backend = lambda force=False: True
     iface._current_board_path = lambda: None
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: False
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: False)
 
     iface.ipc_backend = MagicMock()
     iface.ipc_backend.is_connected = lambda: False

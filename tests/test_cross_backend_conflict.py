@@ -49,9 +49,7 @@ def _pcb_editor_open(monkeypatch):
     from utils.kicad_process import KiCADProcessManager
 
     monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: True)
 
 
 # ---------------------------------------------------------------------------

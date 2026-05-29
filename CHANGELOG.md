@@ -14,7 +14,7 @@ error pointing at the remediation.
 
 - **PCB-editor gate** (`KiCADInterface._ipc_has_open_board_document`).
   IPC board ops now refuse with `success: false, needs_pcb_editor:
-  true` unless `kipy.get_open_documents()` lists a `.kicad_pcb`
+true` unless `kipy.get_open_documents()` lists a `.kicad_pcb`
   document. The previous process-existence proxy
   (`is_pcb_editor_running`) falsely passed when `pcbnew` was alive as
   a kiway worker with no board loaded; every call then quietly
@@ -27,7 +27,7 @@ error pointing at the remediation.
   track each side's dirtiness via the IPCBackend change callback +
   SWIG auto-save signature. Cross-backend mutations refuse with
   `success: false, needs_reconcile: true, direction: "ipc_to_swig" |
-  "swig_to_ipc"` and a structured remediation hint.
+"swig_to_ipc"` and a structured remediation hint.
 - **`reconcile_backends` tool** flushes IPC→disk + SWIG reload
   automatically when called with `direction: "ipc_to_swig"`. The
   reverse direction returns the manual steps (kipy has no
@@ -64,7 +64,7 @@ error pointing at the remediation.
   family) and falls back to spawning `kicad <path>` so KiCad's
   `wxSingleInstanceChecker` hands the open request off to the existing
   process. Response carries `fileOpenForwarded: bool, fileOpenMethod:
-  "already_open" | "ipc_action" | "spawn" | "none"`. Used to be a
+"already_open" | "ipc_action" | "spawn" | "none"`. Used to be a
   no-op when KiCad was already running.
 - **Python subprocess auto-respawn.** When the Python child dies
   (e.g. `pkill -9 -f kicad` catches the cmdline), the Node server
@@ -149,10 +149,10 @@ error pointing at the remediation.
   the straight line (or either leg of a via path) crosses a third
   pad, the call returns
   `success: false, hasObstacles: true, obstacleCount, obstaclesCrossed`
-  + a `hint` pointing at `force: true` for the legacy
-  "insert anyway, return warnings" behaviour. Tool description
-  rewritten to lead with "Insert ONE STRAIGHT trace segment" + "NOT
-  an autorouter".
+  - a `hint` pointing at `force: true` for the legacy
+    "insert anyway, return warnings" behaviour. Tool description
+    rewritten to lead with "Insert ONE STRAIGHT trace segment" + "NOT
+    an autorouter".
 - **`refill_zones` refuses the SWIG path by default** because
   `pcbnew.ZONE_FILLER.Fill()` has a documented segfault / silently
   wrong-fill history when invoked outside KiCad's own process. Pass

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
 import sexpdata
-
 from commands.library_schematic import LibraryManager as SchematicLibraryManager
 from commands.schematic import SchematicManager
 from commands.wire_manager import WireManager

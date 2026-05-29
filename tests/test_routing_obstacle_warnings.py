@@ -368,7 +368,11 @@ class TestRoutePadToPadObstacleResponse:
 
         def fake_scanner(start, end, *, exclude_pad_keys=None):
             leg_count["n"] += 1
-            return ["Trace segment passes through D1.1 — consider routing around"] if leg_count["n"] == 2 else []
+            return (
+                ["Trace segment passes through D1.1 — consider routing around"]
+                if leg_count["n"] == 2
+                else []
+            )
 
         cmds._pads_intersecting_segment = fake_scanner  # type: ignore[method-assign]
 

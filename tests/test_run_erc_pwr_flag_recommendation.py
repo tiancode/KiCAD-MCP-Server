@@ -46,9 +46,7 @@ def _run(monkeypatch, tmp_path, erc_data, schematic_text="(kicad_sch)\n"):
 def _pwr_violation(net_name: str):
     """Build the canonical kicad-cli pin_not_driven violation shape."""
     return {
-        "description": (
-            f"Input Power pin not driven by any Output Power pins on net {net_name}"
-        ),
+        "description": (f"Input Power pin not driven by any Output Power pins on net {net_name}"),
         "severity": "error",
         "type": "pin_not_driven",
         "items": [{"description": f"NE555 GND pin", "pos": {"x": 1.0, "y": 1.0}}],
@@ -58,9 +56,7 @@ def _pwr_violation(net_name: str):
 def _schematic_with_power_labels(*names: str) -> str:
     """Minimal .kicad_sch carrying the given power-symbol labels (so the
     _collect_power_label_names heuristic finds them)."""
-    body = " ".join(
-        f'(symbol (lib_id "power:{n}") (property "Value" "{n}"))' for n in names
-    )
+    body = " ".join(f'(symbol (lib_id "power:{n}") (property "Value" "{n}"))' for n in names)
     return f"(kicad_sch {body})"
 
 
@@ -132,9 +128,7 @@ def test_recommendation_absent_when_no_pwrflag_fps(monkeypatch, tmp_path):
     assert out["summary"]["recommendations"] == []
 
 
-def test_recommendation_falls_back_to_schematic_labels_when_extraction_fails(
-    monkeypatch, tmp_path
-):
+def test_recommendation_falls_back_to_schematic_labels_when_extraction_fails(monkeypatch, tmp_path):
     """When the violation message lacks a clear 'on net X' phrasing but
     still names a power-keyword somewhere (so _violation_mentions_power_label
     still tags it as a likely FP), the recommendation falls back to the
@@ -148,9 +142,7 @@ def test_recommendation_falls_back_to_schematic_labels_when_extraction_fails(
                         # "GND" so the FP heuristic tags it.  Net
                         # extraction returns None; the recommendation
                         # then takes its nets from power_label_names.
-                        "description": (
-                            "Input Power pin not driven; check GND wiring"
-                        ),
+                        "description": ("Input Power pin not driven; check GND wiring"),
                         "severity": "error",
                         "type": "pin_not_driven",
                         "items": [{"pos": {"x": 1.0, "y": 1.0}}],

@@ -70,9 +70,7 @@ def test_parse_virtual_connections_uses_sentinel_for_pwr_flag(monkeypatch, tmp_p
     monkeypatch.setattr(wire_connectivity.PinLocator, "get_all_symbol_pins", fake_pins)
     # _parse_labels_sexp would read the file; stub it empty so this test
     # only exercises the power-symbol branch.
-    monkeypatch.setattr(
-        wire_connectivity, "_parse_labels_sexp", lambda sexp: ({}, {})
-    )
+    monkeypatch.setattr(wire_connectivity, "_parse_labels_sexp", lambda sexp: ({}, {}))
     monkeypatch.setattr(wire_connectivity, "_load_sexp", lambda path: [])
 
     point_to_label, label_to_points = _parse_virtual_connections(schematic, str(sch_path))
@@ -153,9 +151,7 @@ def test_sync_to_board_does_not_create_pwr_flag_net(monkeypatch, tmp_path):
     )
 
     # Stub the Schematic loader so we don't need a real .kicad_sch file.
-    monkeypatch.setattr(
-        kicad_interface, "Schematic", lambda path: fake_schematic, raising=False
-    )
+    monkeypatch.setattr(kicad_interface, "Schematic", lambda path: fake_schematic, raising=False)
 
     # Stub pin locator: both symbols have pin "1" at the same location
     # so a real wire-BFS would land both labels on one net.
@@ -167,9 +163,7 @@ def test_sync_to_board_does_not_create_pwr_flag_net(monkeypatch, tmp_path):
                 return {"1": (50.0, 60.0)}
             return {}
 
-    monkeypatch.setattr(
-        kicad_interface, "PinLocator", _Locator, raising=False
-    )
+    monkeypatch.setattr(kicad_interface, "PinLocator", _Locator, raising=False)
 
     iface = KiCADInterface.__new__(KiCADInterface)
     iface._current_project_path = tmp_path

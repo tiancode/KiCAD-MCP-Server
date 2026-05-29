@@ -473,9 +473,7 @@ class TestSchematicGridSnap:
                 captured["x"] = kwargs["x"]
                 captured["y"] = kwargs["y"]
 
-        monkeypatch.setattr(
-            "commands.dynamic_symbol_loader.DynamicSymbolLoader", _FakeLoader
-        )
+        monkeypatch.setattr("commands.dynamic_symbol_loader.DynamicSymbolLoader", _FakeLoader)
 
         # Need a writable path so the handler's parent-dir walk doesn't crash.
         sch = tmp_path = Path("/tmp/__snap_default_probe.kicad_sch")
@@ -524,9 +522,7 @@ class TestSchematicGridSnap:
                 captured["x"] = kwargs["x"]
                 captured["y"] = kwargs["y"]
 
-        monkeypatch.setattr(
-            "commands.dynamic_symbol_loader.DynamicSymbolLoader", _FakeLoader
-        )
+        monkeypatch.setattr("commands.dynamic_symbol_loader.DynamicSymbolLoader", _FakeLoader)
 
         sch = Path("/tmp/__snap_optout_probe.kicad_sch")
         sch.write_text("(kicad_sch)\n", encoding="utf-8")

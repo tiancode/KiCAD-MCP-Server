@@ -23,7 +23,6 @@ sys.path.insert(0, str(PYTHON_DIR))
 
 # Need pcbnew imported (real or stubbed) before RoutingCommands.
 import pcbnew  # noqa: F401, E402
-
 from commands.routing import RoutingCommands, _point_to_segment_distance_nm  # noqa: E402
 
 # ---------------------------------------------------------------------------

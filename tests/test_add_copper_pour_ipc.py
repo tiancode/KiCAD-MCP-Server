@@ -27,9 +27,7 @@ def _board_document_open(monkeypatch):
     these handler-level tests don't trip the editor-frame gate."""
     from kicad_interface import KiCADInterface
 
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: True)
 
 
 @pytest.fixture

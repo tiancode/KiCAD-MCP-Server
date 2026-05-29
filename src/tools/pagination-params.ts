@@ -8,11 +8,7 @@ import { z } from "zod";
  * whether there is more to fetch.
  */
 export const paginationParams = {
-  limit: z
-    .number()
-    .int()
-    .optional()
-    .describe("Max items to return (default 100; 0 = no cap)"),
+  limit: z.number().int().optional().describe("Max items to return (default 100; 0 = no cap)"),
   offset: z
     .number()
     .int()

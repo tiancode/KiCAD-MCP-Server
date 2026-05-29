@@ -28,9 +28,7 @@ def _open_board(monkeypatch):
     """IPC gates assume a board is loaded; bypass them for these focused tests."""
     from kicad_interface import KiCADInterface
 
-    monkeypatch.setattr(
-        KiCADInterface, "_ipc_has_open_board_document", lambda self: True
-    )
+    monkeypatch.setattr(KiCADInterface, "_ipc_has_open_board_document", lambda self: True)
 
 
 def _make_iface():
