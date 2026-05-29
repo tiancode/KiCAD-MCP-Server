@@ -334,11 +334,34 @@ export class KiCADMcpServer {
 
     // Initialize the MCP server using metadata from package.json so the
     // version reported to clients always matches the release.
-    this.server = new McpServer({
-      name: PACKAGE_INFO.name,
-      version: PACKAGE_INFO.version,
-      description: PACKAGE_INFO.description,
-    });
+    this.server = new McpServer(
+      {
+        name: PACKAGE_INFO.name,
+        version: PACKAGE_INFO.version,
+        description: PACKAGE_INFO.description,
+      },
+      {
+        // Surfaced to MCP clients and used by Claude Code's tool search to
+        // decide when to pull this server's (deferred) tools into context.
+        // All ~160 tools load by name only until searched, so this string is
+        // the primary signal for discovery — keep it under the 2 KB
+        // truncation limit, key capabilities first.
+        instructions: [
+          "KiCAD PCB and schematic design automation. Search this server's tools whenever a task involves creating, editing, inspecting, or exporting a KiCAD project (.kicad_pro / .kicad_pcb / .kicad_sch).",
+          "",
+          "Capabilities by area:",
+          "- Project: create / open / snapshot projects.",
+          "- Board (PCB): size, outline, layers, place components, mounting holes, copper zones/pours, design rules, DRC.",
+          "- Routing: tracks, vias, pad-to-pad, autoroute (freerouting), zone refill.",
+          "- Schematic: create sheets; add / move / edit / delete symbols from ~10k stock libraries; wires, junctions, net labels, power symbols; connect pins; ERC; netlist; sync schematic to board.",
+          "- Libraries: search/list symbol & footprint libraries, symbol & pin info, custom footprint/symbol creation, JLCPCB parts.",
+          "- Export: gerbers, PDF, 3D, SVG, board preview.",
+          "- State: check/launch KiCAD UI, IPC vs SWIG backend status, reconcile backends.",
+          "",
+          "Notes: requires KiCAD 9+. Many board ops need KiCAD open with the PCB editor — the tool returns a gate response asking the user to open it; do not auto-launch. Call get_schematic_pin_locations for exact pin coordinates before placing wires or net labels.",
+        ].join("\n"),
+      },
+    );
     // Create the ready promise (resolved when Python sends {"type":"ready"})
     this.readyPromise = new Promise((resolve, reject) => {
       this.resolveReady = resolve;
