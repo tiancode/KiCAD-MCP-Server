@@ -999,6 +999,65 @@ class WireManager:
 
     @staticmethod
     @serialize_on_path(0)
+    def delete_no_connect(
+        schematic_path: Path,
+        position: List[float],
+        tolerance: float = 0.5,
+    ) -> bool:
+        """
+        Delete a no-connect flag from the schematic by position.
+
+        no-connect flags carry no name, so a coordinate match is the only
+        way to identify one.  Removes the first ``(no_connect (at x y) ...)``
+        whose coordinates fall within ``tolerance`` mm of ``position`` —
+        the inverse of :meth:`add_no_connect`, so a flag placed on the
+        wrong pin can be removed without deleting the whole component.
+
+        Args:
+            schematic_path: Path to .kicad_sch file
+            position: [x, y] coordinates of the flag to remove (mm)
+            tolerance: Maximum coordinate difference to consider a match (mm)
+
+        Returns:
+            True if a flag was found and removed, False otherwise
+        """
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                sch_data = sexpdata.loads(f.read())
+
+            _SYM_NO_CONNECT = Symbol("no_connect")
+            for i, item in enumerate(sch_data):
+                if not (isinstance(item, list) and len(item) > 0 and item[0] == _SYM_NO_CONNECT):
+                    continue
+                at_entry = next(
+                    (
+                        p
+                        for p in item[1:]
+                        if isinstance(p, list) and len(p) >= 3 and p[0] == _SYM_AT
+                    ),
+                    None,
+                )
+                if at_entry is None:
+                    continue
+                lx, ly = float(at_entry[1]), float(at_entry[2])
+                if not (abs(lx - position[0]) < tolerance and abs(ly - position[1]) < tolerance):
+                    continue
+
+                del sch_data[i]
+                output = _serialize_validated(sch_data)
+                atomic_write_text(schematic_path, output)
+                logger.info(f"Deleted no-connect at {position}")
+                return True
+
+            logger.warning(f"No matching no-connect flag found near {position}")
+            return False
+
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
+            logger.exception(f"Error deleting no-connect: {e}")
+            return False
+
+    @staticmethod
+    @serialize_on_path(0)
     def delete_wire(
         schematic_path: Path,
         start_point: List[float],
@@ -1162,6 +1221,140 @@ class WireManager:
 
             logger.exception(f"Error deleting label: {e}")
             return False
+
+    @staticmethod
+    @serialize_on_path(0)
+    def edit_label(
+        schematic_path: Path,
+        net_name: str,
+        new_type: Optional[str] = None,
+        new_name: Optional[str] = None,
+        position: Optional[List[float]] = None,
+        current_type: Optional[str] = None,
+        tolerance: float = 0.5,
+    ) -> Optional["dict"]:
+        """
+        Change a net label's type (local/global/hierarchical) and/or text.
+
+        Locates the first label whose text equals ``net_name`` (optionally
+        constrained to ``current_type`` and/or a ``position`` within
+        ``tolerance`` mm), then rewrites it in place.  The rebuilt node
+        keeps the original ``(at ...)``, ``(effects ...)`` and
+        ``(uuid ...)`` — only the element head and/or the name string
+        change.  A ``(shape ...)`` sub-expression is preserved when the
+        *target* type is global/hierarchical and dropped when converting to
+        a local label (which has no shape).  Intersheet-ref properties and
+        ``fields_autoplaced`` are dropped so KiCad regenerates them on next
+        open — matching exactly what :meth:`add_label` writes.
+
+        This is the inverse of delete + re-add: converting a page-local net
+        mistakenly created as ``global_label`` back to ``label`` keeps the
+        same uuid and position, so no rework of wires/junctions is needed.
+
+        Args:
+            schematic_path: Path to .kicad_sch file
+            net_name: Label text to match
+            new_type: New label type (canonical or alias). None keeps the
+                current type — use with ``new_name`` to only rename.
+            new_name: New label text.  None keeps the current text.
+            position: Optional [x, y] to disambiguate same-named labels (mm)
+            current_type: Optional current type to disambiguate
+            tolerance: Maximum coordinate difference for a position match (mm)
+
+        Returns:
+            A dict describing the change, or None if no label matched.
+
+        Raises:
+            ValueError: if ``new_type`` / ``current_type`` is unrecognised.
+                Raised before any file I/O so a typo can't corrupt the file.
+        """
+        target_element = _normalize_label_type(new_type) if new_type is not None else None
+        current_element = _normalize_label_type(current_type) if current_type is not None else None
+
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                sch_data = sexpdata.loads(f.read())
+
+            _LABEL_TYPES = {_SYM_LABEL, _SYM_GLOBAL_LABEL, _SYM_HIERARCHICAL_LABEL}
+            _SYM_SHAPE = Symbol("shape")
+            _SYM_EFFECTS = Symbol("effects")
+
+            for i, item in enumerate(sch_data):
+                if not (isinstance(item, list) and len(item) >= 2 and item[0] in _LABEL_TYPES):
+                    continue
+                if item[1] != net_name:
+                    continue
+                if current_element is not None and str(item[0]) != current_element:
+                    continue
+
+                at_entry = next(
+                    (
+                        p
+                        for p in item[2:]
+                        if isinstance(p, list) and len(p) >= 3 and p[0] == _SYM_AT
+                    ),
+                    None,
+                )
+                if at_entry is None:
+                    continue
+                old_x, old_y = float(at_entry[1]), float(at_entry[2])
+
+                if position is not None and not (
+                    abs(old_x - position[0]) < tolerance and abs(old_y - position[1]) < tolerance
+                ):
+                    continue
+
+                old_element = str(item[0])
+                new_element = target_element or old_element
+                new_label_name = new_name if new_name is not None else item[1]
+
+                # Preserve the sub-expressions that survive a retype.
+                shape_entry = next(
+                    (p for p in item[2:] if isinstance(p, list) and p and p[0] == _SYM_SHAPE),
+                    None,
+                )
+                effects_entry = next(
+                    (p for p in item[2:] if isinstance(p, list) and p and p[0] == _SYM_EFFECTS),
+                    None,
+                )
+                uuid_entry = next(
+                    (p for p in item[2:] if isinstance(p, list) and p and p[0] == _SYM_UUID),
+                    None,
+                )
+
+                rebuilt: List[Any] = [Symbol(new_element), new_label_name]
+                # Shape only belongs on global / hierarchical labels.
+                if new_element in ("global_label", "hierarchical_label"):
+                    rebuilt.append(
+                        shape_entry if shape_entry is not None else [_SYM_SHAPE, Symbol("input")]
+                    )
+                rebuilt.append(at_entry)
+                if effects_entry is not None:
+                    rebuilt.append(effects_entry)
+                if uuid_entry is not None:
+                    rebuilt.append(uuid_entry)
+
+                sch_data[i] = rebuilt
+                output = _serialize_validated(sch_data)
+                atomic_write_text(schematic_path, output)
+                logger.info(
+                    f"Edited label '{net_name}': {old_element} -> {new_element}, "
+                    f"name -> '{new_label_name}'"
+                )
+                return {
+                    "old_type": old_element,
+                    "new_type": new_element,
+                    "old_name": net_name,
+                    "new_name": new_label_name,
+                    "position": {"x": old_x, "y": old_y},
+                }
+
+            logger.warning(f"No matching label found for '{net_name}'")
+            return None
+
+        except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
+            logger.exception(f"Error editing label: {e}")
+            return None
 
     @staticmethod
     def create_orthogonal_path(

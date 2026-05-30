@@ -567,6 +567,137 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         }
 
 
+def handle_delete_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete a no-connect flag from the schematic (inverse of add_no_connect).
+
+    A no-connect flag carries no name, so it is matched by position. Pass
+    componentRef + pinNumber to snap onto the exact pin endpoint (the same
+    way add_no_connect places it), or position [x, y] directly.
+    """
+    logger.info("Deleting no-connect flag from schematic")
+    try:
+        from pathlib import Path
+
+        from commands.pin_locator import PinLocator
+        from commands.wire_manager import WireManager
+
+        schematic_path = params.get("schematicPath")
+        position = params.get("position")
+        component_ref = params.get("componentRef")
+        pin_number = params.get("pinNumber")
+        tolerance = float(params.get("tolerance", 0.5))
+
+        if not schematic_path:
+            return {"success": False, "message": "schematicPath is required"}
+
+        snapped_to_pin = None
+        if component_ref and pin_number is not None:
+            locator = PinLocator()
+            pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
+            if pin_loc is None:
+                return {
+                    "success": False,
+                    "message": f"Could not locate pin {pin_number} on {component_ref}",
+                }
+            position = pin_loc
+            snapped_to_pin = {"component": component_ref, "pin": str(pin_number)}
+        elif position is None:
+            return {
+                "success": False,
+                "message": "Provide either position [x, y] or componentRef + pinNumber",
+            }
+
+        # Accept either [x, y] or {x, y}
+        if isinstance(position, dict):
+            position = [position.get("x", 0), position.get("y", 0)]
+
+        deleted = WireManager.delete_no_connect(Path(schematic_path), position, tolerance)
+        if deleted:
+            result = {
+                "success": True,
+                "message": f"Deleted no-connect flag at {position}",
+                "position": position,
+            }
+            if snapped_to_pin:
+                result["snapped_to_pin"] = snapped_to_pin
+            return result
+        return {"success": False, "message": f"No no-connect flag found near {position}"}
+
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Error deleting no-connect: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "errorDetails": traceback.format_exc(),
+        }
+
+
+def handle_edit_schematic_net_label(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Change a net label's type (local/global/hierarchical) and/or its text.
+
+    Converts in place — same uuid and position — so fixing a page-local net
+    mistakenly created as a global label needs no wire/junction rework. Pass
+    at least one of newLabelType / newName.
+    """
+    logger.info("Editing schematic net label")
+    try:
+        from pathlib import Path
+
+        from commands.wire_manager import WireManager
+
+        schematic_path = params.get("schematicPath")
+        net_name = params.get("netName")
+        new_label_type = params.get("newLabelType")
+        new_name = params.get("newName")
+        current_position = params.get("currentPosition")
+        label_type = params.get("labelType")
+        tolerance = float(params.get("tolerance", 0.5))
+
+        if not schematic_path or not net_name:
+            return {"success": False, "message": "schematicPath and netName are required"}
+        if new_label_type is None and new_name is None:
+            return {
+                "success": False,
+                "message": "Provide at least one of newLabelType or newName",
+            }
+
+        pos_list = None
+        if current_position:
+            pos_list = [current_position.get("x", 0), current_position.get("y", 0)]
+
+        try:
+            result = WireManager.edit_label(
+                Path(schematic_path),
+                net_name,
+                new_type=new_label_type,
+                new_name=new_name,
+                position=pos_list,
+                current_type=label_type,
+                tolerance=tolerance,
+            )
+        except ValueError as ve:
+            # Unrecognised label type — surface the clear message verbatim.
+            return {"success": False, "message": str(ve)}
+
+        if result is None:
+            return {"success": False, "message": f"Label '{net_name}' not found"}
+        return {"success": True, **result}
+
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Error editing schematic net label: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "errorDetails": traceback.format_exc(),
+        }
+
+
 _LABEL_PIN_CONNECT_TOLERANCE_MM = 0.0001  # KiCad's internal-unit precision (0.1 µm)
 
 

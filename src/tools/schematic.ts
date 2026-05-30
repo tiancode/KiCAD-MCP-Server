@@ -649,6 +649,54 @@ edit_schematic_component and set its value to an empty string.`,
     },
   );
 
+  // Delete no-connect flag
+  server.tool(
+    "delete_no_connect",
+    "Remove a no-connect (X marker) flag from a pin — the inverse of add_no_connect. " +
+      "A no-connect flag has no name, so it is matched by position. " +
+      "PREFERRED: supply componentRef + pinNumber to target the exact pin endpoint (the same way add_no_connect placed it). " +
+      "Alternatively supply position [x, y] in mm. Use this when an NC flag was placed on the wrong pin — no need to delete and re-add the whole component.",
+    {
+      schematicPath: z.string().describe("Path to the schematic file"),
+      position: z
+        .array(z.number())
+        .length(2)
+        .optional()
+        .describe("Position [x, y] in mm. Required when componentRef/pinNumber are not given."),
+      componentRef: z
+        .string()
+        .optional()
+        .describe("Component reference to target (e.g. U1, R1). Use with pinNumber."),
+      pinNumber: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe("Pin number or name on componentRef (e.g. '1', 'GND'). Use with componentRef."),
+      tolerance: z.number().optional().describe("Coordinate match tolerance in mm (default 0.5)."),
+    },
+    async (args: {
+      schematicPath: string;
+      position?: number[];
+      componentRef?: string;
+      pinNumber?: string | number;
+      tolerance?: number;
+    }) => {
+      const result = await callKicadScript("delete_no_connect", args);
+      if (result.success) {
+        return formatKicadResult(result);
+      } else {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Failed to delete no-connect: ${result.message || "Unknown error"}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // Connect pin to net
   server.tool(
     "connect_to_net",
@@ -1355,6 +1403,55 @@ edit_schematic_component and set its value to an empty string.`,
           {
             type: "text",
             text: `Failed to move label: ${result.message || "Unknown error"}`,
+          },
+        ],
+        isError: true,
+      };
+    },
+  );
+
+  // Change a net label's type and/or text
+  server.tool(
+    "edit_schematic_net_label",
+    "Change an existing net label's type (local label <-> global_label <-> hierarchical_label) and/or rename its text, in place. " +
+      "Keeps the same uuid and position, so fixing a page-local net mistakenly created as a global label needs no wire/junction rework — this is the inverse of delete + re-add. " +
+      "Pass at least one of newLabelType or newName. Use currentPosition and/or labelType to disambiguate when several labels share the same name.",
+    {
+      schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      netName: z.string().describe("Current text of the label to edit"),
+      newLabelType: z
+        .enum(["label", "global_label", "hierarchical_label"])
+        .optional()
+        .describe(
+          "New label type. 'label' = page-local, 'global_label' = cross-page, 'hierarchical_label' = sheet boundary. Omit to keep the current type (rename only).",
+        ),
+      newName: z.string().optional().describe("New label text. Omit to keep the current text."),
+      currentPosition: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("Current position to disambiguate when multiple labels share the same name"),
+      labelType: z
+        .enum(["label", "global_label", "hierarchical_label"])
+        .optional()
+        .describe("Restrict the search to a specific current label type"),
+    },
+    async (args: {
+      schematicPath: string;
+      netName: string;
+      newLabelType?: "label" | "global_label" | "hierarchical_label";
+      newName?: string;
+      currentPosition?: { x: number; y: number };
+      labelType?: "label" | "global_label" | "hierarchical_label";
+    }) => {
+      const result = await callKicadScript("edit_schematic_net_label", args);
+      if (result.success) {
+        return formatKicadResult(result);
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to edit label: ${result.message || "Unknown error"}`,
           },
         ],
         isError: true,
