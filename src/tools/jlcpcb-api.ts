@@ -5,6 +5,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { formatKicadResult } from "./tool-response.js";
 
 export function registerJLCPCBApiTools(server: McpServer, callKicadScript: Function) {
   // Download JLCPCB parts database
@@ -290,6 +291,61 @@ Useful for cost optimization and finding alternatives when parts are out of stoc
           },
         ],
       };
+    },
+  );
+
+  // Import an LCSC/JLCPCB part as a placeable KiCAD symbol + footprint
+  server.tool(
+    "import_jlcpcb_symbol",
+    `Generate a real KiCAD symbol + footprint for an LCSC/JLCPCB part and register it so it can be placed.
+
+The other JLCPCB tools only return database metadata; for ICs and other parts without a KiCAD stock symbol this means hand-building one with create_symbol. This tool removes that step: it uses easyeda2kicad to fetch the part's EasyEDA data by LCSC number (e.g. C7593) and writes a .kicad_sym + .pretty footprint into a shared cache library (~/.kicad-mcp/easyeda.kicad_sym + easyeda.pretty/), registered in the user-global sym-/fp-lib-table under the nickname "easyeda".
+
+After import, place it with add_schematic_component(library="easyeda", componentName=<symbol>) — the response's "symbol" field gives the exact name. Idempotent: a part already in the cache is returned without re-fetching (set forceRefresh to update it).
+
+Requires the easyeda2kicad package in the KiCAD MCP Python environment (pip install easyeda2kicad) and network access to EasyEDA.`,
+    {
+      lcsc_number: z
+        .string()
+        .describe(
+          'LCSC part number, e.g. "C7593" (the C-prefixed id from search_jlcpcb_parts / get_jlcpcb_part)',
+        ),
+      forceRefresh: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Re-fetch and overwrite even if the part is already in the cache library"),
+    },
+    async (args: { lcsc_number: string; forceRefresh?: boolean }) => {
+      const result = await callKicadScript("import_jlcpcb_symbol", args);
+      return formatKicadResult(result);
+    },
+  );
+
+  // Batch-import multiple LCSC/JLCPCB parts (pre-cache a whole BOM)
+  server.tool(
+    "import_jlcpcb_symbols",
+    `Batch version of import_jlcpcb_symbol: pre-generate KiCAD symbols + footprints for a list of LCSC parts in one call.
+
+Use this to pre-cache a whole BOM up front (during planning) so every part's symbol is ready in the shared "easyeda" library before you start placing — no per-part network wait later. Each id is imported independently: one bad/discontinued id never aborts the rest, already-cached parts are skipped without a network call, and duplicates are processed once.
+
+The response reports requested/imported/cached/failed counts, a "failures" list, and a per-part "results" array (each with status imported|cached|failed and, on success, the symbol name + lib_id). success is true when at least one part was obtained; all_succeeded is true only when nothing failed. Place each part with add_schematic_component(library="easyeda", componentName=<results[i].symbol>).
+
+Requires the easyeda2kicad package and network access to EasyEDA.`,
+    {
+      lcsc_numbers: z
+        .array(z.string())
+        .min(1)
+        .describe('LCSC part numbers, e.g. ["C7593", "C12087", "C105601"]'),
+      forceRefresh: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Re-fetch and overwrite parts already in the cache library"),
+    },
+    async (args: { lcsc_numbers: string[]; forceRefresh?: boolean }) => {
+      const result = await callKicadScript("import_jlcpcb_symbols", args);
+      return formatKicadResult(result);
     },
   );
 }

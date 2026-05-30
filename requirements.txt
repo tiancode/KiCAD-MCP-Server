@@ -26,5 +26,10 @@ pydantic>=2.5.0
 # HTTP requests (for JLCPCB/Digikey APIs - future)
 requests>=2.32.5
 
+# LCSC/JLCPCB part → KiCAD symbol+footprint generation (import_jlcpcb_symbol).
+# Invoked as `python -m easyeda2kicad`; must be installed in the same
+# interpreter that runs kicad_interface.py.
+easyeda2kicad>=1.0.0
+
 # Environment variable management
 python-dotenv>=1.0.0

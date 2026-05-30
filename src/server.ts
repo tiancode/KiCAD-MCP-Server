@@ -950,6 +950,11 @@ export class KiCADMcpServer {
         "search_symbols",
         "list_symbol_libraries",
         "list_symbols",
+        // Downloads the JLCPCB catalog / fetches a part from EasyEDA over the
+        // network — can exceed 30s.
+        "download_jlcpcb_database",
+        "import_jlcpcb_symbol",
+        "import_jlcpcb_symbols",
       ];
       if (longRunningCommands.includes(command)) {
         commandTimeout = 600000; // 10 minutes for long operations

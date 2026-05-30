@@ -317,6 +317,8 @@ class KiCADInterface(BoardPersistenceMixin):
         "download_jlcpcb_database": "jlcpcb",
         "get_jlcpcb_database_stats": "jlcpcb",
         "get_jlcpcb_part": "jlcpcb",
+        "import_jlcpcb_symbol": "jlcpcb",
+        "import_jlcpcb_symbols": "jlcpcb",
         "search_jlcpcb_parts": "jlcpcb",
         "suggest_jlcpcb_alternatives": "jlcpcb",
         "create_project": "project",

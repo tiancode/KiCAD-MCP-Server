@@ -164,3 +164,70 @@ def handle_suggest_jlcpcb_alternatives(
     except Exception as e:
         logger.error(f"Error suggesting alternatives: {e}", exc_info=True)
         return {"success": False, "message": f"Failed to suggest alternatives: {str(e)}"}
+
+
+def handle_import_jlcpcb_symbol(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a KiCAD symbol + footprint for an LCSC/JLCPCB part.
+
+    Closes the gap where the other JLCPCB tools only return database metadata:
+    uses easyeda2kicad to fetch the part by LCSC number and writes a real
+    .kicad_sym + .pretty into the shared cache library, registered under the
+    nickname "easyeda" so add_schematic_component can place it. Does NOT need
+    iface.jlcpcb_parts — it talks to EasyEDA directly via the LCSC id.
+    """
+    logger.info("Importing JLCPCB/LCSC symbol via easyeda2kicad")
+    try:
+        from commands import easyeda_import
+
+        lcsc_number = params.get("lcsc_number") or params.get("lcsc")
+        if not lcsc_number:
+            return {"success": False, "message": "Missing lcsc_number parameter (e.g. C7593)"}
+        overwrite = bool(params.get("forceRefresh", False))
+
+        try:
+            return easyeda_import.import_lcsc_part(lcsc_number, overwrite=overwrite)
+        except (easyeda_import.EasyEdaImportError, ValueError) as e:
+            return {"success": False, "message": str(e)}
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Error importing JLCPCB symbol: {e}", exc_info=True)
+        return {
+            "success": False,
+            "message": f"Failed to import symbol: {str(e)}",
+            "errorDetails": traceback.format_exc(),
+        }
+
+
+def handle_import_jlcpcb_symbols(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Batch-import a list of LCSC/JLCPCB parts as KiCAD symbols + footprints.
+
+    Pre-warms the shared "easyeda" cache for a whole BOM in one call so the
+    symbols are ready before placement. Each id is imported independently —
+    one bad id never aborts the rest, and already-cached parts are skipped
+    without a network call.
+    """
+    logger.info("Batch-importing JLCPCB/LCSC symbols via easyeda2kicad")
+    try:
+        from commands import easyeda_import
+
+        lcsc_numbers = params.get("lcsc_numbers") or params.get("lcsc")
+        if isinstance(lcsc_numbers, str):
+            lcsc_numbers = [lcsc_numbers]
+        if not lcsc_numbers or not isinstance(lcsc_numbers, list):
+            return {
+                "success": False,
+                "message": "Provide lcsc_numbers as a non-empty list (e.g. ['C7593', 'C12087'])",
+            }
+        overwrite = bool(params.get("forceRefresh", False))
+
+        return easyeda_import.import_lcsc_parts(lcsc_numbers, overwrite=overwrite)
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Error batch-importing JLCPCB symbols: {e}", exc_info=True)
+        return {
+            "success": False,
+            "message": f"Failed to import symbols: {str(e)}",
+            "errorDetails": traceback.format_exc(),
+        }
