@@ -294,6 +294,116 @@ class TestCreateComponentInstanceSubSheet:
 
 
 # ---------------------------------------------------------------------------
+# S-expression string escaping — values with quotes / parens / backslashes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestComponentValueEscaping:
+    """A component value with an unescaped double-quote corrupted the whole
+    .kicad_sch.
+
+    Reproduces the field bug: placing a connector with value
+    ``2.9" EPD FPC (24P)`` wrote a raw ``"`` into ``(property "Value" "...")``,
+    which opened a second string and left the file with an odd number of
+    quotes.  KiCad/kicad-cli then refused to load it ("failed to load
+    schematic") and every sexpdata-based reader failed with
+    ``'NoneType' object has no attribute 'start'``.  create_component_instance
+    must escape every user-controlled value before interpolating it.
+    """
+
+    def setup_method(self) -> None:
+        from commands.dynamic_symbol_loader import DynamicSymbolLoader
+
+        self.DynamicSymbolLoader = DynamicSymbolLoader
+
+    def _loader(self) -> Any:
+        return self.DynamicSymbolLoader()
+
+    def _place_and_load(self, sch: Path, **kwargs: Any) -> Any:
+        """Place a component and return the sexpdata-parsed schematic."""
+        import sexpdata
+
+        self._loader().create_component_instance(sch, "Device", "R", **kwargs)
+        return sexpdata.loads(sch.read_text(encoding="utf-8"))
+
+    def _instance_props(self, parsed: Any) -> dict:
+        """Collect {name: value} from the placed (symbol ...) instance's properties."""
+        import sexpdata
+
+        props: dict = {}
+        for item in parsed[1:]:
+            if not (isinstance(item, list) and item and item[0] == sexpdata.Symbol("symbol")):
+                continue
+            # Only the placed instance carries (lib_id ...); skip lib_symbols.
+            if not any(
+                isinstance(s, list) and s and s[0] == sexpdata.Symbol("lib_id") for s in item
+            ):
+                continue
+            for sub in item:
+                if (
+                    isinstance(sub, list)
+                    and len(sub) >= 3
+                    and sub[0] == sexpdata.Symbol("property")
+                ):
+                    props[str(sub[1])] = str(sub[2])
+        return props
+
+    def test_value_with_unescaped_quote_keeps_file_loadable(self, tmp_path: Any) -> None:
+        sch = tmp_path / "test.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        # The exact failing value from the field report.
+        parsed = self._place_and_load(sch, reference="J1", value='2.9" EPD FPC (24P)', x=10, y=10)
+        assert isinstance(parsed, list)
+        # The value round-trips verbatim once unescaped by the parser.
+        assert self._instance_props(parsed)["Value"] == '2.9" EPD FPC (24P)'
+
+    def test_quotes_in_file_are_backslash_escaped(self, tmp_path: Any) -> None:
+        import re
+
+        sch = tmp_path / "test.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        self._loader().create_component_instance(
+            sch, "Device", "R", reference="J1", value='2.9" EPD', x=10, y=10
+        )
+        text = sch.read_text(encoding="utf-8")
+        # Every string is closed: an even number of *unescaped* quotes.  A
+        # naive count would include the escaped quote and read odd.
+        assert len(re.findall(r'(?<!\\)"', text)) % 2 == 0
+        # The literal quote in the value is escaped, not raw.
+        assert '2.9\\" EPD' in text
+
+    def test_reference_and_footprint_quotes_escaped(self, tmp_path: Any) -> None:
+        sch = tmp_path / "test.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        parsed = self._place_and_load(
+            sch,
+            reference='R"1',
+            value="10k",
+            footprint='Lib:Foo"Bar',
+            x=10,
+            y=10,
+        )
+        props = self._instance_props(parsed)
+        assert props["Reference"] == 'R"1'
+        assert props["Footprint"] == 'Lib:Foo"Bar'
+
+    def test_backslash_in_value_is_escaped(self, tmp_path: Any) -> None:
+        sch = tmp_path / "test.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        parsed = self._place_and_load(sch, reference="R1", value="path\\to\\thing", x=10, y=10)
+        assert self._instance_props(parsed)["Value"] == "path\\to\\thing"
+
+    def test_validation_guard_rejects_unparseable_content(self) -> None:
+        """The defence-in-depth guard turns a malformed write into a clear
+        error instead of committing an unloadable file."""
+        from commands.dynamic_symbol_loader import DynamicSymbolLoader
+
+        with pytest.raises(ValueError, match="unparseable"):
+            DynamicSymbolLoader._validate_schematic_text('(kicad_sch (property "x" "y)', "R1")
+
+
+# ---------------------------------------------------------------------------
 # Mirror parameter — known gap
 # ---------------------------------------------------------------------------
 

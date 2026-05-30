@@ -197,8 +197,9 @@ def _make_hierarchical_label_text(
     """
     uid = str(uuid.uuid4())
     justify = "right" if orientation == 180 else "left"
+    text_esc = text.replace("\\", "\\\\").replace('"', '\\"')
     return (
-        f'\t(hierarchical_label "{text}"\n'
+        f'\t(hierarchical_label "{text_esc}"\n'
         f"\t\t(shape {shape})\n"
         f"\t\t(at {position[0]} {position[1]} {orientation})\n"
         f"\t\t(effects\n"
@@ -224,8 +225,9 @@ def _make_sheet_pin_text(
     """
     uid = str(uuid.uuid4())
     justify = "left" if orientation == 0 else "right"
+    pin_name_esc = pin_name.replace("\\", "\\\\").replace('"', '\\"')
     return (
-        f'\t\t(pin "{pin_name}" {pin_type}\n'
+        f'\t\t(pin "{pin_name_esc}" {pin_type}\n'
         f"\t\t\t(at {position[0]} {position[1]} {orientation})\n"
         f'\t\t\t(uuid "{uid}")\n'
         f"\t\t\t(effects\n"

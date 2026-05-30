@@ -14,9 +14,23 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import sexpdata
 from commands.schematic_locks import atomic_write_text, serialize_on_path
 
 logger = logging.getLogger("kicad_interface")
+
+
+def _escape_sexpr_string(value: str) -> str:
+    """Escape a string for safe insertion into a double-quoted S-expression token.
+
+    Backslash first (so the quote-escape's backslash isn't doubled), then the
+    double-quote.  A user-supplied value like ``2.9" EPD FPC (24P)`` carries a
+    literal ``"`` that, written raw into ``(property "Value" "...")``, opens a
+    second string and corrupts the whole ``.kicad_sch`` — KiCad/kicad-cli then
+    refuse to load it and every sexpdata-based reader fails with
+    ``'NoneType' object has no attribute 'start'``.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 class DynamicSymbolLoader:
@@ -640,6 +654,26 @@ class DynamicSymbolLoader:
         logger.info(f"Injected symbol {full_name} into {sch_name}")
         return True
 
+    @staticmethod
+    def _validate_schematic_text(content: str, reference: str) -> None:
+        """Raise ValueError if ``content`` is not a parseable .kicad_sch.
+
+        A cheap, in-process guard (sexpdata parse only — never re-serialize, so
+        the on-disk formatting is untouched) that turns a would-be-corrupt write
+        into a clear error before it lands.  KiCad and every sexpdata-based read
+        tool reject a malformed schematic, so committing one returns a
+        misleading success and breaks the whole project.
+        """
+        try:
+            sexpdata.loads(content)
+        except Exception as e:
+            raise ValueError(
+                f"Refusing to write schematic: adding '{reference}' would produce "
+                f"an unparseable .kicad_sch ({type(e).__name__}: {e}). "
+                "This usually means a property value contains an unescaped "
+                "character; the file was left unchanged."
+            ) from e
+
     @serialize_on_path(1)
     def create_component_instance(
         self,
@@ -661,16 +695,27 @@ class DynamicSymbolLoader:
         full_lib_id = f"{library_name}:{symbol_name}"
         new_uuid = str(uuid.uuid4())
 
-        instance_block = f"""  (symbol (lib_id "{full_lib_id}") (at {x} {y} 0) (unit {unit})
+        # Escape every user-controlled value before it goes into the
+        # S-expression. A value like 2.9" EPD FPC (24P) carries a literal
+        # double-quote that would otherwise open a second string and corrupt
+        # the whole .kicad_sch (KiCad fails to load it; sexpdata readers throw
+        # 'NoneType' object has no attribute 'start'). lib_id/symbol_name come
+        # from library nicknames but are escaped too for defence in depth.
+        ref_esc = _escape_sexpr_string(str(reference))
+        value_esc = _escape_sexpr_string(str(value or symbol_name))
+        footprint_esc = _escape_sexpr_string(str(footprint))
+        lib_id_esc = _escape_sexpr_string(full_lib_id)
+
+        instance_block = f"""  (symbol (lib_id "{lib_id_esc}") (at {x} {y} 0) (unit {unit})
     (in_bom yes) (on_board yes) (dnp no)
     (uuid "{new_uuid}")
-    (property "Reference" "{reference}" (at {x} {y - 2.54} 0)
+    (property "Reference" "{ref_esc}" (at {x} {y - 2.54} 0)
       (effects (font (size 1.27 1.27)))
     )
-    (property "Value" "{value or symbol_name}" (at {x} {y + 2.54} 0)
+    (property "Value" "{value_esc}" (at {x} {y + 2.54} 0)
       (effects (font (size 1.27 1.27)))
     )
-    (property "Footprint" "{footprint}" (at {x} {y} 0)
+    (property "Footprint" "{footprint_esc}" (at {x} {y} 0)
       (effects (font (size 1.27 1.27)) (hide yes))
     )
     (property "Datasheet" "~" (at {x} {y} 0)
@@ -679,7 +724,7 @@ class DynamicSymbolLoader:
     (instances
       (project "project"
         (path "/"
-          (reference "{reference}")
+          (reference "{ref_esc}")
           (unit {unit})
         )
       )
@@ -704,6 +749,13 @@ class DynamicSymbolLoader:
             content = content[:insert_at] + instance_block + "\n" + content[insert_at:]
         else:
             content = content[:insert_at] + instance_block + "\n  " + content[insert_at:]
+
+        # Fail loudly rather than commit a schematic KiCad can't load. Parsing
+        # (not re-serializing) the assembled text catches any residual
+        # structural breakage — an unescaped value, a mis-nested injected
+        # symbol — before atomic_write replaces the file, so the handler can
+        # surface success:false instead of silently corrupting the design.
+        self._validate_schematic_text(content, reference)
 
         atomic_write_text(schematic_path, content)
 
