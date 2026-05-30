@@ -31,10 +31,8 @@ if sys.platform == "win32":
                 os.environ["PATH"] = _bin_dir + os.pathsep + _current_path
             break
 
-import sexpdata
 from annotations import AnnotationLoader
 from board_persistence import BoardPersistenceMixin
-from commands.wire_manager import WireManager
 from resources.resource_definitions import RESOURCE_DEFINITIONS, handle_resource_read
 
 # Import tool schemas, resource definitions, and IPC API annotations
@@ -125,7 +123,10 @@ utils_dir = os.path.join(os.path.dirname(__file__))
 if utils_dir not in sys.path:
     sys.path.insert(0, utils_dir)
 
-from utils.kicad_process import KiCADProcessManager, check_and_launch_kicad
+from utils.kicad_process import (  # noqa: F401  (check_and_launch_kicad exposed for tests/mock.patch)
+    KiCADProcessManager,
+    check_and_launch_kicad,
+)
 
 # Import platform helper and add KiCAD paths
 from utils.platform_helper import PlatformHelper
@@ -252,16 +253,20 @@ elif KICAD_BACKEND == "ipc" and not USE_IPC_BACKEND:
 # Import command handlers
 try:
     logger.info("Importing command handlers...")
+    # NOTE: some names here look "unused" to linters but are imported on purpose:
+    # this block fail-fast-validates that every command module imports at startup,
+    # and it exposes classes as ``kicad_interface.<Name>`` module attributes that
+    # tests/mock.patch target (e.g. SchematicManager, ConnectionManager).
+    # Do not prune these as unused imports.
     from commands.board import BoardCommands
     from commands.component import ComponentCommands
     from commands.component_schematic import ComponentManager
-    from commands.connection_schematic import ConnectionManager
+    from commands.connection_schematic import ConnectionManager  # noqa: F401
     from commands.datasheet_manager import DatasheetManager
     from commands.design_rules import DesignRuleCommands
     from commands.export import ExportCommands
     from commands.footprint import FootprintCreator
     from commands.freerouting import FreeroutingCommands
-    from commands.jlcpcb import JLCPCBClient, test_jlcpcb_connection
     from commands.jlcpcb_parts import JLCPCBPartsManager
     from commands.library import (
         LibraryCommands,
@@ -271,7 +276,7 @@ try:
     from commands.library_symbol import SymbolLibraryCommands, SymbolLibraryManager
     from commands.project import ProjectCommands
     from commands.routing import RoutingCommands
-    from commands.schematic import SchematicManager
+    from commands.schematic import SchematicManager  # noqa: F401
     from commands.symbol_creator import SymbolCreator
 
     logger.info("Successfully imported all command handlers")
@@ -506,11 +511,10 @@ class KiCADInterface(BoardPersistenceMixin):
         # Initialize symbol library manager (for searching local KiCad symbol libraries)
         self.symbol_library_commands = SymbolLibraryCommands()
 
-        # Initialize JLCPCB API integration
-        self.jlcpcb_client = JLCPCBClient()  # Official API (requires auth)
+        # Initialize JLCPCB parts integration (public JLCSearch API, no auth required)
         from commands.jlcsearch import JLCSearchClient
 
-        self.jlcsearch_client = JLCSearchClient()  # Public API (no auth required)
+        self.jlcsearch_client = JLCSearchClient()
         self.jlcpcb_parts = JLCPCBPartsManager()
 
         # Schematic-related classes don't need board reference

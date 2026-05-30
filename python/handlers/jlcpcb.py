@@ -41,7 +41,7 @@ def handle_download_jlcpcb_database(
 
         logger.info(f"Importing {len(parts)} parts into database...")
         iface.jlcpcb_parts.import_jlcsearch_parts(
-            parts, progress_callback=lambda curr, total, msg: logger.info(msg)
+            parts, progress_callback=lambda _curr, _total, msg: logger.info(msg)
         )
 
         stats = iface.jlcpcb_parts.get_database_stats()

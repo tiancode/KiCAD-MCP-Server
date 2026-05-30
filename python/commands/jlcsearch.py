@@ -7,7 +7,7 @@ jlcsearch service at https://jlcsearch.tscircuit.com/
 
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -26,7 +26,6 @@ class JLCSearchClient:
 
     def __init__(self) -> None:
         """Initialize JLCSearch API client"""
-        pass
 
     def search_components(
         self, category: str = "components", limit: int = 100, offset: int = 0, **filters: Dict
@@ -94,48 +93,6 @@ class JLCSearchClient:
             filters["package"] = package
 
         return self.search_components("resistors", limit=limit, **filters)
-
-    def search_capacitors(
-        self, capacitance: Optional[float] = None, package: Optional[str] = None, limit: int = 100
-    ) -> List[Dict]:
-        """
-        Search for capacitors
-
-        Args:
-            capacitance: Capacitance value in farads
-            package: Package type
-            limit: Maximum results
-
-        Returns:
-            List of capacitor dicts
-        """
-        filters: Dict[str, Any] = {}
-        if capacitance is not None:
-            filters["capacitance"] = capacitance
-        if package:
-            filters["package"] = package
-
-        return self.search_components("capacitors", limit=limit, **filters)
-
-    def get_part_by_lcsc(self, lcsc_number: int) -> Optional[Dict]:
-        """
-        Get part details by LCSC number
-
-        Args:
-            lcsc_number: LCSC number (integer, without 'C' prefix)
-
-        Returns:
-            Part dict or None if not found
-        """
-        # Search across all components filtering by LCSC
-        # Note: jlcsearch doesn't have a dedicated single-part endpoint
-        # so we search and filter
-        try:
-            results = self.search_components("components", limit=1, lcsc=lcsc_number)
-            return results[0] if results else None
-        except Exception as e:
-            logger.error(f"Failed to get part C{lcsc_number}: {e}")
-            return None
 
     def download_all_components(
         self, callback: Optional[Callable[[int, str], None]] = None, batch_size: int = 100

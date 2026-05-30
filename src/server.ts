@@ -260,7 +260,7 @@ function findPythonExecutable(scriptPath: string): string {
         logger.info(`Resolved system Python via which: ${result}`);
         return result;
       }
-    } catch (e) {
+    } catch {
       logger.warn("Failed to resolve python3 via which command");
     }
 

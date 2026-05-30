@@ -1,5 +1,4 @@
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -30,31 +29,6 @@ class ConnectionManager:
         if cls._pin_locator is None and WIRE_MANAGER_AVAILABLE:
             cls._pin_locator = PinLocator()
         return cls._pin_locator
-
-    @staticmethod
-    def add_net_label(schematic: Schematic, net_name: str, position: list) -> Any:
-        """
-        Add a net label to the schematic
-
-        Args:
-            schematic: Schematic object
-            net_name: Name of the net (e.g., "VCC", "GND", "SIGNAL_1")
-            position: [x, y] coordinates for the label
-
-        Returns:
-            Label object or None on error
-        """
-        try:
-            if not hasattr(schematic, "label"):
-                logger.error("Schematic does not have label collection")
-                return None
-
-            label = schematic.label.append(text=net_name, at={"x": position[0], "y": position[1]})
-            logger.info(f"Added net label '{net_name}' at {position}")
-            return label
-        except Exception as e:  # API boundary; bucket: catch + return
-            logger.exception(f"Error adding net label: {e}")
-            return None
 
     @staticmethod
     def connect_to_net(
@@ -358,7 +332,6 @@ class ConnectionManager:
                     except Exception as e:
                         logger.warning(f"Error matching pins for {ref}: {e}")
                         # Fall back to proximity matching
-                        pass
 
                 # Fallback: proximity-based matching if no PinLocator
                 if not locator or not schematic_path:

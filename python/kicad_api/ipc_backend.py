@@ -937,10 +937,6 @@ class IPCBoardAPI(BoardAPI):
 
             # Get the board file path from IPC to load via pcbnew
             board = self._get_board()
-
-            # Get the pcbnew board instance
-            # We need to get the actual board file path
-            project = board.get_project()
             board_path = None
 
             # Try to get the board path from kipy.  Docs expose
@@ -1503,7 +1499,7 @@ class IPCBoardAPI(BoardAPI):
         """
         try:
             from kipy.board_types import Zone, ZoneType
-            from kipy.geometry import PolyLine, PolyLineNode, Vector2
+            from kipy.geometry import PolyLine, PolyLineNode
             from kipy.proto.board.board_types_pb2 import BoardLayer, ZoneFillMode
             from kipy.util.units import from_mm
 
@@ -1585,8 +1581,6 @@ class IPCBoardAPI(BoardAPI):
     def get_zones(self) -> List[Dict[str, Any]]:
         """Get all zones on the board."""
         try:
-            from kipy.util.units import to_mm
-
             board = self._get_board()
             zones = board.get_zones()
 

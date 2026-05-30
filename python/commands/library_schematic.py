@@ -1,11 +1,7 @@
 import glob
 import logging
-
-# Symbol class might not be directly importable in the current version
 import os
 from typing import Any, Dict, List, Optional
-
-from skip import Schematic
 
 logger = logging.getLogger(__name__)
 
@@ -47,20 +43,6 @@ class LibraryManager:
         return {"paths": libraries, "names": library_names}
 
     @staticmethod
-    def get_symbol_details(library_path: str, symbol_name: str) -> Dict[str, Any]:
-        """Get detailed information about a symbol"""
-        try:
-            logger.warning(
-                f"Attempted to get details for symbol {symbol_name} in library {library_path}. This requires advanced implementation."
-            )
-            return {}
-        except (OSError, ValueError) as e:
-            logger.exception(
-                f"Error getting symbol details for {symbol_name} in {library_path}: {e}"
-            )
-            return {}
-
-    @staticmethod
     def search_symbols(query: str, search_paths: Optional[List[str]] = None) -> List[Any]:
         """Search for symbols matching criteria"""
         try:
@@ -70,8 +52,6 @@ class LibraryManager:
             # 3. Filtering symbols based on the query
 
             # For now, this is a placeholder implementation
-            libraries = LibraryManager.list_available_libraries(search_paths)
-
             results = []
             logger.warning(
                 f"Searched for symbols matching '{query}'. This requires advanced implementation."

@@ -4,7 +4,6 @@ Routing-related command implementations for KiCAD interface
 
 import logging
 import math
-import os
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -892,11 +891,6 @@ class RoutingCommands:
                 "message": "Failed to delete trace",
                 "errorDetails": str(e),
             }
-        return {
-            "success": False,
-            "message": "No action taken",
-            "errorDetails": "No matching trace found for given parameters",
-        }
 
     def get_nets_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get a list of all nets in the PCB"""
@@ -1355,9 +1349,6 @@ class RoutingCommands:
 
             offset_x = target_pos.x - source_pos.x
             offset_y = target_pos.y - source_pos.y
-
-            # Build mapping from source refs to target refs
-            ref_mapping = dict(zip(source_refs, target_refs))
 
             # Collect all nets connected to source components
             source_nets = set()

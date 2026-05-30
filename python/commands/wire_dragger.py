@@ -9,7 +9,6 @@ import math
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-import sexpdata
 from sexpdata import Symbol
 
 logger = logging.getLogger("kicad_interface")

@@ -12,7 +12,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import sexpdata
 from commands.schematic_locks import atomic_write_text, serialize_on_path

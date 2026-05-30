@@ -22,35 +22,6 @@ logger = logging.getLogger("kicad_interface")
 
 KICAD9_SYMBOL_LIB_VERSION = "20241209"
 
-# Pin electrical types
-PIN_TYPES = {
-    "input",
-    "output",
-    "bidirectional",
-    "tri_state",
-    "passive",
-    "free",
-    "unspecified",
-    "power_in",
-    "power_out",
-    "open_collector",
-    "open_emitter",
-    "no_connect",
-}
-
-# Pin graphic shapes
-PIN_SHAPES = {
-    "line",
-    "inverted",
-    "clock",
-    "inverted_clock",
-    "input_low",
-    "clock_low",
-    "output_low",
-    "falling_edge_clock",
-    "non_logic",
-}
-
 
 def _fmt(v: float) -> str:
     return f"{v:g}"

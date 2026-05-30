@@ -2,11 +2,9 @@
 Component-related command implementations for KiCAD interface
 """
 
-import base64
 import logging
 import math
-import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pcbnew
 from commands.library import LibraryManager
@@ -1089,16 +1087,7 @@ class ComponentCommands:
         """Place components in a grid pattern and return the list of placed components"""
         placed = []
 
-        # Convert spacing to nm
         unit = start_position.get("unit", "mm")
-        scale = (
-            1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
-        )  # mm, mil, or inch to nm
-        spacing_x_nm = int(spacing_x * scale)
-        spacing_y_nm = int(spacing_y * scale)
-
-        # Get layer ID
-        layer_id = self.board.GetLayerID(layer)
 
         for row in range(rows):
             for col in range(columns):

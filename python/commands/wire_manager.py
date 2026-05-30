@@ -48,8 +48,8 @@ _SYM_KICAD_SCH = Symbol("kicad_sch")
 _IU_PER_MM = 10000
 
 # Friendly aliases → the canonical KiCad element name.  The MCP schema only
-# advertises the three canonical names, but `execute_tool` passthrough and
-# direct Python calls bypass that validation, and a bare ``Symbol(label_type)``
+# advertises the three canonical names, but direct Python calls bypass that
+# validation, and a bare ``Symbol(label_type)``
 # would happily emit e.g. ``(global ...)`` — an element KiCad doesn't know,
 # which makes the parser reject the WHOLE schematic ("Failed to load
 # schematic").  Normalising here means a near-miss like "global" becomes a

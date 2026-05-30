@@ -2,10 +2,8 @@
 Export command implementations for KiCAD interface
 """
 
-import base64
 import logging
 import os
-import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -462,8 +460,6 @@ class ExportCommands:
 
     def export_3d(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export 3D model files using kicad-cli (KiCAD 9.0 compatible)"""
-        import platform
-        import shutil
         import subprocess
 
         try:

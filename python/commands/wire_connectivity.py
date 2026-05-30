@@ -823,39 +823,6 @@ def _discover_sub_sheets(schematic_path: str) -> List[str]:
     return result
 
 
-def _parse_hierarchical_labels_sexp(
-    schematic_path: str,
-) -> Dict[str, List[Tuple[int, int]]]:
-    """Parse hierarchical_label elements from a .kicad_sch file using sexpdata.
-
-    kicad-skip does not expose hierarchical labels, so we parse them directly.
-    Returns {label_name: [iu_position, ...]}.
-    """
-    result: Dict[str, List[Tuple[int, int]]] = {}
-    try:
-        with open(schematic_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        sexp = sexpdata.loads(content)
-    except Exception as e:
-        logger.warning(f"Could not parse {schematic_path} for hierarchical labels: {e}")
-        return result
-
-    for item in sexp:
-        if not isinstance(item, list) or not item:
-            continue
-        if item[0] != Symbol("hierarchical_label"):
-            continue
-        if len(item) < 2:
-            continue
-        name = str(item[1]).strip('"')
-        for sub in item:
-            if isinstance(sub, list) and sub and sub[0] == Symbol("at") and len(sub) >= 3:
-                pt = _to_iu(float(sub[1]), float(sub[2]))
-                result.setdefault(name, []).append(pt)
-                break
-    return result
-
-
 def _process_single_sheet(
     schematic: Any,
     schematic_path: str,

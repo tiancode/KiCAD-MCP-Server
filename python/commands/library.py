@@ -5,7 +5,6 @@ Handles parsing fp-lib-table files, discovering footprints,
 and providing search functionality for component placement.
 """
 
-import glob
 import logging
 import os
 import re
@@ -291,10 +290,6 @@ class LibraryManager:
     def list_libraries(self) -> List[str]:
         """Get list of available library nicknames"""
         return list(self.libraries.keys())
-
-    def get_library_path(self, nickname: str) -> Optional[str]:
-        """Get filesystem path for a library nickname"""
-        return self.libraries.get(nickname)
 
     def list_footprints(self, library_nickname: str) -> List[str]:
         """

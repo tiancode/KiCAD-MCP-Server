@@ -218,9 +218,8 @@ class SymbolLibraryManager:
                 logger.info(f"Loading project sym-lib-table from: {project_table}")
                 self._parse_sym_lib_table(project_table)
 
-        # Track which entries came from the table vs the directory-scan
-        # fallback so list_symbol_libraries can flag the latter to callers.
-        self._table_library_nicknames: set[str] = set(self.libraries.keys())
+        # Track which entries came from the directory-scan fallback (vs the
+        # sym-lib-table) so list_symbol_libraries can flag them to callers.
         self._fallback_library_nicknames: set[str] = set()
 
         # Fallback: when the sym-lib-table yields zero usable libraries
@@ -584,10 +583,6 @@ class SymbolLibraryManager:
             except OSError:
                 sig[str(path)] = -1
         return sig
-
-    def get_library_path(self, nickname: str) -> Optional[str]:
-        """Get filesystem path for a library nickname"""
-        return self.libraries.get(nickname)
 
     def list_symbols(self, library_nickname: str) -> List[SymbolInfo]:
         """
@@ -1324,8 +1319,6 @@ class SymbolLibraryCommands:
 
 if __name__ == "__main__":
     # Test the symbol library manager
-    import json
-
     logging.basicConfig(level=logging.INFO)
 
     manager = SymbolLibraryManager()

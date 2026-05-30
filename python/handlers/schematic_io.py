@@ -10,15 +10,11 @@ import json
 import logging
 import os
 import re
-import subprocess
-import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pcbnew  # type: ignore[import-not-found]
 import sexpdata
 from commands.schematic import SchematicManager
-from commands.wire_manager import WireManager
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface

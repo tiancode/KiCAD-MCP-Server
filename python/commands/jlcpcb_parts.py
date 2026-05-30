@@ -7,10 +7,8 @@ and component selection.
 
 import json
 import logging
-import os
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from utils.platform_helper import PlatformHelper
@@ -91,85 +89,6 @@ class JLCPCBPartsManager:
 
         self.conn.commit()
         logger.info(f"Initialized JLCPCB parts database at {self.db_path}")
-
-    def import_parts(
-        self, parts: List[Dict], progress_callback: Optional[Callable[..., Any]] = None
-    ) -> None:
-        """
-        Import parts into database from JLCPCB API response
-
-        Args:
-            parts: List of part dicts from JLCPCB API
-            progress_callback: Optional callback(current, total, message)
-        """
-        cursor = self.conn.cursor()
-        imported = 0
-        skipped = 0
-
-        for i, part in enumerate(parts):
-            try:
-                # Extract price breaks
-                price_json = json.dumps(part.get("prices", []))
-
-                # Determine library type
-                library_type = self._determine_library_type(part)
-
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO components (
-                        lcsc, category, subcategory, mfr_part, package,
-                        solder_joints, manufacturer, library_type, description,
-                        datasheet, stock, price_json, last_updated
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        part.get("componentCode"),  # lcsc
-                        part.get("firstSortName"),  # category
-                        part.get("secondSortName"),  # subcategory
-                        part.get("componentModelEn"),  # mfr_part
-                        part.get("componentSpecificationEn"),  # package
-                        part.get("soldPoint"),  # solder_joints
-                        part.get("componentBrandEn"),  # manufacturer
-                        library_type,  # library_type
-                        part.get("describe"),  # description
-                        part.get("dataManualUrl"),  # datasheet
-                        part.get("stockCount", 0),  # stock
-                        price_json,  # price_json
-                        int(datetime.now().timestamp()),  # last_updated
-                    ),
-                )
-
-                imported += 1
-
-                if progress_callback and (i + 1) % 1000 == 0:
-                    progress_callback(i + 1, len(parts), f"Imported {imported} parts...")
-
-            except Exception as e:
-                logger.error(f"Error importing part {part.get('componentCode')}: {e}")
-                skipped += 1
-
-        # Update FTS index
-        cursor.execute("""
-            INSERT INTO components_fts(components_fts, rowid, lcsc, description, mfr_part, manufacturer)
-            SELECT 'rebuild', rowid, lcsc, description, mfr_part, manufacturer FROM components
-        """)
-
-        self.conn.commit()
-        logger.info(f"Import complete: {imported} parts imported, {skipped} skipped")
-
-    def _determine_library_type(self, part: Dict) -> str:
-        """Determine if part is Basic, Extended, or Preferred"""
-        # JLCPCB API should provide this, but if not, we infer from assembly type
-        assembly_type = part.get("assemblyType", "")
-
-        if "Basic" in assembly_type or part.get("libraryType") == "base":
-            return "Basic"
-        elif "Extended" in assembly_type:
-            return "Extended"
-        elif "Prefer" in assembly_type:
-            return "Preferred"
-        else:
-            return "Extended"  # Default to Extended
 
     def import_jlcsearch_parts(
         self, parts: List[Dict], progress_callback: Optional[Callable[..., Any]] = None
