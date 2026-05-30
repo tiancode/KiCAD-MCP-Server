@@ -799,7 +799,10 @@ def handle_add_mounting_hole(iface: "KiCADInterface", params: Dict[str, Any]) ->
         # Create circle on Edge.Cuts layer for the hole
         circle = BoardCircle()
         circle.center = Vector2.from_xy(from_mm(x), from_mm(y))
-        circle.radius = from_mm(diameter / 2)
+        # radius is given as a "point on the circle" in kipy (radius is a
+        # read-only computed method, not a settable attribute) — pick a
+        # canonical point to the right of centre.
+        circle.radius_point = Vector2.from_xy(from_mm(x + diameter / 2), from_mm(y))
         circle.layer = BoardLayer.BL_Edge_Cuts
         circle.attributes.stroke.width = from_mm(0.1)
 
