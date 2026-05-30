@@ -218,8 +218,7 @@ class SymbolLibraryManager:
                 logger.info(f"Loading project sym-lib-table from: {project_table}")
                 self._parse_sym_lib_table(project_table)
 
-        # Track which entries came from the directory-scan fallback (vs the
-        # sym-lib-table) so list_symbol_libraries can flag them to callers.
+        # Directory-scan fallback entries (vs sym-lib-table); list_symbol_libraries flags these.
         self._fallback_library_nicknames: set[str] = set()
 
         # Fallback: when the sym-lib-table yields zero usable libraries

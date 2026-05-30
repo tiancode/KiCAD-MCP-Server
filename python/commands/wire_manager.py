@@ -47,13 +47,10 @@ _SYM_UNIT = Symbol("unit")
 _SYM_KICAD_SCH = Symbol("kicad_sch")
 _IU_PER_MM = 10000
 
-# Friendly aliases → the canonical KiCad element name.  The MCP schema only
-# advertises the three canonical names, but direct Python calls bypass that
-# validation, and a bare ``Symbol(label_type)``
-# would happily emit e.g. ``(global ...)`` — an element KiCad doesn't know,
-# which makes the parser reject the WHOLE schematic ("Failed to load
-# schematic").  Normalising here means a near-miss like "global" becomes a
-# valid ``global_label`` instead of silently corrupting the file.
+# Friendly aliases → the canonical KiCad element name. The MCP schema advertises
+# only the three canonical names, but direct Python calls bypass that check, and a
+# bare ``Symbol(bad_type)`` emits e.g. ``(global ...)`` — an element KiCad rejects,
+# breaking the WHOLE schematic. Normalising a near-miss like "global" avoids that.
 _LABEL_TYPE_ALIASES = {
     "label": "label",
     "local": "label",

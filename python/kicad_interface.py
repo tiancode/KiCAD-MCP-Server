@@ -253,11 +253,9 @@ elif KICAD_BACKEND == "ipc" and not USE_IPC_BACKEND:
 # Import command handlers
 try:
     logger.info("Importing command handlers...")
-    # NOTE: some names here look "unused" to linters but are imported on purpose:
-    # this block fail-fast-validates that every command module imports at startup,
-    # and it exposes classes as ``kicad_interface.<Name>`` module attributes that
-    # tests/mock.patch target (e.g. SchematicManager, ConnectionManager).
-    # Do not prune these as unused imports.
+    # Some names look unused but are intentional: this block fail-fast-validates
+    # every command module at import, and exposes classes as kicad_interface.<Name>
+    # attributes that tests mock.patch (SchematicManager, ConnectionManager). Keep.
     from commands.board import BoardCommands
     from commands.component import ComponentCommands
     from commands.component_schematic import ComponentManager
