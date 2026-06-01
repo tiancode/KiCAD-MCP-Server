@@ -10,8 +10,11 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import requests
+from commands.datasheet_manager import DatasheetManager
 from utils.platform_helper import PlatformHelper
 
 logger = logging.getLogger("kicad_interface")
@@ -205,13 +208,35 @@ class JLCPCBPartsManager:
 
                 description = part.get("description", " ".join(description_parts))
 
+                # UPSERT (not INSERT OR REPLACE): JLCSearch carries no
+                # datasheet, but the full JLCPCB dump does — a plain REPLACE
+                # would wipe the ~87% of CDN links already in the DB on every
+                # re-import. Keep the existing datasheet whenever the incoming
+                # row's is blank.
                 cursor.execute(
                     """
-                    INSERT OR REPLACE INTO components (
+                    INSERT INTO components (
                         lcsc, category, subcategory, mfr_part, package,
                         solder_joints, manufacturer, library_type, description,
                         datasheet, stock, price_json, last_updated
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(lcsc) DO UPDATE SET
+                        category=excluded.category,
+                        subcategory=excluded.subcategory,
+                        mfr_part=excluded.mfr_part,
+                        package=excluded.package,
+                        solder_joints=excluded.solder_joints,
+                        manufacturer=excluded.manufacturer,
+                        library_type=excluded.library_type,
+                        description=excluded.description,
+                        datasheet=CASE
+                            WHEN excluded.datasheet IS NOT NULL AND excluded.datasheet != ''
+                            THEN excluded.datasheet
+                            ELSE components.datasheet
+                        END,
+                        stock=excluded.stock,
+                        price_json=excluded.price_json,
+                        last_updated=excluded.last_updated
                 """,
                     (
                         lcsc,  # lcsc with C prefix
@@ -223,7 +248,7 @@ class JLCPCBPartsManager:
                         part.get("manufacturer", ""),  # manufacturer
                         library_type,  # library_type
                         description,  # description
-                        "",  # datasheet (not in jlcsearch)
+                        part.get("datasheet") or "",  # datasheet (blank from jlcsearch)
                         part.get("stock", 0),  # stock
                         price_json,  # price_json
                         int(datetime.now().timestamp()),  # last_updated
@@ -675,6 +700,100 @@ class JLCPCBPartsManager:
         alternatives.sort(key=sort_key)
 
         return alternatives[:limit]
+
+    def download_datasheet(
+        self,
+        lcsc_number: str,
+        output_dir: Optional[str] = None,
+        overwrite: bool = False,
+        timeout: float = 60.0,
+    ) -> Dict[str, Any]:
+        """Download a part's datasheet PDF to disk.
+
+        Resolves the URL from the local DB's ``datasheet`` column first — the
+        JLCPCB CDN direct link present for ~87% of parts in the full dump —
+        and falls back to the constructed LCSC URL
+        (``https://www.lcsc.com/datasheet/<lcsc>.pdf``) when the column is
+        blank. Streams the body to ``<output_dir>/<lcsc>.pdf`` (default
+        ``<data-dir>/datasheets/``) and verifies the ``%PDF`` magic bytes
+        before keeping the file, so an HTML error page or dead link fails
+        loudly instead of leaving a bogus ``.pdf``.
+
+        Args:
+            lcsc_number: LCSC part number (``C25804``, ``25804`` or ``c25804``).
+            output_dir: Destination directory; created if missing.
+            overwrite: Re-download even if a non-empty file already exists.
+            timeout: Per-request network timeout in seconds.
+
+        Returns:
+            ``{"success": True, "lcsc", "path", "url", "bytes", "source"}``
+            where ``source`` is ``db`` / ``lcsc_fallback`` / ``cached``, or
+            ``{"success": False, "message", ...}`` on any failure.
+        """
+        norm = DatasheetManager._normalize_lcsc(lcsc_number)
+        if not norm:
+            return {"success": False, "message": f"Invalid LCSC number: {lcsc_number}"}
+
+        # Prefer the stored CDN link; fall back to the constructed LCSC URL.
+        part = self.get_part_info(norm)
+        url = (part or {}).get("datasheet") or ""
+        source = "db"
+        if not url:
+            url = DatasheetManager().get_datasheet_url(norm) or ""
+            source = "lcsc_fallback"
+        if not url:
+            return {"success": False, "message": f"No datasheet URL available for {norm}"}
+
+        dest_dir = Path(output_dir) if output_dir else PlatformHelper.get_data_dir() / "datasheets"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{norm}.pdf"
+
+        if dest.exists() and dest.stat().st_size > 0 and not overwrite:
+            return {
+                "success": True,
+                "lcsc": norm,
+                "path": str(dest),
+                "url": url,
+                "bytes": dest.stat().st_size,
+                "source": "cached",
+            }
+
+        # Stream to a sidecar temp file so a failed download never clobbers a
+        # previously-good PDF; promote it only after the magic-byte check.
+        tmp = dest.with_name(dest.name + ".part")
+        try:
+            with requests.get(url, stream=True, timeout=timeout) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if chunk:
+                            fh.write(chunk)
+        except requests.exceptions.RequestException as e:
+            tmp.unlink(missing_ok=True)
+            return {"success": False, "message": f"Download failed for {norm}: {e}", "url": url}
+
+        with open(tmp, "rb") as fh:
+            head = fh.read(5)
+        if not head.startswith(b"%PDF"):
+            tmp.unlink(missing_ok=True)
+            return {
+                "success": False,
+                "message": (
+                    f"Downloaded file for {norm} is not a PDF (got {head!r}); "
+                    "the datasheet link may be dead or region-blocked."
+                ),
+                "url": url,
+            }
+
+        tmp.replace(dest)
+        return {
+            "success": True,
+            "lcsc": norm,
+            "path": str(dest),
+            "url": url,
+            "bytes": dest.stat().st_size,
+            "source": source,
+        }
 
     def close(self) -> None:
         """Close database connection"""

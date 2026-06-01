@@ -132,6 +132,25 @@ def handle_get_jlcpcb_database_stats(
         return {"success": False, "message": f"Failed to get stats: {str(e)}"}
 
 
+def handle_download_jlcpcb_datasheet(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Download a JLCPCB/LCSC part's datasheet PDF to disk."""
+    try:
+        lcsc_number = params.get("lcsc_number") or params.get("lcsc")
+        if not lcsc_number:
+            return {"success": False, "message": "Missing lcsc_number parameter (e.g. C25804)"}
+
+        return iface.jlcpcb_parts.download_datasheet(
+            lcsc_number,
+            output_dir=params.get("output_dir"),
+            overwrite=bool(params.get("overwrite", False)),
+        )
+    except Exception as e:
+        logger.error(f"Error downloading datasheet: {e}", exc_info=True)
+        return {"success": False, "message": f"Failed to download datasheet: {str(e)}"}
+
+
 def handle_suggest_jlcpcb_alternatives(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:

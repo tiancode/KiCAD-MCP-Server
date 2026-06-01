@@ -226,6 +226,62 @@ MATCHING — read this, it changes how you should call the tool:
     },
   );
 
+  // Download a part's datasheet PDF
+  server.tool(
+    "download_jlcpcb_datasheet",
+    `Download a JLCPCB/LCSC part's datasheet PDF to disk by LCSC number.
+
+Resolves the URL from the local database's stored JLCPCB CDN link (present for ~87% of parts after download_jlcpcb_database) and falls back to the constructed LCSC URL (https://www.lcsc.com/datasheet/<lcsc>.pdf) when no stored link exists. The file is verified to be a real PDF (%PDF magic) before it is kept.
+
+Saves to <output_dir>/<lcsc>.pdf (default: the kicad-mcp data dir's datasheets/ folder). Idempotent: an existing non-empty file is returned as-is unless overwrite=true. Requires network access; returns the saved path, source URL, size in bytes, and source (db | lcsc_fallback | cached).`,
+    {
+      lcsc_number: z.string().describe("LCSC part number (e.g., 'C25804', 'C2286')"),
+      output_dir: z
+        .string()
+        .optional()
+        .describe("Directory to save the PDF into (created if missing). Defaults to the data dir."),
+      overwrite: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Re-download even if a non-empty file already exists"),
+    },
+    async (args: { lcsc_number: string; output_dir?: string; overwrite?: boolean }) => {
+      const result = await callKicadScript("download_jlcpcb_datasheet", args);
+      if (result.success) {
+        const kb = result.bytes ? ` (${(result.bytes / 1024).toFixed(0)} KB)` : "";
+        const srcNote =
+          result.source === "cached"
+            ? " [already cached]"
+            : result.source === "lcsc_fallback"
+              ? " [via lcsc.com fallback]"
+              : "";
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `✓ Datasheet for ${result.lcsc} saved${srcNote}${kb}\n\n` +
+                `Path: ${result.path}\n` +
+                `Source URL: ${result.url}`,
+            },
+          ],
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `✗ Failed to download datasheet: ${result.message || "Unknown error"}` +
+              (result.url ? `\n\nURL tried: ${result.url}` : ""),
+          },
+        ],
+        isError: true,
+      };
+    },
+  );
+
   // Get JLCPCB database statistics
   server.tool(
     "get_jlcpcb_database_stats",

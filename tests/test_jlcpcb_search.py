@@ -16,6 +16,7 @@ import pytest
 PYTHON_DIR = Path(__file__).parent.parent / "python"
 sys.path.insert(0, str(PYTHON_DIR))
 
+from commands import jlcpcb_parts  # noqa: E402
 from commands.jlcpcb_parts import JLCPCBPartsManager  # noqa: E402
 
 # (lcsc, mfr_part, package, library_type, description, stock)
@@ -208,3 +209,133 @@ def test_importer_writes_clean_price_json(tmp_path):
     part = mgr.get_part_info("C9865")
     assert part["price_breaks"] == [{"qty": 1, "price": 0.396}]
     mgr.close()
+
+
+def test_importer_preserves_existing_datasheet(tmp_path):
+    """A re-import from JLCSearch (no datasheet) must NOT wipe a stored URL."""
+    mgr = JLCPCBPartsManager(db_path=str(tmp_path / "ds.db"))
+    cdn = "https://jlcpcb.com/api/file/downloadByFileSystemAccessId/999"
+    mgr.conn.execute(
+        "INSERT INTO components (lcsc, datasheet, stock, price_json) VALUES (?, ?, ?, ?)",
+        ("C9865", cdn, 5, "[]"),
+    )
+    mgr.conn.commit()
+    # JLCSearch payload carries no datasheet field.
+    mgr.import_jlcsearch_parts(
+        [{"lcsc": 9865, "mfr": "TPS54331DR", "package": "SOIC-8", "is_basic": True, "stock": 100}]
+    )
+    part = mgr.get_part_info("C9865")
+    assert part["datasheet"] == cdn  # preserved
+    assert part["stock"] == 100  # other columns still updated
+    assert part["library_type"] == "Basic"
+    mgr.close()
+
+
+# --- download_datasheet ----------------------------------------------------
+
+
+class _FakeResponse:
+    """Minimal stand-in for a streaming ``requests`` response."""
+
+    def __init__(self, body: bytes, status: int = 200):
+        self._body = body
+        self.status_code = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise jlcpcb_parts.requests.exceptions.HTTPError(f"status {self.status_code}")
+
+    def iter_content(self, chunk_size=65536):
+        for i in range(0, len(self._body), chunk_size):
+            yield self._body[i : i + chunk_size]
+
+
+def _patch_get(monkeypatch, body, capture=None):
+    def _fake_get(url, stream=False, timeout=None):
+        if capture is not None:
+            capture["url"] = url
+        return _FakeResponse(body)
+
+    monkeypatch.setattr(jlcpcb_parts.requests, "get", _fake_get)
+
+
+def test_download_datasheet_from_db_url(manager, tmp_path, monkeypatch):
+    manager.conn.execute(
+        "UPDATE components SET datasheet = ? WHERE lcsc = ?",
+        ("https://jlcpcb.com/api/file/downloadByFileSystemAccessId/123", "C9865"),
+    )
+    manager.conn.commit()
+    body = b"%PDF-1.7\nhello"
+    _patch_get(monkeypatch, body)
+    out = manager.download_datasheet("C9865", output_dir=str(tmp_path))
+    assert out["success"] is True
+    assert out["source"] == "db"
+    assert out["lcsc"] == "C9865"
+    assert out["bytes"] == len(body)
+    saved = Path(out["path"])
+    assert saved.read_bytes().startswith(b"%PDF")
+    assert not (tmp_path / "C9865.pdf.part").exists()  # temp promoted, not left behind
+
+
+def test_download_datasheet_falls_back_to_lcsc_url(manager, tmp_path, monkeypatch):
+    # C0 has no datasheet column → constructed lcsc.com URL is used.
+    capture = {}
+    _patch_get(monkeypatch, b"%PDF-1.5 data", capture=capture)
+    out = manager.download_datasheet("C0", output_dir=str(tmp_path))
+    assert out["success"] is True
+    assert out["source"] == "lcsc_fallback"
+    assert capture["url"] == "https://www.lcsc.com/datasheet/C0.pdf"
+
+
+def test_download_datasheet_uses_cache(manager, tmp_path, monkeypatch):
+    (tmp_path / "C9865.pdf").write_bytes(b"%PDF cached")
+
+    def _boom(*a, **k):
+        raise AssertionError("network must not be hit for a cached file")
+
+    monkeypatch.setattr(jlcpcb_parts.requests, "get", _boom)
+    out = manager.download_datasheet("C9865", output_dir=str(tmp_path))
+    assert out["success"] is True
+    assert out["source"] == "cached"
+    assert out["bytes"] == len(b"%PDF cached")
+
+
+def test_download_datasheet_overwrite_refetches(manager, tmp_path, monkeypatch):
+    dest = tmp_path / "C9865.pdf"
+    dest.write_bytes(b"%PDF old")
+    _patch_get(monkeypatch, b"%PDF new bytes")
+    out = manager.download_datasheet("C9865", output_dir=str(tmp_path), overwrite=True)
+    assert out["success"] is True
+    assert dest.read_bytes() == b"%PDF new bytes"
+
+
+def test_download_datasheet_rejects_non_pdf(manager, tmp_path, monkeypatch):
+    _patch_get(monkeypatch, b"<html>error</html>")
+    out = manager.download_datasheet("C9865", output_dir=str(tmp_path))
+    assert out["success"] is False
+    assert "not a PDF" in out["message"]
+    assert not (tmp_path / "C9865.pdf").exists()  # bogus file not kept
+    assert not (tmp_path / "C9865.pdf.part").exists()  # temp cleaned up
+
+
+def test_download_datasheet_invalid_lcsc(manager, tmp_path):
+    out = manager.download_datasheet("not-a-part", output_dir=str(tmp_path))
+    assert out["success"] is False
+    assert "Invalid LCSC" in out["message"]
+
+
+def test_download_datasheet_network_error_cleans_up(manager, tmp_path, monkeypatch):
+    def _fake_get(url, stream=False, timeout=None):
+        raise jlcpcb_parts.requests.exceptions.ConnectionError("boom")
+
+    monkeypatch.setattr(jlcpcb_parts.requests, "get", _fake_get)
+    out = manager.download_datasheet("C9865", output_dir=str(tmp_path))
+    assert out["success"] is False
+    assert "Download failed" in out["message"]
+    assert not (tmp_path / "C9865.pdf.part").exists()

@@ -318,6 +318,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "ipc_list_components": "ipc",
         "ipc_save_board": "ipc",
         "download_jlcpcb_database": "jlcpcb",
+        "download_jlcpcb_datasheet": "jlcpcb",
         "get_jlcpcb_database_stats": "jlcpcb",
         "get_jlcpcb_part": "jlcpcb",
         "import_jlcpcb_symbol": "jlcpcb",
