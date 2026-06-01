@@ -68,21 +68,24 @@ def handle_search_jlcpcb_parts(iface: "KiCADInterface", params: Dict[str, Any]) 
         package = params.get("package")
         library_type = params.get("library_type", "All")
         manufacturer = params.get("manufacturer")
+        mpn = params.get("mpn")
         in_stock = params.get("in_stock", True)
         limit = params.get("limit", 20)
 
         if library_type == "All":
             library_type = None
 
-        parts = iface.jlcpcb_parts.search_parts(
+        result = iface.jlcpcb_parts.search_parts_meta(
             query=query,
             category=category,
             package=package,
             library_type=library_type,
             manufacturer=manufacturer,
+            mpn=mpn,
             in_stock=in_stock,
             limit=limit,
         )
+        parts = result["parts"]
 
         for part in parts:
             if part.get("price_json"):
@@ -91,7 +94,14 @@ def handle_search_jlcpcb_parts(iface: "KiCADInterface", params: Dict[str, Any]) 
                 except json.JSONDecodeError:
                     part["price_breaks"] = []
 
-        return {"success": True, "parts": parts, "count": len(parts)}
+        return {
+            "success": True,
+            "parts": parts,
+            "count": len(parts),
+            "match_mode": result.get("match_mode"),
+            "fuzzy": result.get("fuzzy", False),
+            "warnings": result.get("warnings", []),
+        }
     except Exception as e:
         logger.error(f"Error searching JLCPCB parts: {e}", exc_info=True)
         return {"success": False, "message": f"Search failed: {str(e)}"}

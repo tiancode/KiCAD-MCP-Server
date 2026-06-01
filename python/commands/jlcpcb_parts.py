@@ -39,6 +39,10 @@ class JLCPCBPartsManager:
 
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
+        # Cache of "does this column hold any non-empty value" probes. The
+        # JLCSearch-sourced DB leaves category/subcategory/manufacturer empty,
+        # so filters on them would silently match nothing; we probe once.
+        self._column_has_data_cache: Dict[str, bool] = {}
         self._init_database()
 
     def _init_database(self) -> None:
@@ -180,6 +184,238 @@ class JLCPCBPartsManager:
         self.conn.commit()
         logger.info(f"Import complete: {imported} parts imported, {skipped} skipped")
 
+    def _column_has_data(self, column: str) -> bool:
+        """Return True if *column* holds at least one non-empty value.
+
+        Probes once per process and caches the result. The JLCSearch DB
+        leaves category/subcategory/manufacturer blank, so a LIKE filter on
+        them matches nothing — callers use this to degrade gracefully instead.
+        """
+        if column not in self._column_has_data_cache:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                f"SELECT EXISTS(SELECT 1 FROM components "  # nosec B608 - column is a fixed literal
+                f"WHERE {column} IS NOT NULL AND {column} != '')"
+            )
+            self._column_has_data_cache[column] = bool(cursor.fetchone()[0])
+        return self._column_has_data_cache[column]
+
+    def _run_fts_query(
+        self,
+        fts_match: str,
+        structured_filters: List[str],
+        structured_params: List[Any],
+        limit: int,
+    ) -> List[Dict]:
+        """Run an FTS match joined back to components, ranked by bm25 relevance."""
+        sql = [
+            "SELECT c.* FROM components_fts",
+            "JOIN components c ON c.rowid = components_fts.rowid",
+            "WHERE components_fts MATCH ?",
+        ]
+        params: List[Any] = [fts_match]
+        sql.extend(f"AND {clause}" for clause in structured_filters)
+        params.extend(structured_params)
+        sql.append("ORDER BY bm25(components_fts) LIMIT ?")
+        params.append(limit)
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(" ".join(sql), params)
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"FTS search error: {e}")
+            return []
+
+    def _run_structured_query(
+        self, structured_filters: List[str], structured_params: List[Any], limit: int
+    ) -> List[Dict]:
+        """Run a filter-only query (no free text) against components."""
+        sql = ["SELECT c.* FROM components c WHERE 1=1"]
+        sql.extend(f"AND {clause}" for clause in structured_filters)
+        params = list(structured_params)
+        sql.append("LIMIT ?")
+        params.append(limit)
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(" ".join(sql), params)
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Structured search error: {e}")
+            return []
+
+    def _search_by_mpn(
+        self,
+        mpn: str,
+        package: Optional[str] = None,
+        library_type: Optional[str] = None,
+        in_stock: bool = True,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Look a part up by manufacturer part number — the reliable path.
+
+        Tries an exact (index-backed, BINARY) match first, then a
+        case-insensitive prefix match (``LIKE 'mpn%'`` uses SQLite's default
+        case-insensitive LIKE, so a lowercase candidate still resolves).
+        """
+        extra: List[str] = []
+        extra_params: List[Any] = []
+        if package:
+            extra.append("AND package LIKE ?")
+            extra_params.append(f"%{package}%")
+        if library_type:
+            extra.append("AND library_type = ?")
+            extra_params.append(library_type)
+        if in_stock:
+            extra.append("AND stock > 0")
+        tail = " ".join(extra)
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            f"SELECT * FROM components WHERE mfr_part = ? {tail} LIMIT ?",
+            [mpn, *extra_params, limit],
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        if rows:
+            return {
+                "parts": rows,
+                "count": len(rows),
+                "match_mode": "mpn_exact",
+                "fuzzy": False,
+                "warnings": [],
+            }
+
+        cursor.execute(
+            f"SELECT * FROM components WHERE mfr_part LIKE ? {tail} LIMIT ?",
+            [f"{mpn}%", *extra_params, limit],
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        warnings: List[str] = []
+        if rows:
+            warnings.append(
+                f"No exact MPN match for '{mpn}'; showing parts whose MPN starts with it."
+            )
+        return {
+            "parts": rows,
+            "count": len(rows),
+            "match_mode": "mpn_prefix" if rows else "mpn_none",
+            "fuzzy": bool(rows),
+            "warnings": warnings,
+        }
+
+    def search_parts_meta(
+        self,
+        query: Optional[str] = None,
+        category: Optional[str] = None,
+        package: Optional[str] = None,
+        library_type: Optional[str] = None,
+        manufacturer: Optional[str] = None,
+        mpn: Optional[str] = None,
+        in_stock: bool = True,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Search for parts, returning matches plus match metadata.
+
+        Returns a dict ``{parts, count, match_mode, fuzzy, warnings}``:
+
+        - ``mpn`` (if given) takes priority and routes to an exact/prefix
+          lookup on the manufacturer part number — the most reliable path.
+        - Otherwise free text is matched against the FTS index. Terms are
+          first combined with AND (precise); if that yields nothing and there
+          is more than one term, it retries with OR and flags ``fuzzy``, so a
+          descriptive query degrades to best-effort instead of returning empty.
+        - ``category``/``manufacturer`` are blank in the JLCSearch DB, so when
+          those columns hold no data the value is folded into the text search
+          and a warning is recorded rather than silently matching nothing.
+        """
+        # MPN-first: the only consistently reliable lookup.
+        if mpn:
+            return self._search_by_mpn(
+                mpn,
+                package=package,
+                library_type=library_type,
+                in_stock=in_stock,
+                limit=limit,
+            )
+
+        warnings: List[str] = []
+        fts_terms: List[str] = []
+        if query:
+            fts_terms.extend(query.strip().split())
+
+        structured_filters: List[str] = []
+        structured_params: List[Any] = []
+
+        if category:
+            if self._column_has_data("category"):
+                structured_filters.append("c.category LIKE ?")
+                structured_params.append(f"%{category}%")
+            else:
+                fts_terms.extend(category.split())
+                warnings.append(
+                    "category is empty in this database (JLCSearch import); folded it into "
+                    "the text search instead. Use the 'package' filter or an 'mpn' for precision."
+                )
+        if manufacturer:
+            if self._column_has_data("manufacturer"):
+                structured_filters.append("c.manufacturer LIKE ?")
+                structured_params.append(f"%{manufacturer}%")
+            else:
+                fts_terms.extend(manufacturer.split())
+                warnings.append(
+                    "manufacturer is empty in this database (JLCSearch import); folded it into "
+                    "the text search instead."
+                )
+        if package:
+            structured_filters.append("c.package LIKE ?")
+            structured_params.append(f"%{package}%")
+        if library_type:
+            structured_filters.append("c.library_type = ?")
+            structured_params.append(library_type)
+        if in_stock:
+            structured_filters.append("c.stock > 0")
+
+        # No text to match — pure filter query.
+        if not fts_terms:
+            parts = self._run_structured_query(structured_filters, structured_params, limit)
+            return {
+                "parts": parts,
+                "count": len(parts),
+                "match_mode": "filter",
+                "fuzzy": False,
+                "warnings": warnings,
+            }
+
+        prefixed = [t if t.endswith("*") else f"{t}*" for t in fts_terms]
+
+        # Precise pass: all terms must match.
+        parts = self._run_fts_query(
+            " ".join(prefixed), structured_filters, structured_params, limit
+        )
+        match_mode = "and"
+        fuzzy = False
+
+        # Graceful fallback: any term may match, ranked by relevance.
+        if not parts and len(prefixed) > 1:
+            parts = self._run_fts_query(
+                " OR ".join(prefixed), structured_filters, structured_params, limit
+            )
+            match_mode = "or"
+            fuzzy = True
+            if parts:
+                warnings.append(
+                    "No exact (all-terms) match; showing best partial matches ranked by "
+                    "relevance. Narrow with package/library_type, or pass a candidate MPN via "
+                    "the 'mpn' parameter for an exact lookup."
+                )
+
+        return {
+            "parts": parts,
+            "count": len(parts),
+            "match_mode": match_mode,
+            "fuzzy": fuzzy,
+            "warnings": warnings,
+        }
+
     def search_parts(
         self,
         query: Optional[str] = None,
@@ -190,73 +426,20 @@ class JLCPCBPartsManager:
         in_stock: bool = True,
         limit: int = 20,
     ) -> List[Dict]:
+        """Search for parts with filters, returning just the list of matches.
+
+        Thin back-compat wrapper over :meth:`search_parts_meta` for callers
+        (e.g. ``suggest_alternatives``) that only need the rows.
         """
-        Search for parts with filters
-
-        Args:
-            query: Free-text search (searches description, mfr part, LCSC)
-            category: Filter by category name
-            package: Filter by package type
-            library_type: Filter by "Basic", "Extended", or "Preferred"
-            manufacturer: Filter by manufacturer name
-            in_stock: Only return parts with stock > 0
-            limit: Maximum number of results
-
-        Returns:
-            List of matching parts
-        """
-        cursor = self.conn.cursor()
-
-        # Build query
-        sql_parts = ["SELECT * FROM components WHERE 1=1"]
-        params = []
-
-        if query:
-            # Use FTS for text search
-            # Add prefix wildcard to each term for partial matching
-            # (e.g., "BQ25895" becomes "BQ25895*" so FTS matches "BQ25895RTWR")
-            fts_query = " ".join(
-                f"{term}*" if not term.endswith("*") else term for term in query.strip().split()
-            )
-            sql_parts.append("""
-                AND lcsc IN (
-                    SELECT lcsc FROM components_fts
-                    WHERE components_fts MATCH ?
-                )
-            """)
-            params.append(fts_query)
-
-        if category:
-            sql_parts.append("AND category LIKE ?")
-            params.append(f"%{category}%")
-
-        if package:
-            sql_parts.append("AND package LIKE ?")
-            params.append(f"%{package}%")
-
-        if library_type:
-            sql_parts.append("AND library_type = ?")
-            params.append(library_type)
-
-        if manufacturer:
-            sql_parts.append("AND manufacturer LIKE ?")
-            params.append(f"%{manufacturer}%")
-
-        if in_stock:
-            sql_parts.append("AND stock > 0")
-
-        sql_parts.append("LIMIT ?")
-        params.append(limit)
-
-        sql = " ".join(sql_parts)
-
-        try:
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error(f"Search error: {e}")
-            return []
+        return self.search_parts_meta(
+            query=query,
+            category=category,
+            package=package,
+            library_type=library_type,
+            manufacturer=manufacturer,
+            in_stock=in_stock,
+            limit=limit,
+        )["parts"]
 
     def get_part_info(self, lcsc_number: str) -> Optional[Dict]:
         """

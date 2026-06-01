@@ -59,21 +59,32 @@ for fast offline searching.`,
   // Search JLCPCB parts
   server.tool(
     "search_jlcpcb_parts",
-    `Search JLCPCB parts catalog by specifications.
+    `Search the local JLCPCB parts catalog (download_jlcpcb_database first). Returns real pricing, stock, and library type (Basic = free assembly).
 
-Searches the local JLCPCB database (must be downloaded first with download_jlcpcb_database).
-Provides real pricing, stock info, and library type (Basic parts = free assembly).
-
-Use this to find components with exact specifications and cost optimization.`,
+MATCHING — read this, it changes how you should call the tool:
+- BEST: if you have a candidate manufacturer part number, pass it as 'mpn'. It does an exact (then prefix) lookup and is by far the most reliable path. Prefer searching by a few candidate MPNs over describing the part.
+- 'query' is full-text over description + MPN. Multiple words must ALL appear in the text (AND); one synonym/format mismatch ('buck' vs 'Step-Down', '0.5A' vs '500mA') drops the whole result. If nothing matches it auto-retries OR-style and flags the result as fuzzy.
+- Put package in the 'package' filter, NOT in 'query'.
+- 'category' and 'manufacturer' are BLANK in the public JLCSearch database, so filtering by them matches nothing — the value is folded into the text search and a warning is returned. Don't rely on them for precision.`,
     {
       query: z
         .string()
         .optional()
-        .describe("Free-text search (e.g., '10k resistor 0603', 'ESP32', 'STM32F103')"),
+        .describe(
+          "Free-text over description + MPN. All words must match (AND). Best with a candidate MPN; for package use the 'package' filter.",
+        ),
+      mpn: z
+        .string()
+        .optional()
+        .describe(
+          "Manufacturer part number for an exact→prefix lookup (e.g. 'TPS54331DR'). Most reliable; case-insensitive. Takes priority over 'query'.",
+        ),
       category: z
         .string()
         .optional()
-        .describe("Filter by category (e.g., 'Resistors', 'Capacitors', 'Microcontrollers')"),
+        .describe(
+          "Category filter (e.g. 'Resistors'). NOTE: blank in the JLCSearch DB — folded into text search, returns a warning.",
+        ),
       package: z
         .string()
         .optional()
@@ -83,7 +94,12 @@ Use this to find components with exact specifications and cost optimization.`,
         .optional()
         .default("All")
         .describe("Filter by library type (Basic = free assembly at JLCPCB)"),
-      manufacturer: z.string().optional().describe("Filter by manufacturer name"),
+      manufacturer: z
+        .string()
+        .optional()
+        .describe(
+          "Manufacturer filter. NOTE: blank in the JLCSearch DB — folded into text search, returns a warning.",
+        ),
       in_stock: z
         .boolean()
         .optional()
@@ -94,18 +110,28 @@ Use this to find components with exact specifications and cost optimization.`,
     async (args: any) => {
       const result = await callKicadScript("search_jlcpcb_parts", args);
       if (result.success && result.parts) {
+        const warnings: string[] = Array.isArray(result.warnings) ? result.warnings : [];
+        const warningText = warnings.length > 0 ? `⚠️ ${warnings.join("\n⚠️ ")}\n\n` : "";
+
         if (result.parts.length === 0) {
           return {
             content: [
               {
                 type: "text",
                 text:
+                  warningText +
                   `No JLCPCB parts found matching your criteria.\n\n` +
-                  `Try broadening your search or check if the database is populated.`,
+                  `Tip: search by a candidate manufacturer part number via the 'mpn' parameter — ` +
+                  `it's the most reliable path. For free-text, fewer/looser words match better ` +
+                  `(all words must match), and put package in the 'package' filter.`,
               },
             ],
           };
         }
+
+        const fuzzyNote = result.fuzzy
+          ? `⚠️ Fuzzy match (no exact all-terms hit) — results are best-effort, ranked by relevance.\n\n`
+          : "";
 
         const partsList = result.parts
           .map((p: any) => {
@@ -123,6 +149,8 @@ Use this to find components with exact specifications and cost optimization.`,
             {
               type: "text",
               text:
+                warningText +
+                fuzzyNote +
                 `Found ${result.count} JLCPCB parts:\n\n${partsList}\n\n` +
                 `💡 Basic parts have free assembly. Extended parts charge $3 setup fee per unique part.`,
             },
