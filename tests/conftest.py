@@ -7,11 +7,24 @@ real KiCAD environment is not fully initialised for testing.
 """
 
 import importlib
+import os
 import sys
 import types
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+# Make the python/ package tree importable (commands.*, utils.*) regardless of
+# whether a given test module has added it to sys.path yet — the autouse
+# cache-reset fixture below imports commands.library.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+
+# Keep the test suite out of the real ~/.kicad-mcp/logs/kicad_interface.log:
+# avoids polluting it and avoids concurrent pytest processes racing on
+# RotatingFileHandler rollover. Set before kicad_interface is ever imported so
+# its module-level logging setup sees the override (empty = stderr only).
+os.environ.setdefault("KICAD_MCP_LOG_DIR", "")
 
 # ---------------------------------------------------------------------------
 # pcbnew stub — kicad_interface.py accesses pcbnew.__file__ and
@@ -43,6 +56,26 @@ except ImportError:
 
     skip_mod.Schematic = _FakeSchematic  # type: ignore[attr-defined]
     sys.modules["skip"] = skip_mod
+
+
+@pytest.fixture(autouse=True)
+def _reset_library_manager_caches():
+    """Clear the process-wide LibraryManager / SymbolLibraryManager caches around
+    every test so a cached (env-dependent) manager from one test cannot leak into
+    another. No-op if those modules aren't importable in this environment."""
+    try:
+        from commands.library import _MANAGER_CACHE
+        from commands.library_symbol import _SYMBOL_MANAGER_CACHE
+    except Exception:
+        yield
+        return
+    _MANAGER_CACHE.clear()
+    _SYMBOL_MANAGER_CACHE.clear()
+    try:
+        yield
+    finally:
+        _MANAGER_CACHE.clear()
+        _SYMBOL_MANAGER_CACHE.clear()
 
 
 @pytest.fixture

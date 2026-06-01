@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict
 
 from commands.component import ComponentCommands
-from commands.library import LibraryManager as FootprintLibraryManager
+from commands.library import get_library_manager
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
@@ -98,8 +98,8 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         project_path = Path(board_path).parent
         if project_path != getattr(iface, "_current_project_path", None):
             iface._current_project_path = project_path
-            local_lib = FootprintLibraryManager(project_path=project_path)
+            local_lib = get_library_manager(project_path=project_path)
             iface.component_commands = ComponentCommands(iface.board, local_lib)
-            logger.info(f"Reloaded FootprintLibraryManager with project_path={project_path}")
+            logger.info(f"Reloaded footprint LibraryManager with project_path={project_path}")
 
     return iface.component_commands.place_component(params)

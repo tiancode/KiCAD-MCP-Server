@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import traceback
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -52,17 +53,36 @@ _annotation_loader = AnnotationLoader()
 # isn't writable (e.g. sandboxed test environments, restricted CI
 # runners), fall back to stderr-only logging so importing this module
 # never crashes.
+#
+# KICAD_MCP_LOG_DIR overrides the directory (set to "" to disable file
+# logging entirely). In production there is exactly one Python subprocess
+# writing this file, so RotatingFileHandler's rollover is single-writer and
+# safe; the test suite points this elsewhere (see conftest) so concurrent
+# pytest processes neither race on rollover nor pollute the real log.
 _log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
 _log_level = getattr(logging, _log_level_name, logging.INFO)
 _log_format = "%(asctime)s [%(levelname)s] %(message)s"
+_log_dir_override = os.environ.get("KICAD_MCP_LOG_DIR")
 try:
-    log_dir = os.path.join(os.path.expanduser("~"), ".kicad-mcp", "logs")
+    if _log_dir_override is not None and _log_dir_override == "":
+        raise OSError("file logging disabled via KICAD_MCP_LOG_DIR=''")
+    log_dir = _log_dir_override or os.path.join(os.path.expanduser("~"), ".kicad-mcp", "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, "kicad_interface.log")
+    # Rotate so the log can never grow unbounded. A plain FileHandler here once
+    # let a hot-path warning balloon the file to ~700 MB; cap at 20 MB x 5
+    # backups (~100 MB ceiling) so any future log storm self-trims.
     logging.basicConfig(
         level=_log_level,
         format=_log_format,
-        handlers=[logging.FileHandler(log_file)],
+        handlers=[
+            RotatingFileHandler(
+                log_file,
+                maxBytes=20 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+        ],
         force=True,  # override any prior basicConfig (e.g. by upstream imports)
     )
 except (OSError, PermissionError):
@@ -268,8 +288,8 @@ try:
     from commands.jlcpcb_parts import JLCPCBPartsManager
     from commands.library import (
         LibraryCommands,
+        get_library_manager,
     )
-    from commands.library import LibraryManager as FootprintLibraryManager
     from commands.library_schematic import LibraryManager as SchematicLibraryManager
     from commands.library_symbol import SymbolLibraryCommands, SymbolLibraryManager
     from commands.project import ProjectCommands
@@ -491,8 +511,8 @@ class KiCADInterface(BoardPersistenceMixin):
 
         logger.info("Initializing command handlers...")
 
-        # Initialize footprint library manager
-        self.footprint_library = FootprintLibraryManager()
+        # Initialize footprint library manager (process-wide cached instance)
+        self.footprint_library = get_library_manager()
 
         # Initialize command handlers
         self.project_commands = ProjectCommands(self.board)
@@ -2141,7 +2161,7 @@ class KiCADInterface(BoardPersistenceMixin):
         import math
         from pathlib import Path
 
-        from commands.library import LibraryManager
+        from commands.library import get_library_manager
 
         added: List[Dict[str, Any]] = []
         skipped: List[Dict[str, str]] = []
@@ -2156,7 +2176,7 @@ class KiCADInterface(BoardPersistenceMixin):
         existing_fps = list(board.GetFootprints())
         existing_refs = {fp.GetReference() for fp in existing_fps}
         project_dir = Path(schematic_path).parent
-        library_manager = LibraryManager(project_path=project_dir)
+        library_manager = get_library_manager(project_path=project_dir)
 
         # First pass: filter + load.  We don't position yet because the
         # column count of the grid depends on how many actually load

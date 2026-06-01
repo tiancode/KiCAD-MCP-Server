@@ -7,7 +7,7 @@ import math
 from typing import Any, Dict, List, Optional
 
 import pcbnew
-from commands.library import LibraryManager
+from commands.library import LibraryManager, get_library_manager
 
 logger = logging.getLogger("kicad_interface")
 
@@ -20,7 +20,7 @@ class ComponentCommands:
     ):
         """Initialize with optional board instance and library manager"""
         self.board = board
-        self.library_manager = library_manager or LibraryManager()
+        self.library_manager = library_manager or get_library_manager()
 
     def place_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Place a component on the PCB"""

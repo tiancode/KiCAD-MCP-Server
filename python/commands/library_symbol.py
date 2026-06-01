@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from commands.library import _load_cached_manager
+
 logger = logging.getLogger("kicad_interface")
 
 # Bump when SymbolInfo fields or the cache structure change so older pickles
@@ -990,12 +992,25 @@ class SymbolLibraryManager:
             return None
 
 
+# Process-wide cache of SymbolLibraryManager instances, keyed by project scope.
+# Shares the caching/invalidation core with the footprint side (see
+# commands.library._load_cached_manager). Project switches / explicit refreshes
+# go through SymbolLibraryCommands, which rebuilds its own manager — this cache
+# only backs the default construction.
+_SYMBOL_MANAGER_CACHE: Dict[Optional[str], Tuple[SymbolLibraryManager, Dict[str, int]]] = {}
+
+
+def get_symbol_library_manager(project_path: Optional[Path] = None) -> SymbolLibraryManager:
+    """Return a cached :class:`SymbolLibraryManager` for the given project scope."""
+    return _load_cached_manager(_SYMBOL_MANAGER_CACHE, SymbolLibraryManager, project_path)
+
+
 class SymbolLibraryCommands:
     """Command handlers for symbol library operations"""
 
     def __init__(self, library_manager: Optional[SymbolLibraryManager] = None):
         """Initialize with optional library manager"""
-        self.library_manager = library_manager or SymbolLibraryManager()
+        self.library_manager = library_manager or get_symbol_library_manager()
 
     @staticmethod
     def _derive_project_path(params: Dict) -> Optional[Path]:

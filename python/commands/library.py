@@ -9,7 +9,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Tuple, TypeVar
 
 logger = logging.getLogger("kicad_interface")
 
@@ -32,21 +32,55 @@ class LibraryManager:
         self.project_path = project_path
         self.libraries: Dict[str, str] = {}  # nickname -> path mapping
         self.footprint_cache: Dict[str, List[str]] = {}  # library -> [footprint names]
+        # .pretty dir mtime_ns each footprint_cache entry reflects, so a footprint
+        # added/removed mid-session is re-scanned even on a shared cached manager.
+        self._footprint_cache_mtimes: Dict[str, int] = {}
+        # Memoized results of the (filesystem-probing, log-emitting) dir finders.
+        # Keyed by "footprint"/"3rdparty"; resolved at most once per instance so a
+        # single _resolve_uri call doesn't probe + warn 4-5 times over.
+        self._dir_cache: Dict[str, Optional[str]] = {}
+        # fp-lib-tables actually parsed (global + any "Table" redirects + project),
+        # recorded so table_signature() can detect on-disk edits for the cache in
+        # get_library_manager().
+        self._table_paths: List[Path] = []
         self._load_libraries()
+
+    def table_signature(self) -> Dict[str, int]:
+        """Return {path: mtime_ns} for every fp-lib-table consulted at load.
+
+        Missing files map to -1 so a previously-absent project table appearing
+        later also counts as a change. ``get_library_manager`` compares
+        signatures to decide whether a cached manager is still fresh, letting a
+        user edit the table from KiCad's GUI (or by hand) without restarting.
+        """
+        sig: Dict[str, int] = {}
+        for path in self._table_paths:
+            try:
+                sig[str(path)] = path.stat().st_mtime_ns
+            except OSError:
+                sig[str(path)] = -1
+        return sig
 
     def _load_libraries(self) -> None:
         """Load libraries from fp-lib-table files"""
-        # Load global libraries
+        # Load global libraries. Track the table path even when absent so that
+        # creating one later changes table_signature() and invalidates a cached
+        # manager (see _load_cached_manager).
         global_table = self._get_global_fp_lib_table()
+        if global_table:
+            self._table_paths.append(global_table)
         if global_table and global_table.exists():
             logger.info(f"Loading global fp-lib-table from: {global_table}")
             self._parse_fp_lib_table(global_table)
         else:
             logger.warning(f"Global fp-lib-table not found at: {global_table}")
 
-        # Load project-specific libraries if project path provided
+        # Load project-specific libraries if project path provided. Track the
+        # (deterministic) project table path unconditionally so creating it
+        # mid-session is detected even though it was absent at load.
         if self.project_path:
             project_table = self.project_path / "fp-lib-table"
+            self._table_paths.append(project_table)
             if project_table.exists():
                 logger.info(f"Loading project fp-lib-table from: {project_table}")
                 self._parse_fp_lib_table(project_table)
@@ -99,6 +133,10 @@ class LibraryManager:
         try:
             with open(table_path, "r") as f:
                 content = f.read()
+            # Capture followed "Table" redirect children too; _load_libraries
+            # already tracked the global/project tables, so guard against dupes.
+            if table_path not in self._table_paths:
+                self._table_paths.append(table_path)
 
             # Simple regex-based parser for lib entries
             # Pattern: (lib (name "NAME")(type TYPE)(uri "URI")...)
@@ -181,6 +219,22 @@ class LibraryManager:
             return None
 
     def _find_kicad_footprint_dir(self) -> Optional[str]:
+        """Memoized wrapper around :meth:`_locate_kicad_footprint_dir`."""
+        # setdefault so we stay robust if __init__ was bypassed (e.g. tests that
+        # build via LibraryManager.__new__).
+        cache = self.__dict__.setdefault("_dir_cache", {})
+        if "footprint" not in cache:
+            cache["footprint"] = self._locate_kicad_footprint_dir()
+        return cache["footprint"]
+
+    def _find_kicad_3rdparty_dir(self) -> Optional[str]:
+        """Memoized wrapper around :meth:`_locate_kicad_3rdparty_dir`."""
+        cache = self.__dict__.setdefault("_dir_cache", {})
+        if "3rdparty" not in cache:
+            cache["3rdparty"] = self._locate_kicad_3rdparty_dir()
+        return cache["3rdparty"]
+
+    def _locate_kicad_footprint_dir(self) -> Optional[str]:
         """Find KiCAD footprint directory."""
         possible_paths = [
             "/usr/share/kicad/footprints",
@@ -220,7 +274,7 @@ class LibraryManager:
 
         return None
 
-    def _find_kicad_3rdparty_dir(self) -> Optional[str]:
+    def _locate_kicad_3rdparty_dir(self) -> Optional[str]:
         """
         Find KiCAD 3rd party libraries directory.
 
@@ -284,7 +338,10 @@ class LibraryManager:
                 logger.info(f"Found KiCad 3rd party directory: {candidate}")
                 return str(candidate)
 
-        logger.warning("Could not find KiCad 3rd party directory")
+        # Absence is the normal case (no Plugin & Content Manager add-on libs
+        # installed); the standard footprint/symbol libs don't need it. Keep this
+        # at debug so it doesn't spam the log as a false alarm.
+        logger.debug("Could not find KiCad 3rd party directory")
         return None
 
     def list_libraries(self) -> List[str]:
@@ -301,18 +358,27 @@ class LibraryManager:
         Returns:
             List of footprint names (without .kicad_mod extension)
         """
-        # Check cache first
-        if library_nickname in self.footprint_cache:
-            return self.footprint_cache[library_nickname]
-
         library_path = self.libraries.get(library_nickname)
         if not library_path:
             logger.warning(f"Library not found: {library_nickname}")
             return []
 
+        lib_dir = Path(library_path)
+        # Validate the cache against the .pretty directory mtime — adding or
+        # removing a .kicad_mod bumps the directory mtime — so a stale entry on a
+        # shared cached manager is re-scanned instead of served forever.
+        try:
+            dir_mtime = lib_dir.stat().st_mtime_ns
+        except OSError:
+            dir_mtime = -1
+        if (
+            library_nickname in self.footprint_cache
+            and self._footprint_cache_mtimes.get(library_nickname) == dir_mtime
+        ):
+            return self.footprint_cache[library_nickname]
+
         try:
             footprints = []
-            lib_dir = Path(library_path)
 
             # List all .kicad_mod files
             for fp_file in lib_dir.glob("*.kicad_mod"):
@@ -320,8 +386,9 @@ class LibraryManager:
                 footprint_name = fp_file.stem
                 footprints.append(footprint_name)
 
-            # Cache the results
+            # Cache the results + the dir mtime they reflect
             self.footprint_cache[library_nickname] = footprints
+            self._footprint_cache_mtimes[library_nickname] = dir_mtime
             logger.debug(f"Found {len(footprints)} footprints in {library_nickname}")
 
             return footprints
@@ -497,12 +564,63 @@ class LibraryManager:
         }
 
 
+class _MtimeCachedManager(Protocol):
+    """Duck-typed surface shared by LibraryManager / SymbolLibraryManager.
+
+    ``_load_cached_manager`` only needs these two members: ``libraries`` (to
+    skip caching an empty load) and ``table_signature`` (to detect on-disk
+    edits).
+    """
+
+    libraries: Dict[str, str]
+
+    def table_signature(self) -> Dict[str, int]: ...
+
+
+M = TypeVar("M", bound=_MtimeCachedManager)
+
+
+def _load_cached_manager(
+    cache: Dict[Optional[str], Tuple[M, Dict[str, int]]],
+    ctor: Callable[[Optional[Path]], M],
+    project_path: Optional[Path],
+) -> M:
+    """Return a process-wide cached manager for ``project_path``, rebuilding it
+    when one of the lib-tables it parsed has changed on disk.
+
+    Building a manager fully re-parses the global lib-table (~155 libs); hot
+    paths (e.g. IPC footprint load) used to construct one per call. The cached
+    instance is reused unless its ``table_signature`` moved. A manager that
+    loaded **zero** libraries is not cached, so a not-yet-present lib-table is
+    retried on the next call instead of being frozen as permanently empty.
+    """
+    key = str(project_path) if project_path is not None else None
+    entry = cache.get(key)
+    if entry is not None:
+        manager, signature = entry
+        if manager.table_signature() == signature:
+            return manager
+    manager = ctor(project_path)
+    if manager.libraries:
+        cache[key] = (manager, manager.table_signature())
+    return manager
+
+
+_MANAGER_CACHE: Dict[Optional[str], Tuple[LibraryManager, Dict[str, int]]] = {}
+
+
+def get_library_manager(project_path: Optional[Path] = None) -> LibraryManager:
+    """Return a cached :class:`LibraryManager` for the given project scope
+    (``project_path=None`` for the global-only manager, the common case)."""
+    return _load_cached_manager(_MANAGER_CACHE, LibraryManager, project_path)
+
+
 class LibraryCommands:
     """Command handlers for library operations"""
 
     def __init__(self, library_manager: Optional[LibraryManager] = None):
         """Initialize with optional library manager"""
-        self.library_manager = library_manager or LibraryManager()
+        self.library_manager = library_manager or get_library_manager()
 
     def list_libraries(self, params: Dict) -> Dict:
         """List all available footprint libraries"""

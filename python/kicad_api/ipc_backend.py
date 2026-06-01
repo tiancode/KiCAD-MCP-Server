@@ -889,14 +889,15 @@ class IPCBoardAPI(BoardAPI):
         """
         try:
             import pcbnew
-            from commands.library import LibraryManager
+            from commands.library import get_library_manager
 
             # ``pcbnew.GetGlobalFootprintLib()`` does NOT exist in KiCad 9/10
             # — the old code AttributeError'd here, so every IPC placement
             # silently failed.  Resolve the nickname to its ``.pretty``
             # directory via the library table (same path the working SWIG
-            # place_component uses) and load by path.
-            resolved = LibraryManager().find_footprint(footprint_path)
+            # place_component uses) and load by path. Cached manager so a
+            # multi-component placement doesn't re-parse the lib-table per part.
+            resolved = get_library_manager().find_footprint(footprint_path)
             if not resolved:
                 logger.warning(f"Footprint '{footprint_path}' not found in any library")
                 return None
