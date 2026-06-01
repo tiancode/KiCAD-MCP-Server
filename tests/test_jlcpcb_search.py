@@ -155,3 +155,56 @@ def test_suggest_alternatives_falls_back_to_package(manager):
     alts = {p["lcsc"] for p in manager.suggest_alternatives("C_REF_EMPTY", limit=5)}
     assert "C_QFN2" in alts
     assert "C_REF_EMPTY" not in alts
+
+
+# --- price_json normalization ---------------------------------------------
+
+_LEGACY_DOUBLE_ENCODED = json.dumps(
+    [{"qty": 1, "price": json.dumps([{"qFrom": 1, "qTo": 49, "price": 0.396}])}]
+)
+
+
+def test_normalize_unwraps_legacy_double_encoded():
+    norm = JLCPCBPartsManager.normalize_price_breaks
+    breaks = norm(_LEGACY_DOUBLE_ENCODED)
+    assert breaks == [{"qty": 1, "price": 0.396}]
+    assert isinstance(breaks[0]["price"], float)  # a number, not a string
+
+
+def test_normalize_handles_tier_array_and_qfrom_keys():
+    norm = JLCPCBPartsManager.normalize_price_breaks
+    breaks = norm(
+        '[{"qFrom": 50, "qTo": 149, "price": 0.33}, {"qFrom": 1, "qTo": 49, "price": 0.4}]'
+    )
+    assert breaks == [{"qty": 1, "price": 0.4}, {"qty": 50, "price": 0.33}]  # sorted by qty
+
+
+def test_normalize_handles_clean_and_scalar_and_garbage():
+    norm = JLCPCBPartsManager.normalize_price_breaks
+    assert norm('[{"qty": 1, "price": 0.5}]') == [{"qty": 1, "price": 0.5}]  # idempotent
+    assert norm("0.42") == [{"qty": 1, "price": 0.42}]  # bare numeric string
+    assert norm(0.42) == [{"qty": 1, "price": 0.42}]  # bare number
+    assert norm(None) == []
+    assert norm("") == []
+    assert norm("not-json") == []
+
+
+def test_importer_writes_clean_price_json(tmp_path):
+    """The importer must store decoded tiers, not re-wrap the API string."""
+    mgr = JLCPCBPartsManager(db_path=str(tmp_path / "imp.db"))
+    # JLCSearch returns 'price' as an already-JSON tier string.
+    mgr.import_jlcsearch_parts(
+        [
+            {
+                "lcsc": 9865,
+                "mfr": "TPS54331DR",
+                "package": "SOIC-8",
+                "is_basic": False,
+                "stock": 100,
+                "price": json.dumps([{"qFrom": 1, "qTo": 49, "price": 0.396}]),
+            }
+        ]
+    )
+    part = mgr.get_part_info("C9865")
+    assert part["price_breaks"] == [{"qty": 1, "price": 0.396}]
+    mgr.close()

@@ -98,6 +98,64 @@ class JLCPCBPartsManager:
         self.conn.commit()
         logger.info(f"Initialized JLCPCB parts database at {self.db_path}")
 
+    @staticmethod
+    def normalize_price_breaks(raw: Any) -> List[Dict[str, Any]]:
+        """Coerce any stored/received price shape into clean ``{qty, price}`` tiers.
+
+        Handles, idempotently:
+        - a JSON string of any shape below;
+        - the JLCSearch tier array ``[{"qFrom":1,"qTo":49,"price":0.396}, ...]``;
+        - the legacy double-encoded shape this DB shipped with —
+          ``[{"qty":1,"price":"<json array string>"}]`` (the importer used to
+          wrap the API's already-JSON price string a second time);
+        - a bare number / numeric string (single tier).
+
+        Returns tiers sorted ascending by qty, so ``breaks[0]["price"]`` is the
+        unit price. Unparseable input yields ``[]``.
+        """
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s[:1] in ("[", "{"):
+                try:
+                    raw = json.loads(s)
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(raw, bool):  # guard: bool is an int subclass
+            return []
+        if isinstance(raw, (int, float)):
+            return [{"qty": 1, "price": float(raw)}]
+        if isinstance(raw, str):
+            try:
+                return [{"qty": 1, "price": float(raw)}]
+            except ValueError:
+                return []
+        if not isinstance(raw, list):
+            return []
+
+        # Legacy double-encoded: a single wrapper whose "price" is itself a
+        # JSON string of the real tiers. Unwrap recursively.
+        if len(raw) == 1 and isinstance(raw[0], dict) and isinstance(raw[0].get("price"), str):
+            inner = JLCPCBPartsManager.normalize_price_breaks(raw[0]["price"])
+            if inner:
+                return inner
+
+        tiers: List[Dict[str, Any]] = []
+        for b in raw:
+            if not isinstance(b, dict):
+                continue
+            try:
+                price = float(b.get("price"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                qty = int(b.get("qty", b.get("qFrom", 1)))
+            except (TypeError, ValueError):
+                qty = 1
+            tiers.append({"qty": qty, "price": price})
+        tiers.sort(key=lambda t: t["qty"])
+        return tiers
+
     def import_jlcsearch_parts(
         self, parts: List[Dict], progress_callback: Optional[Callable[..., Any]] = None
     ) -> None:
@@ -120,9 +178,11 @@ class JLCPCBPartsManager:
                 if isinstance(lcsc, int):
                     lcsc = f"C{lcsc}"
 
-                # Build price JSON from jlcsearch single price
-                price = part.get("price") or part.get("price1")
-                price_json = json.dumps([{"qty": 1, "price": price}] if price else [])
+                # Normalize the API price (already a JSON tier string) into
+                # clean {qty, price} tiers — do NOT re-wrap it (that caused the
+                # double-encoded price_json this DB shipped with).
+                price_breaks = self.normalize_price_breaks(part.get("price") or part.get("price1"))
+                price_json = json.dumps(price_breaks)
 
                 # Determine library type from is_basic flag
                 library_type = "Basic" if part.get("is_basic") else "Extended"
@@ -461,12 +521,7 @@ class JLCPCBPartsManager:
 
         if row:
             part = dict(row)
-            # Parse price JSON
-            if part.get("price_json"):
-                try:
-                    part["price_breaks"] = json.loads(part["price_json"])
-                except:
-                    part["price_breaks"] = []
+            part["price_breaks"] = self.normalize_price_breaks(part.get("price_json"))
             return part
         return None
 
@@ -611,11 +666,8 @@ class JLCPCBPartsManager:
         # Sort by: Basic first, then by price, then by stock
         def sort_key(p: Dict[str, Any]) -> Tuple[int, float, int]:
             is_basic = 1 if p.get("library_type") == "Basic" else 0
-            try:
-                prices = json.loads(p.get("price_json", "[]"))
-                price = float(prices[0].get("price", 999)) if prices else 999
-            except:
-                price = 999
+            breaks = self.normalize_price_breaks(p.get("price_json"))
+            price = breaks[0]["price"] if breaks else 999
             stock = p.get("stock", 0)
 
             return (-is_basic, price, -stock)

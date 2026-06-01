@@ -6,7 +6,6 @@ suggest alternatives.  All depend on `iface.jlcpcb_parts` and
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Dict
@@ -88,11 +87,7 @@ def handle_search_jlcpcb_parts(iface: "KiCADInterface", params: Dict[str, Any]) 
         parts = result["parts"]
 
         for part in parts:
-            if part.get("price_json"):
-                try:
-                    part["price_breaks"] = json.loads(part["price_json"])
-                except json.JSONDecodeError:
-                    part["price_breaks"] = []
+            part["price_breaks"] = iface.jlcpcb_parts.normalize_price_breaks(part.get("price_json"))
 
         return {
             "success": True,
@@ -160,11 +155,7 @@ def handle_suggest_jlcpcb_alternatives(
         alternatives = iface.jlcpcb_parts.suggest_alternatives(lcsc_number, limit)
 
         for part in alternatives:
-            if part.get("price_json"):
-                try:
-                    part["price_breaks"] = json.loads(part["price_json"])
-                except json.JSONDecodeError:
-                    part["price_breaks"] = []
+            part["price_breaks"] = iface.jlcpcb_parts.normalize_price_breaks(part.get("price_json"))
 
         return {
             "success": True,
