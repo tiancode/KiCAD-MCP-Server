@@ -7,6 +7,7 @@ and component selection.
 
 import json
 import logging
+import re
 import sqlite3
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -14,6 +15,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from utils.platform_helper import PlatformHelper
 
 logger = logging.getLogger("kicad_interface")
+
+# Word-ish runs for description tokenisation (Unicode: keeps "510kΩ", "X7R").
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
 class JLCPCBPartsManager:
@@ -534,11 +538,38 @@ class JLCPCBPartsManager:
 
         return []
 
+    def _description_fts_terms(self, description: str, limit: int = 12) -> List[str]:
+        """Extract FTS-safe, discriminative tokens from a part description.
+
+        Keeps word tokens that contain at least one letter, so spec/value
+        tokens ('510kΩ', '100mW', 'X7R') and type words ('Thick', 'Resistor')
+        survive while bare numbers, temperature ranges, and symbol-only
+        fragments ('-55℃~+155℃', '±1%') are dropped. bm25 handles IDF, so
+        generic words ('ROHS') self-attenuate. Tokens are lowercased and
+        de-duplicated, order preserved, capped at *limit*.
+        """
+        terms: List[str] = []
+        for tok in _WORD_RE.findall(description or ""):
+            if len(tok) < 2 or tok.isdigit() or not any(c.isalpha() for c in tok):
+                continue
+            low = tok.lower()
+            if low not in terms:
+                terms.append(low)
+            if len(terms) >= limit:
+                break
+        return terms
+
     def suggest_alternatives(self, lcsc_number: str, limit: int = 5) -> List[Dict]:
         """
         Find alternative parts similar to the given LCSC number
 
-        Prioritizes: cheaper price, higher stock, Basic library type
+        Uses the reference part's description as a relevance query (bm25)
+        constrained to the same package + in stock, so functionally-similar
+        parts (same value/spec) surface — the category/subcategory columns are
+        blank in the JLCSearch DB and can't be used. The bm25 hit set is an
+        over-fetched candidate pool; the final pick prioritizes cheaper price,
+        higher stock, and Basic library type. Falls back to a package-only
+        match if the description yields no usable tokens.
 
         Args:
             lcsc_number: Reference LCSC part number
@@ -551,10 +582,28 @@ class JLCPCBPartsManager:
         if not part:
             return []
 
-        # Search for parts in same category with same package
-        alternatives = self.search_parts(
-            category=part["subcategory"], package=part["package"], in_stock=True, limit=limit * 3
-        )
+        package = part.get("package") or ""
+        terms = self._description_fts_terms(part.get("description", ""))
+
+        alternatives: List[Dict] = []
+        if terms:
+            # Quote each token so words like "OR" stay literal, not operators.
+            fts_match = " OR ".join(f'"{t}"' for t in terms)
+            structured_filters: List[str] = []
+            structured_params: List[Any] = []
+            if package:
+                structured_filters.append("c.package LIKE ?")
+                structured_params.append(f"%{package}%")
+            structured_filters.append("c.stock > 0")
+            # Over-fetch: bm25 gives the similar pool, the re-sort below picks
+            # the cheapest Basic part within it.
+            alternatives = self._run_fts_query(
+                fts_match, structured_filters, structured_params, limit * 6
+            )
+
+        # Fallback: no usable description tokens — same package, in stock.
+        if not alternatives:
+            alternatives = self.search_parts(package=package, in_stock=True, limit=limit * 3)
 
         # Filter out the original part
         alternatives = [p for p in alternatives if p["lcsc"] != lcsc_number]

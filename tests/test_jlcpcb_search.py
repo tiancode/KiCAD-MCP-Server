@@ -24,6 +24,15 @@ _ROWS = [
     ("C90761", "TPS54331DDAR", "SOIC-8-EP", "Extended", "3.5V~28V 3A 570kHz Buck Converter", 50),
     ("C0", "RC0603FR-0710KL", "0603", "Basic", "10kΩ ±1% 100mW Thick Film Resistor", 1000),
     ("C_OOS", "TPS54331QDRQ1", "SOIC-8", "Extended", "3A Buck Converter", 0),  # out of stock
+    # Alternatives fixture: a reference 10kΩ 0603 resistor, two more resistors
+    # (C0 above is a Basic one), and a same-package capacitor that shares no
+    # resistor tokens — it must NOT surface as an alternative.
+    ("C_R_REF", "RES-10K-REF", "0603", "Extended", "10kΩ ±1% 100mW Thick Film Resistor", 100),
+    ("C_R3", "RES-10K-J", "0603", "Extended", "10kΩ ±5% 100mW Thick Film Resistor", 50),
+    ("C_CAP", "CAP-10NF", "0603", "Basic", "10nF 50V X7R Multilayer Ceramic Capacitor", 999),
+    # No-token descriptions in a unique package → alternatives fallback path.
+    ("C_REF_EMPTY", "EMPTY1", "QFN-99", "Extended", "", 10),
+    ("C_QFN2", "QFN2", "QFN-99", "Extended", "", 20),
 ]
 
 
@@ -116,3 +125,33 @@ def test_search_parts_back_compat_returns_list(manager):
     out = manager.search_parts(query="buck")
     assert isinstance(out, list)
     assert all("lcsc" in p for p in out)
+
+
+def test_description_fts_terms_filters_noise(manager):
+    terms = manager._description_fts_terms(
+        "-55℃~+155℃ 100mW 510kΩ 75V Thick Film Resistor ±1% 0603 ROHS"
+    )
+    assert "510kω" in terms  # value token kept (and lowercased)
+    assert "75v" in terms
+    assert "0603" not in terms  # bare number dropped
+    assert "55" not in terms and "155" not in terms  # temp-range fragments dropped
+    assert terms == [t.lower() for t in terms]
+
+
+def test_suggest_alternatives_finds_same_spec_not_same_package_junk(manager):
+    alts = {p["lcsc"] for p in manager.suggest_alternatives("C_R_REF", limit=5)}
+    assert {"C0", "C_R3"} <= alts  # other 10kΩ resistors surface
+    assert "C_CAP" not in alts  # same package, different function — excluded
+    assert "C_R_REF" not in alts  # never returns the reference itself
+
+
+def test_suggest_alternatives_prefers_basic(manager):
+    alts = manager.suggest_alternatives("C_R_REF", limit=5)
+    assert alts[0]["lcsc"] == "C0"  # the Basic 10kΩ ranks first
+
+
+def test_suggest_alternatives_falls_back_to_package(manager):
+    # Empty description → no usable tokens → package-only fallback.
+    alts = {p["lcsc"] for p in manager.suggest_alternatives("C_REF_EMPTY", limit=5)}
+    assert "C_QFN2" in alts
+    assert "C_REF_EMPTY" not in alts
