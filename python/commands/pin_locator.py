@@ -7,6 +7,7 @@ Uses S-expression parsing to extract pin data from symbol definitions.
 
 import logging
 import math
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -27,11 +28,70 @@ _UNIT_SUFFIX_RE = re.compile(r"_(\d+)_(\d+)$")
 class PinLocator:
     """Locate pins on symbol instances in KiCad schematics"""
 
+    # Process-wide caches shared across every PinLocator instance, keyed by a
+    # (abspath, size, mtime_ns) file signature. The net/label listing paths
+    # create a fresh PinLocator() per net (see wire_connectivity), so without
+    # sharing, the whole .kicad_sch was re-read and re-parsed — and every
+    # lib_symbol re-extracted — once per net (O(nets x parse); a single
+    # list_schematic_nets re-extracted Device:R 100+ times). Keying on the
+    # signature keeps reuse correct: any write bumps size/mtime, which is a
+    # cache miss, so a stale parse is never served. _cache_put keeps only the
+    # newest signature per path, bounding memory to ~one parse per file.
+    _SCHEMATIC_CACHE: Dict[Tuple[str, int, int], Any] = {}  # sig -> skip.Schematic
+    _SEXP_CACHE: Dict[Tuple[str, int, int], Any] = {}  # sig -> parsed sexpdata
+    _PINDEF_CACHE: Dict[Tuple[str, int, int, str], Dict[str, Dict]] = {}  # sig+lib_id -> pins
+
     def __init__(self) -> None:
-        """Initialize pin locator with empty cache"""
-        self.pin_definition_cache = {}  # Cache: "lib_id:symbol_name" -> pin_data
-        self._schematic_cache: Dict[str, object] = {}  # Cache: path -> loaded Schematic
-        self._sexp_cache: Dict[str, Any] = {}  # Cache: path -> parsed sexpdata (mirror-aware)
+        """Bind to the shared, mtime-keyed class caches (see class docstring)."""
+        self.pin_definition_cache = PinLocator._PINDEF_CACHE
+        self._schematic_cache = PinLocator._SCHEMATIC_CACHE
+        self._sexp_cache = PinLocator._SEXP_CACHE
+
+    @staticmethod
+    def _file_sig(path: Any) -> Tuple[str, int, int]:
+        """Cache signature for a schematic file: (abspath, size, mtime_ns).
+        Any edit changes size or mtime, so a stale parse is never reused.
+        Missing/unreadable file collapses to a sentinel so callers still hit
+        their own not-found handling rather than crashing here."""
+        p = os.path.abspath(str(path))
+        try:
+            st = os.stat(p)
+            return (p, st.st_size, st.st_mtime_ns)
+        except OSError:
+            return (p, -1, -1)
+
+    @staticmethod
+    def _cache_put(cache: Dict[Any, Any], key: Tuple[Any, ...], value: Any) -> None:
+        """Insert, evicting any entries for the same path with an older
+        signature so a cache holds at most the newest parse per file. Works for
+        both the file caches (key == sig) and the pin-def cache (key ==
+        sig + (lib_id,)): identity is key[0] (path), freshness is key[:3] (sig),
+        so sibling lib_ids of the current signature are preserved."""
+        path, sig = key[0], key[:3]
+        for stale in [k for k in cache if k[0] == path and k[:3] != sig]:
+            del cache[stale]
+        cache[key] = value
+
+    def _load_skip_schematic(self, schematic_path: Any) -> Any:
+        """Return a kicad-skip Schematic for the file, reusing the shared cache
+        when the on-disk signature is unchanged."""
+        sig = self._file_sig(schematic_path)
+        sch = PinLocator._SCHEMATIC_CACHE.get(sig)
+        if sch is None:
+            sch = Schematic(str(schematic_path))
+            self._cache_put(PinLocator._SCHEMATIC_CACHE, sig, sch)
+        return sch
+
+    def _load_sexp(self, schematic_path: Any) -> Any:
+        """Return the parsed sexpdata tree for the file, reusing the shared
+        cache when the on-disk signature is unchanged."""
+        sig = self._file_sig(schematic_path)
+        data = PinLocator._SEXP_CACHE.get(sig)
+        if data is None:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                data = sexpdata.loads(f.read())
+            self._cache_put(PinLocator._SEXP_CACHE, sig, data)
+        return data
 
     @staticmethod
     def parse_symbol_definition(symbol_def: list) -> Dict[str, Dict]:
@@ -137,18 +197,15 @@ class PinLocator:
         Returns:
             Dictionary mapping pin number -> pin data
         """
-        # Check cache
-        cache_key = f"{schematic_path}:{lib_id}"
+        # Check cache (keyed by file signature so an edit invalidates it)
+        cache_key = self._file_sig(schematic_path) + (lib_id,)
         if cache_key in self.pin_definition_cache:
             logger.debug(f"Using cached pin data for {lib_id}")
             return self.pin_definition_cache[cache_key]
 
         try:
-            # Read schematic
-            with open(schematic_path, "r", encoding="utf-8") as f:
-                sch_content = f.read()
-
-            sch_data = sexpdata.loads(sch_content)
+            # Read schematic (shared, signature-keyed parse)
+            sch_data = self._load_sexp(schematic_path)
 
             # Find lib_symbols section
             lib_symbols = None
@@ -189,7 +246,7 @@ class PinLocator:
             if best_match is not None:
                 matched_name = str(best_match[1]).strip('"')
                 pins = self.parse_symbol_definition(best_match)
-                self.pin_definition_cache[cache_key] = pins
+                self._cache_put(self.pin_definition_cache, cache_key, pins)
                 if matched_name != lib_id:
                     logger.debug(
                         f"Matched {lib_id} → lib_symbols '{matched_name}' ({len(pins)} pins)"
@@ -240,10 +297,7 @@ class PinLocator:
     def _get_lib_id(self, schematic_path: Path, symbol_reference: str) -> Optional[str]:
         """Helper: return the lib_id string for a placed symbol"""
         try:
-            sch_key = str(schematic_path)
-            if sch_key not in self._schematic_cache:
-                self._schematic_cache[sch_key] = Schematic(sch_key)
-            sch = self._schematic_cache[sch_key]
+            sch = self._load_skip_schematic(schematic_path)
             for symbol in sch.symbol:
                 if symbol.property.Reference.value.rstrip("_") == symbol_reference:
                     return symbol.lib_id.value if hasattr(symbol, "lib_id") else None
@@ -274,21 +328,17 @@ class PinLocator:
         mislocating the pin onto another unit — except unit 0 (common /
         graphic-only pins), which falls back to the first instance.
         """
-        import sexpdata as _sexpdata
         from commands.wire_dragger import WireDragger
 
-        sch_key = str(schematic_path)
         try:
-            if sch_key not in self._sexp_cache:
-                with open(schematic_path, "r", encoding="utf-8") as f:
-                    self._sexp_cache[sch_key] = _sexpdata.loads(f.read())
+            sexp = self._load_sexp(schematic_path)
         except (OSError, ValueError) as e:
             # OSError covers missing/unreadable file; ValueError covers
             # sexpdata parse failures (it raises ValueError on bad syntax).
             logger.error(f"_get_symbol_transform: failed to parse {schematic_path}: {e}")
             return None
 
-        instances = WireDragger.find_symbol_instances(self._sexp_cache[sch_key], symbol_reference)
+        instances = WireDragger.find_symbol_instances(sexp, symbol_reference)
         if not instances:
             return None
 
@@ -403,11 +453,8 @@ class PinLocator:
         """
         try:
             # Load schematic with kicad-skip to get symbol instance
-            # Use cache to avoid reloading the file for every pin lookup
-            sch_key = str(schematic_path)
-            if sch_key not in self._schematic_cache:
-                self._schematic_cache[sch_key] = Schematic(sch_key)
-            sch = self._schematic_cache[sch_key]
+            # (shared, signature-keyed cache avoids reparsing per pin lookup)
+            sch = self._load_skip_schematic(schematic_path)
 
             # Find the symbol instance.
             # skip may write references with a trailing "_" (e.g. "R1_") — strip it when comparing.
@@ -518,11 +565,8 @@ class PinLocator:
             Dictionary mapping pin number -> [x, y] coordinates
         """
         try:
-            # Load schematic (use cache)
-            sch_key = str(schematic_path)
-            if sch_key not in self._schematic_cache:
-                self._schematic_cache[sch_key] = Schematic(sch_key)
-            sch = self._schematic_cache[sch_key]
+            # Load schematic (shared, signature-keyed cache)
+            sch = self._load_skip_schematic(schematic_path)
 
             # Find symbol
             target_symbol = None

@@ -78,6 +78,30 @@ def _reset_library_manager_caches():
         _SYMBOL_MANAGER_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_pin_locator_caches():
+    """Clear PinLocator's process-wide, signature-keyed parse caches around every
+    test. They are shared across instances now, so without this a schematic
+    parsed by one test could be reused by another that happens to write the same
+    temp path. No-op if the module isn't importable in this environment."""
+    try:
+        from commands.pin_locator import PinLocator
+    except Exception:
+        yield
+        return
+
+    def _clear() -> None:
+        PinLocator._SCHEMATIC_CACHE.clear()
+        PinLocator._SEXP_CACHE.clear()
+        PinLocator._PINDEF_CACHE.clear()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()
+
+
 @pytest.fixture
 def real_kipy():
     """Guarantee the REAL kipy package for a test, then restore prior state.
