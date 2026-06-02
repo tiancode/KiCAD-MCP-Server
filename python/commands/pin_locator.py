@@ -191,11 +191,11 @@ class PinLocator:
                 pins = self.parse_symbol_definition(best_match)
                 self.pin_definition_cache[cache_key] = pins
                 if matched_name != lib_id:
-                    logger.info(
+                    logger.debug(
                         f"Matched {lib_id} → lib_symbols '{matched_name}' ({len(pins)} pins)"
                     )
                 else:
-                    logger.info(f"Extracted {len(pins)} pins from {lib_id}")
+                    logger.debug(f"Extracted {len(pins)} pins from {lib_id}")
                 return pins
 
             logger.warning(f"Symbol {lib_id} not found in lib_symbols")
@@ -495,7 +495,7 @@ class PinLocator:
                 mirror_y,
             )
 
-            logger.info(f"Pin {symbol_reference}/{pin_number} located at ({abs_x}, {abs_y})")
+            logger.debug(f"Pin {symbol_reference}/{pin_number} located at ({abs_x}, {abs_y})")
             return [abs_x, abs_y]
 
         except (OSError, AttributeError, KeyError, ValueError, TypeError) as e:
@@ -553,7 +553,7 @@ class PinLocator:
                 if location:
                     result[pin_num] = location
 
-            logger.info(f"Located {len(result)} pins on {symbol_reference}")
+            logger.debug(f"Located {len(result)} pins on {symbol_reference}")
             return result
 
         except (OSError, AttributeError, KeyError, ValueError, TypeError) as e:
