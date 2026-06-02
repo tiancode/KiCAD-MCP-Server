@@ -195,7 +195,13 @@ class PinLocator:
             lib_id: Library identifier (e.g., "Device:R", "MCU_ST_STM32F1:STM32F103C8Tx")
 
         Returns:
-            Dictionary mapping pin number -> pin data
+            Dictionary mapping pin number -> pin data.
+
+            READ-ONLY: this is the shared, process-wide cached object (see the
+            PinLocator class docstring), not a copy. Mutating the returned dict
+            — or any inner pin_data dict — corrupts the cache for every other
+            caller. Copy it first if you need to modify it. (get_all_symbol_pins
+            builds a fresh dict per call and is safe to mutate.)
         """
         # Check cache (keyed by file signature so an edit invalidates it)
         cache_key = self._file_sig(schematic_path) + (lib_id,)
