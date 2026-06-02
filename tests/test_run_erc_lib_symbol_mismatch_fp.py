@@ -69,6 +69,45 @@ def test_embedded_differing_from_disk_not_matched(tmp_path):
     assert _embedded_symbols_matching_disk(str(proj / "demo.kicad_sch"), proj) == set()
 
 
+def test_bare_name_collision_not_treated_as_match(tmp_path):
+    """Two libs both define 'WIDGET'; one's embedded copy matches disk, the
+    other's differs. Because the violation message only quotes the symbol name
+    (not the library), an ambiguous name must NOT be reported as a false
+    positive — otherwise libB's genuine mismatch would be silently hidden."""
+    from handlers.schematic_io import _embedded_symbols_matching_disk
+
+    def _sym(name, ref):
+        return (
+            f'(symbol "{name}" (in_bom yes) (on_board yes)\n'
+            f'  (property "Reference" "{ref}" (at 0 0 0))\n'
+            '  (symbol "WIDGET_0_1" (rectangle (start -1 1) (end 1 -1))))'
+        )
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "libA.kicad_sym").write_text(
+        f"(kicad_symbol_lib (version 1) (generator t)\n{_sym('WIDGET', 'U')}\n)\n", "utf-8"
+    )
+    (proj / "libB.kicad_sym").write_text(
+        f"(kicad_symbol_lib (version 1) (generator t)\n{_sym('WIDGET', 'X')}\n)\n", "utf-8"
+    )
+    (proj / "sym-lib-table").write_text(
+        "(sym_lib_table (version 7)\n"
+        '  (lib (name "libA")(type "KiCad")(uri "${KIPRJMOD}/libA.kicad_sym")(options ""))\n'
+        '  (lib (name "libB")(type "KiCad")(uri "${KIPRJMOD}/libB.kicad_sym")(options ""))\n)\n',
+        "utf-8",
+    )
+    # libA:WIDGET embedded matches libA disk (ref U); libB:WIDGET embedded
+    # differs from libB disk (embedded ref U, disk ref X).
+    (proj / "demo.kicad_sch").write_text(
+        "(kicad_sch (version 1) (generator t)\n  (lib_symbols\n"
+        f"{_sym('libA:WIDGET', 'U')}\n{_sym('libB:WIDGET', 'U')}\n  )\n)\n",
+        "utf-8",
+    )
+    # 'WIDGET' is ambiguous (matches libA, differs libB) → excluded from FP set.
+    assert _embedded_symbols_matching_disk(str(proj / "demo.kicad_sch"), proj) == set()
+
+
 def _run_erc_with_mismatch(monkeypatch, sch_path, descriptions, auto_refresh):
     """Drive handle_run_erc with a faked kicad-cli emitting the given
     lib_symbol_mismatch descriptions."""

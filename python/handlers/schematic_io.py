@@ -650,6 +650,7 @@ def _embedded_symbols_matching_disk(schematic_path: str, project_dir: "Path") ->
     Best-effort: returns an empty set on any failure (ERC then behaves as before).
     """
     matches: set = set()
+    differs: set = set()
     try:
         from commands.library_symbol import get_symbol_library_manager
 
@@ -659,32 +660,38 @@ def _embedded_symbols_matching_disk(schematic_path: str, project_dir: "Path") ->
             (e for e in sch if isinstance(e, list) and _sexp_head(e) == "lib_symbols"),
             None,
         )
-        if lib_symbols is None:
-            return matches
-        mgr = get_symbol_library_manager(project_path=project_dir)
-        disk_index: Dict[str, Dict[str, Any]] = {}
-        for entry in lib_symbols[1:]:
-            if not (isinstance(entry, list) and len(entry) > 1 and _sexp_head(entry) == "symbol"):
-                continue
-            full = str(entry[1]).strip('"')
-            if ":" not in full:
-                continue
-            nick, bare = full.split(":", 1)
-            sym_path = mgr.libraries.get(nick)
-            if not sym_path or not os.path.exists(sym_path):
-                continue
-            if sym_path not in disk_index:
-                disk_index[sym_path] = _kicad_sym_symbol_index(sym_path)
-            disk_node = disk_index[sym_path].get(bare)
-            if disk_node is None:
-                continue
-            normalized = list(entry)
-            normalized[1] = bare  # strip the NICK: prefix so only content differs
-            if sexpdata.dumps(normalized) == sexpdata.dumps(disk_node):
-                matches.add(bare)
+        if lib_symbols is not None:
+            mgr = get_symbol_library_manager(project_path=project_dir)
+            disk_index: Dict[str, Dict[str, Any]] = {}
+            for entry in lib_symbols[1:]:
+                if not (
+                    isinstance(entry, list) and len(entry) > 1 and _sexp_head(entry) == "symbol"
+                ):
+                    continue
+                full = str(entry[1]).strip('"')
+                if ":" not in full:
+                    continue
+                nick, bare = full.split(":", 1)
+                sym_path = mgr.libraries.get(nick)
+                if not sym_path or not os.path.exists(sym_path):
+                    continue
+                if sym_path not in disk_index:
+                    disk_index[sym_path] = _kicad_sym_symbol_index(sym_path)
+                disk_node = disk_index[sym_path].get(bare)
+                if disk_node is None:
+                    continue
+                normalized = list(entry)
+                normalized[1] = bare  # strip the NICK: prefix so only content differs
+                if sexpdata.dumps(normalized) == sexpdata.dumps(disk_node):
+                    matches.add(bare)
+                else:
+                    differs.add(bare)
     except Exception as e:  # best-effort — never break ERC over this
         logger.debug("embedded-vs-disk lib_symbol compare failed: %s", e)
-    return matches
+    # The violation message only quotes the symbol name, not the library, so a
+    # bare name that matches one lib but differs in another is ambiguous — drop
+    # it from the false-positive set rather than risk hiding a genuine mismatch.
+    return matches - differs
 
 
 def _mismatch_is_false_positive(vmsg: str, matches_disk: set) -> bool:
