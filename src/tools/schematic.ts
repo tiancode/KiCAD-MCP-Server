@@ -1625,7 +1625,11 @@ edit_schematic_component and set its value to an empty string.`,
               v.location && v.location.x !== undefined
                 ? ` @ (${v.location.x}, ${v.location.y})`
                 : "";
-            const fp = v.likely_false_positive ? " [likely PWR_FLAG FP]" : "";
+            const fp = v.likely_false_positive
+              ? v.type === "lib_symbol_mismatch"
+                ? " [likely lib_symbol FP]"
+                : " [likely PWR_FLAG FP]"
+              : "";
             lines.push(`${i + 1}. [${v.severity}]${fp} ${v.message}${loc}`);
           });
           if (violations.length > 30) {
