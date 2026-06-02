@@ -93,6 +93,16 @@ except (OSError, PermissionError):
     )
 logger = logging.getLogger("kicad_interface")
 
+# Silence kicad-skip's benign per-element chatter. It logs a WARNING
+# ("Passed key  -- can't parsy") from NamedElementCollection._cleanse_key for
+# every embedded lib_symbol pin whose name is empty ('' rather than '~') — a
+# normal occurrence for stock symbols (e.g. Device:R). Each schematic load
+# re-parses lib_symbols, so across reloads this once filled the log with
+# thousands of identical lines. We never use skip's named-pin index (pin
+# lookups go through commands/pin_locator.py), so this is pure noise; keep
+# ERROR so real skip failures still surface.
+logging.getLogger("skip").setLevel(logging.ERROR)
+
 # Log Python environment details
 logger.info(f"Python version: {sys.version}")
 logger.info(f"Python executable: {sys.executable}")
