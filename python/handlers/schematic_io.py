@@ -613,6 +613,90 @@ def _merged_project_lib_env(project_dir: "Path") -> "Iterator[Tuple[Optional[dic
         shutil.rmtree(config_home, ignore_errors=True)
 
 
+def _sexp_head(node: Any) -> Optional[str]:
+    """The leading symbol of an S-expression list (e.g. 'symbol'), else None."""
+    if isinstance(node, list) and node and hasattr(node[0], "value"):
+        try:
+            return node[0].value()
+        except Exception:
+            return None
+    return None
+
+
+def _kicad_sym_symbol_index(sym_path: str) -> Dict[str, Any]:
+    """Map symbol-name -> S-expr node for every top-level symbol in a .kicad_sym."""
+    out: Dict[str, Any] = {}
+    try:
+        with open(sym_path, encoding="utf-8") as f:
+            tree = sexpdata.loads(f.read())
+    except (OSError, ValueError):
+        return out
+    for node in tree[1:] if isinstance(tree, list) else []:
+        if isinstance(node, list) and len(node) > 1 and _sexp_head(node) == "symbol":
+            out[str(node[1]).strip('"')] = node
+    return out
+
+
+def _embedded_symbols_matching_disk(schematic_path: str, project_dir: "Path") -> set:
+    """Bare names of embedded lib_symbols whose definition is identical to the
+    resolved on-disk .kicad_sym symbol (ignoring indentation and the 'NICK:'
+    name prefix).
+
+    A kicad-cli ``lib_symbol_mismatch`` on one of these is a false positive: the
+    embedded copy already matches the library, so the design is correct and
+    refresh_schematic_lib_symbols cannot change anything. kicad-cli's headless
+    ``LIB_SYMBOL::Compare`` has been observed to flag project-scoped custom libs
+    (supplied via the merged sym-lib-table) even when the content is identical.
+    Best-effort: returns an empty set on any failure (ERC then behaves as before).
+    """
+    matches: set = set()
+    try:
+        from commands.library_symbol import get_symbol_library_manager
+
+        with open(schematic_path, encoding="utf-8") as f:
+            sch = sexpdata.loads(f.read())
+        lib_symbols = next(
+            (e for e in sch if isinstance(e, list) and _sexp_head(e) == "lib_symbols"),
+            None,
+        )
+        if lib_symbols is None:
+            return matches
+        mgr = get_symbol_library_manager(project_path=project_dir)
+        disk_index: Dict[str, Dict[str, Any]] = {}
+        for entry in lib_symbols[1:]:
+            if not (isinstance(entry, list) and len(entry) > 1 and _sexp_head(entry) == "symbol"):
+                continue
+            full = str(entry[1]).strip('"')
+            if ":" not in full:
+                continue
+            nick, bare = full.split(":", 1)
+            sym_path = mgr.libraries.get(nick)
+            if not sym_path or not os.path.exists(sym_path):
+                continue
+            if sym_path not in disk_index:
+                disk_index[sym_path] = _kicad_sym_symbol_index(sym_path)
+            disk_node = disk_index[sym_path].get(bare)
+            if disk_node is None:
+                continue
+            normalized = list(entry)
+            normalized[1] = bare  # strip the NICK: prefix so only content differs
+            if sexpdata.dumps(normalized) == sexpdata.dumps(disk_node):
+                matches.add(bare)
+    except Exception as e:  # best-effort — never break ERC over this
+        logger.debug("embedded-vs-disk lib_symbol compare failed: %s", e)
+    return matches
+
+
+def _mismatch_is_false_positive(vmsg: str, matches_disk: set) -> bool:
+    """True when a lib_symbol_mismatch names a symbol (quoted in the message)
+    whose embedded definition already matches disk — i.e. a kicad-cli false
+    positive that refresh cannot fix."""
+    for name in matches_disk:
+        if f"'{name}'" in vmsg or f'"{name}"' in vmsg:
+            return True
+    return False
+
+
 def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Run Electrical Rules Check on a schematic via kicad-cli.
 
@@ -756,11 +840,22 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # recommendation instead of leaving the agent to interpret each
             # tagged violation individually.
             pwrflag_target_nets: set = set()
-            # Same idea for ``lib_symbol_mismatch`` — every hit means the
-            # schematic's embedded snapshot drifted from the on-disk
-            # .kicad_sym and ``refresh_schematic_lib_symbols`` is the
-            # one-shot fix.
+            pwrflag_fp_count = 0
+            # ``lib_symbol_mismatch``: a genuine drift (embedded snapshot differs
+            # from the on-disk .kicad_sym) is fixable with
+            # refresh_schematic_lib_symbols. But kicad-cli's headless compare
+            # also flags project-scoped custom libs whose embedded def is already
+            # identical to disk — a false positive refresh can't fix (it would be
+            # a no-op, the loop the user hit). We compare embedded vs disk
+            # ourselves: matches → tag false positive (no refresh rec); only real
+            # drift is counted and gets the refresh recommendation.
             lib_symbol_mismatch_count = 0
+            lib_mismatch_fp_count = 0
+            embedded_matches_disk = (
+                _embedded_symbols_matching_disk(schematic_path, project_dir)
+                if any(v.get("type") == "lib_symbol_mismatch" for v in all_violations)
+                else set()
+            )
 
             for v in all_violations:
                 vseverity = v.get("severity", "error")
@@ -793,8 +888,21 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     if extracted_net:
                         annotated["net"] = extracted_net
                         pwrflag_target_nets.add(extracted_net)
+                    pwrflag_fp_count += 1
                 elif vtype == "lib_symbol_mismatch":
-                    lib_symbol_mismatch_count += 1
+                    if _mismatch_is_false_positive(vmsg, embedded_matches_disk):
+                        annotated["likely_false_positive"] = True
+                        annotated["reason"] = (
+                            "The embedded lib_symbols definition is identical to "
+                            "the resolved on-disk .kicad_sym (normalized for "
+                            "indentation and the library-nickname prefix); "
+                            "kicad-cli's headless library compare flags "
+                            "project-scoped libs anyway. The design is correct "
+                            "and refresh_schematic_lib_symbols cannot change it."
+                        )
+                        lib_mismatch_fp_count += 1
+                    else:
+                        lib_symbol_mismatch_count += 1
                 violations.append(annotated)
                 if vseverity in severity_counts:
                     severity_counts[vseverity] += 1
@@ -807,7 +915,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # per-violation `reason` strings.  Empty list when there's
             # nothing to recommend.
             recommendations: List[Dict[str, Any]] = []
-            if tagged_false_positives > 0:
+            if pwrflag_fp_count > 0:
                 # Fall back to the labels we discovered in the schematic if
                 # extraction didn't produce a net list (older kicad-cli
                 # versions phrase the message differently).
@@ -824,7 +932,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                             "kicad-cli ERC requires an explicit PWR_FLAG symbol "
                             "on every power-input net even when a power label "
                             "(GND / VCC / +3V3 ...) makes the netlist correct. "
-                            f"{tagged_false_positives} violation(s) here are "
+                            f"{pwrflag_fp_count} violation(s) here are "
                             "this exact false-positive class."
                         ),
                         "action": (
@@ -838,6 +946,12 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                         ),
                     }
                 )
+            # Only GENUINE drift (embedded != disk) is counted above, so it is
+            # the only thing that drives the refresh recommendation. Byte-
+            # identical mismatches were tagged likely_false_positive and skipped
+            # — that is what breaks the no-op "recommend refresh -> re-run" loop
+            # the user reported; a genuine drift instead self-resolves after one
+            # refresh (which makes embedded == disk, a no-op on the next run).
             if lib_symbol_mismatch_count > 0:
                 recommendations.append(
                     {
@@ -891,6 +1005,10 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     "by_severity": real_by_severity,
                     "raw_by_severity": severity_counts,
                     "likely_false_positives": tagged_false_positives,
+                    # How many of the FPs are lib_symbol_mismatch warnings whose
+                    # embedded def already matches disk (kicad-cli compare quirk,
+                    # not user-actionable). 0 unless a project-scoped lib tripped it.
+                    "lib_symbol_mismatch_false_positives": lib_mismatch_fp_count,
                     "real_errors": real_by_severity.get("error", 0),
                     # Top-level remediation hints: one entry per known
                     # fix-class.  Currently only PWR_FLAG.  Empty list
