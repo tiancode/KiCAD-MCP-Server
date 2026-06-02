@@ -63,7 +63,7 @@ def _patch_global_table(monkeypatch, tmp_path: Path, version: str = "10.0") -> P
 
 
 def test_merge_adds_project_library(monkeypatch, tmp_path):
-    from handlers.schematic_io import _build_erc_config_home
+    from handlers.schematic_io import _build_project_lib_config_home
 
     _patch_global_table(monkeypatch, tmp_path)
     proj = _make_project(
@@ -71,7 +71,7 @@ def test_merge_adds_project_library(monkeypatch, tmp_path):
         '  (lib (name "mylib")(type "KiCad")(uri "${KIPRJMOD}/mylib.kicad_sym")(options ""))',
     )
 
-    result = _build_erc_config_home(proj)
+    result = _build_project_lib_config_home(proj)
     assert result is not None
     config_home, nicks = result
     try:
@@ -99,7 +99,7 @@ def test_non_versioned_global_dir_returns_none(monkeypatch, tmp_path):
     kicad-cli appends the version dir, so writing elsewhere would hide the
     table entirely (worse than the original false positives)."""
     from commands.library_symbol import SymbolLibraryManager
-    from handlers.schematic_io import _build_erc_config_home
+    from handlers.schematic_io import _build_project_lib_config_home
 
     gdir = tmp_path / "kicad"  # flat, non-versioned layout
     gdir.mkdir()
@@ -111,22 +111,22 @@ def test_non_versioned_global_dir_returns_none(monkeypatch, tmp_path):
         tmp_path,
         '  (lib (name "mylib")(type "KiCad")(uri "${KIPRJMOD}/mylib.kicad_sym")(options ""))',
     )
-    assert _build_erc_config_home(proj) is None
+    assert _build_project_lib_config_home(proj) is None
 
 
 def test_no_project_table_returns_none(monkeypatch, tmp_path):
     """A project without a sym-lib-table needs no merge — run ERC unchanged."""
-    from handlers.schematic_io import _build_erc_config_home
+    from handlers.schematic_io import _build_project_lib_config_home
 
     bare = tmp_path / "bare"
     bare.mkdir()
-    assert _build_erc_config_home(bare) is None
+    assert _build_project_lib_config_home(bare) is None
 
 
 def test_duplicate_nickname_not_merged(monkeypatch, tmp_path):
     """If the project nickname already exists in the global table, skip it so
     the merged table can't contain a duplicate (a hard error in KiCad)."""
-    from handlers.schematic_io import _build_erc_config_home
+    from handlers.schematic_io import _build_project_lib_config_home
 
     _patch_global_table(monkeypatch, tmp_path)
     # project re-declares the global "KiCad" nickname → nothing new to add
@@ -134,21 +134,21 @@ def test_duplicate_nickname_not_merged(monkeypatch, tmp_path):
         tmp_path,
         '  (lib (name "KiCad")(type "KiCad")(uri "${KIPRJMOD}/mylib.kicad_sym")(options ""))',
     )
-    assert _build_erc_config_home(proj) is None
+    assert _build_project_lib_config_home(proj) is None
 
 
 def test_missing_global_table_returns_none(monkeypatch, tmp_path):
     """Without a discoverable global table we must NOT substitute a minimal
     one (it would hide kicad-cli's own global table); run ERC unchanged."""
     from commands.library_symbol import SymbolLibraryManager
-    from handlers.schematic_io import _build_erc_config_home
+    from handlers.schematic_io import _build_project_lib_config_home
 
     monkeypatch.setattr(SymbolLibraryManager, "_get_global_sym_lib_table", lambda self: None)
     proj = _make_project(
         tmp_path,
         '  (lib (name "mylib")(type "KiCad")(uri "${KIPRJMOD}/mylib.kicad_sym")(options ""))',
     )
-    assert _build_erc_config_home(proj) is None
+    assert _build_project_lib_config_home(proj) is None
 
 
 def test_handler_sets_config_home_and_reports_merge(monkeypatch, tmp_path):
@@ -190,5 +190,46 @@ def test_handler_sets_config_home_and_reports_merge(monkeypatch, tmp_path):
     # response advertises the merge
     assert out["project_lib_table"]["merged"] is True
     assert out["project_lib_table"]["libraries"] == ["mylib"]
+    # temp config home cleaned up after the run
+    assert not os.path.isdir(cfg_home)
+
+
+def test_export_netlist_merges_project_lib(monkeypatch, tmp_path):
+    """export_netlist runs kicad-cli with the merged config so the netlist's
+    <libraries> block includes project-scoped libs, then cleans the temp dir."""
+    from handlers.schematic_io import handle_export_netlist
+    from kicad_interface import KiCADInterface
+
+    _patch_global_table(monkeypatch, tmp_path)
+    proj = _make_project(
+        tmp_path,
+        '  (lib (name "mylib")(type "KiCad")(uri "${KIPRJMOD}/mylib.kicad_sym")(options ""))',
+    )
+    sch = proj / "demo.kicad_sch"
+    sch.write_text("(kicad_sch)\n", encoding="utf-8")
+    out_file = tmp_path / "out.net"
+
+    iface = KiCADInterface.__new__(KiCADInterface)
+    monkeypatch.setattr(
+        KiCADInterface, "_find_kicad_cli_static", staticmethod(lambda: "/fake/kicad-cli")
+    )
+
+    captured = {}
+
+    def _fake_run(cmd, **kw):
+        captured["env"] = kw.get("env")
+        out_path = cmd[cmd.index("--output") + 1]
+        Path(out_path).write_text("(export)\n", encoding="utf-8")
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    out = handle_export_netlist(iface, {"schematicPath": str(sch), "outputPath": str(out_file)})
+
+    assert out["success"] is True
+    env = captured["env"]
+    assert env is not None and "KICAD_CONFIG_HOME" in env
+    cfg_home = env["KICAD_CONFIG_HOME"]
+    assert out["mergedProjectLibraries"] == ["mylib"]
     # temp config home cleaned up after the run
     assert not os.path.isdir(cfg_home)

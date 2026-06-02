@@ -6,11 +6,12 @@ See python/handlers/__init__.py for the calling convention.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 import pcbnew  # type: ignore[import-not-found]
 import sexpdata
@@ -450,10 +451,17 @@ def handle_export_netlist(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
             schematic_path,
         ]
         logger.info(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        # Merge the project-local sym-lib-table so the exported netlist's
+        # <libraries> block includes project-scoped custom libs (kicad-cli
+        # otherwise reads only the global table and silently omits them).
+        with _merged_project_lib_env(_project_dir_for(schematic_path)) as (env, merged_libs):
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
 
         if result.returncode == 0:
-            return {"success": True, "outputPath": output_path, "format": fmt}
+            resp: Dict[str, Any] = {"success": True, "outputPath": output_path, "format": fmt}
+            if merged_libs:
+                resp["mergedProjectLibraries"] = merged_libs
+            return resp
         else:
             return {
                 "success": False,
@@ -469,23 +477,35 @@ def handle_export_netlist(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         return {"success": False, "message": str(e)}
 
 
-def _build_erc_config_home(project_dir: "Path") -> Optional[Tuple[str, List[str]]]:
-    """Write a throwaway KiCad config home whose *global* sym-lib-table is the
-    real global table plus the project-local table's libraries, so kicad-cli's
-    ERC can resolve project-scoped symbol libraries.
+def _project_dir_for(schematic_path: str) -> "Path":
+    """Return the project root for a schematic: the nearest ancestor holding a
+    sym-lib-table or a *.kicad_pro, else the schematic's own directory."""
+    from pathlib import Path
 
-    kicad-cli ``sch erc`` only ever loads the global sym-lib-table — it does not
-    merge the project-local ``sym-lib-table`` the way the GUI does. A schematic
-    that uses a project-registered custom library therefore gets a spurious
-    "symbol library 'X' is not in the current configuration" warning per placed
-    instance, even though the lib is registered next to the project and the
+    sch = Path(schematic_path)
+    for ancestor in sch.parents:
+        if (ancestor / "sym-lib-table").exists() or list(ancestor.glob("*.kicad_pro")):
+            return ancestor
+    return sch.parent
+
+
+def _build_project_lib_config_home(project_dir: "Path") -> Optional[Tuple[str, List[str]]]:
+    """Write a throwaway KiCad config home whose *global* sym-lib-table is the
+    real global table plus the project-local table's libraries, so a kicad-cli
+    schematic subprocess can resolve project-scoped symbol libraries.
+
+    kicad-cli ``sch erc`` / ``sch export netlist`` only ever load the global
+    sym-lib-table — they do not merge the project-local ``sym-lib-table`` the
+    way the GUI does. A schematic that uses a project-registered custom library
+    therefore gets a spurious "symbol library 'X' is not in the current
+    configuration" warning (ERC) or an incomplete ``<libraries>`` block
+    (netlist), even though the lib is registered next to the project and the
     symbols are embedded. Pointing ``KICAD_CONFIG_HOME`` at this merged copy for
-    the ERC run silences those false positives without touching the user's real
-    config or the global table.
+    the subprocess fixes both without touching the user's real config.
 
     Returns ``(config_home_dir, merged_nicknames)`` or ``None`` when there is
-    nothing to merge or anything goes wrong — the caller then runs ERC exactly
-    as before. Best-effort: never raises into the ERC path.
+    nothing to merge or anything goes wrong — the caller then runs exactly as
+    before. Best-effort: never raises into the caller's path.
     """
     import shutil
     import tempfile
@@ -563,11 +583,34 @@ def _build_erc_config_home(project_dir: "Path") -> Optional[Tuple[str, List[str]
         with open(os.path.join(dest_dir, "sym-lib-table"), "w", encoding="utf-8") as f:
             f.write(merged_text)
         return config_home, added_nicks
-    except Exception as e:  # best-effort — ERC must still run on any failure
-        logger.warning("Could not build merged ERC sym-lib config: %s", e)
+    except Exception as e:  # best-effort — the caller must still run on failure
+        logger.warning("Could not build merged sym-lib config: %s", e)
         if config_home and os.path.isdir(config_home):
             shutil.rmtree(config_home, ignore_errors=True)
         return None
+
+
+@contextlib.contextmanager
+def _merged_project_lib_env(project_dir: "Path") -> "Iterator[Tuple[Optional[dict], List[str]]]":
+    """Context manager yielding ``(env, merged_nicknames)`` for a kicad-cli
+    schematic subprocess that must resolve project-scoped symbol libraries.
+
+    ``env`` is ``None`` (inherit the process environment unchanged) when there
+    is no project-local table or nothing to merge; otherwise it is a copy of the
+    environment with ``KICAD_CONFIG_HOME`` pointed at a merged config. The temp
+    config home, if any, is always removed on exit.
+    """
+    merged = _build_project_lib_config_home(project_dir)
+    if merged is None:
+        yield None, []
+        return
+    config_home, nicknames = merged
+    try:
+        yield {**os.environ, "KICAD_CONFIG_HOME": config_home}, nicknames
+    finally:
+        import shutil
+
+        shutil.rmtree(config_home, ignore_errors=True)
 
 
 def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -601,11 +644,7 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
         from pathlib import Path
 
         sch_path_obj = Path(schematic_path)
-        project_dir = sch_path_obj.parent
-        for ancestor in sch_path_obj.parents:
-            if (ancestor / "sym-lib-table").exists() or list(ancestor.glob("*.kicad_pro")):
-                project_dir = ancestor
-                break
+        project_dir = _project_dir_for(schematic_path)
 
         # Pre-refresh embedded lib_symbols so kicad-cli ERC compares
         # against the actual current library, not an older snapshot left
@@ -642,42 +681,35 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
             json_output = tmp.name
 
-        # Declared before the try so the finally can always clean up, even if
-        # the merge setup below throws.
-        erc_config_home: Optional[str] = None
+        # Pre-bound so the response builder below can reference it regardless of
+        # whether the merge ran. kicad-cli ERC only reads the GLOBAL
+        # sym-lib-table; _merged_project_lib_env merges the project-local table
+        # into a throwaway config so project-scoped libs resolve and don't raise
+        # spurious "library not in current configuration" warnings.
         merged_project_libs: List[str] = []
-        erc_env = None
 
         try:
-            # kicad-cli ERC only reads the GLOBAL sym-lib-table; merge the
-            # project-local table into a throwaway config home so project-scoped
-            # custom libraries resolve and don't raise spurious "library not in
-            # current configuration" warnings. None → no project table / nothing
-            # to merge → run with the inherited environment unchanged.
-            merged = _build_erc_config_home(project_dir)
-            if merged is not None:
-                erc_config_home, merged_project_libs = merged
-            if erc_config_home:
-                erc_env = {**os.environ, "KICAD_CONFIG_HOME": erc_config_home}
-                logger.info(
-                    "ERC: merged %d project sym-lib(s) into temp config (%s)",
-                    len(merged_project_libs),
-                    ", ".join(merged_project_libs),
+            with _merged_project_lib_env(project_dir) as (erc_env, merged_project_libs):
+                if merged_project_libs:
+                    logger.info(
+                        "ERC: merged %d project sym-lib(s) into temp config (%s)",
+                        len(merged_project_libs),
+                        ", ".join(merged_project_libs),
+                    )
+                cmd = [
+                    kicad_cli,
+                    "sch",
+                    "erc",
+                    "--format",
+                    "json",
+                    "--output",
+                    json_output,
+                    schematic_path,
+                ]
+                logger.info(f"Running ERC command: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=120, env=erc_env
                 )
-
-            cmd = [
-                kicad_cli,
-                "sch",
-                "erc",
-                "--format",
-                "json",
-                "--output",
-                json_output,
-                schematic_path,
-            ]
-            logger.info(f"Running ERC command: {' '.join(cmd)}")
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=erc_env)
 
             # kicad-cli returns non-zero when ERC violations are found —
             # this is normal, not an error.  Only fail when no JSON was
@@ -884,10 +916,6 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
         finally:
             if os.path.exists(json_output):
                 os.unlink(json_output)
-            if erc_config_home and os.path.isdir(erc_config_home):
-                import shutil
-
-                shutil.rmtree(erc_config_home, ignore_errors=True)
 
     except subprocess.TimeoutExpired:
         return {"success": False, "message": "ERC timed out after 120 seconds"}
