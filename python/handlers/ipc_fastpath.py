@@ -900,3 +900,24 @@ def handle_get_component_properties(
     except Exception as e:
         logger.error(f"IPC get_component_properties error: {e}")
         return {"success": False, "message": str(e)}
+
+
+def handle_get_component_pads(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """IPC handler for get_component_pads — pad geometry + nets read live from
+    KiCad.  The SWIG handler reads ``iface.board`` and fails "No board is
+    loaded" when the user has the board open in KiCad but never ran
+    open_project through the MCP; this path reads it over IPC instead.
+    """
+    try:
+        reference = params.get("reference", params.get("componentId", ""))
+        if not reference:
+            return {"success": False, "message": "reference parameter is required"}
+
+        result = iface.ipc_board_api.get_component_pads(reference)
+        if result is None:
+            return {"success": False, "message": f"Component {reference} not found"}
+
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"IPC get_component_pads error: {e}")
+        return {"success": False, "message": str(e)}

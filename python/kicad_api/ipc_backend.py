@@ -854,6 +854,97 @@ class IPCBoardAPI(BoardAPI):
             logger.error(f"Failed to list components: {e}")
             return []
 
+    def get_component_pads(self, reference: str) -> Optional[Dict[str, Any]]:
+        """Pad geometry + net for one footprint, read live from KiCad over IPC.
+
+        Returns the same shape as the SWIG ``get_component_pads`` (absolute mm
+        positions) so callers don't have to branch on backend, or ``None`` if
+        no footprint matches ``reference``.  Net *codes* are intentionally
+        omitted — kipy deprecates them (removed in KiCad 10).
+        """
+        from kipy.proto.board.board_types_pb2 import PadStackShape, PadType
+        from kipy.util.units import to_mm
+
+        board = self._get_board()
+        target = None
+        for fp in board.get_footprints():
+            ref = fp.reference_field.text.value if fp.reference_field else ""
+            if ref == reference:
+                target = fp
+                break
+        if target is None:
+            return None
+
+        shape_map = {
+            "PSS_CIRCLE": "circle",
+            "PSS_RECTANGLE": "rect",
+            "PSS_OVAL": "oval",
+            "PSS_TRAPEZOID": "trapezoid",
+            "PSS_ROUNDRECT": "roundrect",
+            "PSS_CHAMFEREDRECT": "chamfered_rect",
+            "PSS_CUSTOM": "custom",
+        }
+        type_map = {
+            "PT_PTH": "through_hole",
+            "PT_SMD": "smd",
+            "PT_EDGE_CONNECTOR": "connector",
+            "PT_NPTH": "npth",
+        }
+
+        # FootprintInstance has no .pads; pads live on .definition and (per
+        # kipy) carry absolute board coordinates because the instance's
+        # position setter translates them.
+        definition = getattr(target, "definition", None)
+        pad_items = list(definition.pads) if definition is not None else []
+
+        pads_out: List[Dict[str, Any]] = []
+        for pad in pad_items:
+            pos = pad.position
+            size = None
+            shape = "unknown"
+            try:
+                copper = pad.padstack.copper_layers
+                if copper:
+                    size = {
+                        "x": to_mm(copper[0].size.x),
+                        "y": to_mm(copper[0].size.y),
+                        "unit": "mm",
+                    }
+                    shape = shape_map.get(PadStackShape.Name(copper[0].shape), "unknown")
+            except Exception:
+                pass  # padstack geometry not always available via IPC
+            drill = None
+            try:
+                d = pad.padstack.drill.diameter.x
+                if d and d > 0:
+                    drill = to_mm(d)
+            except Exception:
+                pass
+            try:
+                pad_type = type_map.get(PadType.Name(pad.pad_type), "unknown")
+            except Exception:
+                pad_type = "unknown"
+            pads_out.append(
+                {
+                    "name": pad.number,
+                    "number": pad.number,
+                    "position": {"x": to_mm(pos.x), "y": to_mm(pos.y), "unit": "mm"},
+                    "net": pad.net.name if pad.net else "",
+                    "shape": shape,
+                    "type": pad_type,
+                    "size": size,
+                    "drillSize": drill,
+                }
+            )
+
+        cpos = target.position
+        return {
+            "reference": reference,
+            "componentPosition": {"x": to_mm(cpos.x), "y": to_mm(cpos.y), "unit": "mm"},
+            "padCount": len(pads_out),
+            "pads": pads_out,
+        }
+
     def place_component(
         self,
         reference: str,

@@ -684,6 +684,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "delete_component": "_ipc_delete_component",
         "get_component_list": "_ipc_get_component_list",
         "get_component_properties": "_ipc_get_component_properties",
+        "get_component_pads": "_ipc_get_component_pads",
         # Save command
         "save_project": "_ipc_save_project",
     }
@@ -1310,6 +1311,7 @@ class KiCADInterface(BoardPersistenceMixin):
             "get_layer_list",
             "get_component_list",
             "get_component_properties",
+            "get_component_pads",
             # Direct IPC queries (handlers/ipc.py).
             "ipc_list_components",
             "ipc_get_tracks",
