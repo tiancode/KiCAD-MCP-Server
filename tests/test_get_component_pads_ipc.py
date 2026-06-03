@@ -106,6 +106,33 @@ def test_ipc_board_api_get_component_pads_returns_none_when_missing(real_kipy):
     assert api.get_component_pads("R99") is None
 
 
+def test_ipc_board_api_get_component_pads_converts_units(real_kipy):
+    """unit=mil/inch must convert every length (pad + component position, size,
+    drill) and stamp the unit field — previously ignored, always mm."""
+    from kicad_api.ipc_backend import IPCBoardAPI
+    from kipy.proto.board.board_types_pb2 import PadStackShape, PadType
+
+    # 25_400 nm = 1 mil = 0.001 inch; component at 25_400_000 nm = 1000 mil.
+    pad = _fake_pad("1", "VCC", 25_400, 0, PadStackShape.PSS_CIRCLE, PadType.PT_PTH, 25_400, 25_400)
+    api = IPCBoardAPI(None, lambda *_a: None)
+    board = api._board = _fake_board_with("R1", [pad])
+    board.get_footprints.return_value[0].position = _Vec(25_400_000, 0)
+
+    mil = api.get_component_pads("R1", "mil")
+    p = mil["pads"][0]
+    assert p["position"] == {"x": 1.0, "y": 0.0, "unit": "mil"}
+    assert p["size"] == {"x": 1.0, "y": 1.0, "unit": "mil"}
+    assert p["drillSize"] == 1.0
+    assert mil["componentPosition"] == {"x": 1000.0, "y": 0.0, "unit": "mil"}
+
+    inch = api.get_component_pads("R1", "inch")
+    assert inch["pads"][0]["position"] == {"x": 0.001, "y": 0.0, "unit": "inch"}
+
+    # Unknown unit falls back to mm rather than raising.
+    mm = api.get_component_pads("R1", "bogus")
+    assert mm["pads"][0]["position"]["unit"] == "mm"
+
+
 def test_ipc_board_api_get_component_pads_survives_padstack_gaps(real_kipy):
     """Padstack geometry isn't always available over IPC; missing pieces must
     degrade to None/unknown rather than raise."""
@@ -179,7 +206,7 @@ def test_get_component_pads_routes_through_ipc_without_swig_board():
     assert out["success"] is True
     assert out["reference"] == "R1"
     assert out["padCount"] == 1
-    iface.ipc_board_api.get_component_pads.assert_called_once_with("R1")
+    iface.ipc_board_api.get_component_pads.assert_called_once_with("R1", "mm")
 
 
 def test_get_component_pads_ipc_read_flagged_stale_when_swig_wrote_disk():

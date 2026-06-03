@@ -633,6 +633,10 @@ class ComponentCommands:
                     "errorDetails": "reference parameter is required",
                 }
 
+            from utils.units import nm_to_unit, normalize_unit
+
+            unit = normalize_unit(params.get("unit", "mm"))
+
             # Find the component
             module = self.board.FindFootprintByReference(reference)
             if not module:
@@ -672,14 +676,24 @@ class ComponentCommands:
                     {
                         "name": pad.GetName(),
                         "number": pad.GetNumber(),
-                        "position": {"x": pos.x / 1000000, "y": pos.y / 1000000, "unit": "mm"},
+                        "position": {
+                            "x": nm_to_unit(pos.x, unit),
+                            "y": nm_to_unit(pos.y, unit),
+                            "unit": unit,
+                        },
                         "net": pad.GetNetname(),
                         "netCode": pad.GetNetCode(),
                         "shape": shape,
                         "type": pad_type,
-                        "size": {"x": size.x / 1000000, "y": size.y / 1000000, "unit": "mm"},
+                        "size": {
+                            "x": nm_to_unit(size.x, unit),
+                            "y": nm_to_unit(size.y, unit),
+                            "unit": unit,
+                        },
                         "drillSize": (
-                            pad.GetDrillSize().x / 1000000 if pad.GetDrillSize().x > 0 else None
+                            nm_to_unit(pad.GetDrillSize().x, unit)
+                            if pad.GetDrillSize().x > 0
+                            else None
                         ),
                     }
                 )
@@ -691,9 +705,9 @@ class ComponentCommands:
                 "success": True,
                 "reference": reference,
                 "componentPosition": {
-                    "x": comp_pos.x / 1000000,
-                    "y": comp_pos.y / 1000000,
-                    "unit": "mm",
+                    "x": nm_to_unit(comp_pos.x, unit),
+                    "y": nm_to_unit(comp_pos.y, unit),
+                    "unit": unit,
                 },
                 "padCount": len(pads),
                 "pads": pads,

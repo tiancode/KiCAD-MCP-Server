@@ -913,7 +913,7 @@ def handle_get_component_pads(iface: "KiCADInterface", params: Dict[str, Any]) -
         if not reference:
             return {"success": False, "message": "reference parameter is required"}
 
-        result = iface.ipc_board_api.get_component_pads(reference)
+        result = iface.ipc_board_api.get_component_pads(reference, params.get("unit", "mm"))
         if result is None:
             return {"success": False, "message": f"Component {reference} not found"}
 

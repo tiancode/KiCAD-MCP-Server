@@ -854,17 +854,19 @@ class IPCBoardAPI(BoardAPI):
             logger.error(f"Failed to list components: {e}")
             return []
 
-    def get_component_pads(self, reference: str) -> Optional[Dict[str, Any]]:
+    def get_component_pads(self, reference: str, unit: str = "mm") -> Optional[Dict[str, Any]]:
         """Pad geometry + net for one footprint, read live from KiCad over IPC.
 
-        Returns the same shape as the SWIG ``get_component_pads`` (absolute mm
-        positions) so callers don't have to branch on backend, or ``None`` if
-        no footprint matches ``reference``.  Net *codes* are intentionally
-        omitted — kipy deprecates them (removed in KiCad 10).
+        Returns the same shape as the SWIG ``get_component_pads`` (absolute
+        positions in ``unit`` — mm/mil/inch) so callers don't have to branch on
+        backend, or ``None`` if no footprint matches ``reference``.  ``netCode``
+        is reported as ``None`` — kipy deprecates net codes (removed in KiCad
+        10) — but kept for output-shape parity with the SWIG handler.
         """
         from kipy.proto.board.board_types_pb2 import PadStackShape, PadType
-        from kipy.util.units import to_mm
+        from utils.units import nm_to_unit, normalize_unit
 
+        unit = normalize_unit(unit)
         board = self._get_board()
         target = None
         for fp in board.get_footprints():
@@ -906,9 +908,9 @@ class IPCBoardAPI(BoardAPI):
                 copper = pad.padstack.copper_layers
                 if copper:
                     size = {
-                        "x": to_mm(copper[0].size.x),
-                        "y": to_mm(copper[0].size.y),
-                        "unit": "mm",
+                        "x": nm_to_unit(copper[0].size.x, unit),
+                        "y": nm_to_unit(copper[0].size.y, unit),
+                        "unit": unit,
                     }
                     shape = shape_map.get(PadStackShape.Name(copper[0].shape), "unknown")
             except Exception:
@@ -917,7 +919,7 @@ class IPCBoardAPI(BoardAPI):
             try:
                 d = pad.padstack.drill.diameter.x
                 if d and d > 0:
-                    drill = to_mm(d)
+                    drill = nm_to_unit(d, unit)
             except Exception:
                 pass
             try:
@@ -928,7 +930,11 @@ class IPCBoardAPI(BoardAPI):
                 {
                     "name": pad.number,
                     "number": pad.number,
-                    "position": {"x": to_mm(pos.x), "y": to_mm(pos.y), "unit": "mm"},
+                    "position": {
+                        "x": nm_to_unit(pos.x, unit),
+                        "y": nm_to_unit(pos.y, unit),
+                        "unit": unit,
+                    },
                     "net": pad.net.name if pad.net else "",
                     # Shape parity with the SWIG handler, which emits netCode.
                     # kipy deprecates net codes (removed in KiCad 10), so the
@@ -944,7 +950,11 @@ class IPCBoardAPI(BoardAPI):
         cpos = target.position
         return {
             "reference": reference,
-            "componentPosition": {"x": to_mm(cpos.x), "y": to_mm(cpos.y), "unit": "mm"},
+            "componentPosition": {
+                "x": nm_to_unit(cpos.x, unit),
+                "y": nm_to_unit(cpos.y, unit),
+                "unit": unit,
+            },
             "padCount": len(pads_out),
             "pads": pads_out,
         }
