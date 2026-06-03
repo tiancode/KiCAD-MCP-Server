@@ -89,6 +89,8 @@ def test_ipc_board_api_get_component_pads_extracts_geometry_and_net(real_kipy):
     assert p1["position"] == {"x": to_mm(11_000_000), "y": to_mm(20_000_000), "unit": "mm"}
     assert p1["size"] == {"x": to_mm(800_000), "y": to_mm(800_000), "unit": "mm"}
     assert p1["drillSize"] is None  # SMD → no drill
+    # Shape parity with the SWIG handler (which emits netCode); None over IPC.
+    assert p1["netCode"] is None
 
     assert p2["type"] == "through_hole"
     assert p2["shape"] == "rect"

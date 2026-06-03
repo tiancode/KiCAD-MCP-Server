@@ -930,6 +930,10 @@ class IPCBoardAPI(BoardAPI):
                     "number": pad.number,
                     "position": {"x": to_mm(pos.x), "y": to_mm(pos.y), "unit": "mm"},
                     "net": pad.net.name if pad.net else "",
+                    # Shape parity with the SWIG handler, which emits netCode.
+                    # kipy deprecates net codes (removed in KiCad 10), so the
+                    # honest value over IPC is None rather than a stale int.
+                    "netCode": None,
                     "shape": shape,
                     "type": pad_type,
                     "size": size,
