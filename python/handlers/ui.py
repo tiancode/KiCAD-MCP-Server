@@ -346,10 +346,12 @@ def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -
       first; then re-load the SWIG board from disk so the next SWIG call
       sees the IPC content.  Clears both ``_ipc_writes_pending`` and
       ``_swig_writes_landed`` on success.
-    - ``swig_to_ipc``: refused with explicit recovery steps — kipy has no
-      "discard pending and reload from disk" API, so the user has to
-      reload the .kicad_pcb file inside KiCad (File → Revert from saved,
-      or close+reopen the file) before further IPC writes are safe.
+    - ``swig_to_ipc``: if SWIG landed content on disk that KiCad memory
+      doesn't include, call ``ipc_board_api.revert()`` (kipy
+      ``Board.revert()`` → ``RevertDocument``) to reload KiCad from disk.
+      Refused only when IPC *also* has unsaved changes — reverting would
+      discard them, a genuine two-sided conflict the user must resolve.
+      Clears both gate flags on success.
     """
     direction = params.get("direction")
     if direction not in ("ipc_to_swig", "swig_to_ipc"):
@@ -361,24 +363,80 @@ def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -
         }
 
     if direction == "swig_to_ipc":
+        # Nothing landed on the SWIG side → nothing to push into KiCad.
+        if not iface._swig_writes_landed:
+            return {
+                "success": True,
+                "direction": "swig_to_ipc",
+                "noop": True,
+                "message": "Backends are already in sync; nothing to reconcile.",
+            }
+        # Both sides diverged: reverting KiCad to disk would discard the
+        # unsaved IPC changes.  Only the user can decide which to keep.
+        if iface._ipc_writes_pending:
+            return {
+                "success": False,
+                "direction": "swig_to_ipc",
+                "needs_manual_action": True,
+                "message": (
+                    "Both sides diverged: SWIG wrote new content to disk AND "
+                    "KiCad has unsaved IPC changes. Reverting KiCad to disk "
+                    "would discard the IPC changes, so this can't be resolved "
+                    "automatically. Decide which to keep: save the IPC changes "
+                    "first (overwriting the SWIG disk content), or accept the "
+                    "disk content via File → Revert in KiCad."
+                ),
+                "steps": [
+                    "In KiCad, either save the open board (keeps IPC changes, "
+                    "discards SWIG disk content) ...",
+                    "... or File → Revert from saved (keeps SWIG disk content, "
+                    "discards unsaved IPC changes).",
+                    "Then resume the workflow.",
+                ],
+            }
+        # IPC is clean → safe to reload KiCad's in-memory board from disk.
+        ok, reason = iface.ensure_ipc(allow_launch=False, require_pcb_editor=True)
+        if not ok:
+            return {
+                "success": False,
+                "direction": "swig_to_ipc",
+                "message": ("Cannot reload KiCad from disk: IPC isn't reachable. " + reason),
+            }
+        try:
+            reverted = iface.ipc_board_api.revert()
+        except Exception as e:
+            logger.error(f"reconcile_backends: ipc revert raised: {e}")
+            return {
+                "success": False,
+                "direction": "swig_to_ipc",
+                "message": f"Cannot reload KiCad from disk: {e}",
+            }
+        if not reverted:
+            return {
+                "success": False,
+                "direction": "swig_to_ipc",
+                "needs_manual_action": True,
+                "message": (
+                    "board.revert() did not succeed. Reload the .kicad_pcb "
+                    "manually in KiCad (File → Revert from saved, or "
+                    "close+reopen the file)."
+                ),
+                "steps": [
+                    "Switch to the PCB editor in KiCad.",
+                    "File → Revert from saved (or close the file and reopen it).",
+                    "Resume the workflow — the SWIG content is now in KiCad memory.",
+                ],
+            }
+        iface._swig_writes_landed = False
+        iface._ipc_writes_pending = False
         return {
-            "success": False,
+            "success": True,
             "direction": "swig_to_ipc",
-            "needs_manual_action": True,
+            "stepsTaken": ["ipc_revert"],
             "message": (
-                "SWIG → IPC reconcile is not automatic: kipy has no API to "
-                "discard KiCad's in-memory state and reload from disk. In "
-                "KiCad, reload the .kicad_pcb file (File → Revert from saved, "
-                "or close+reopen the file), then any further IPC writes are "
-                "safe. Once that's done, the next IPC write will succeed and "
-                "the _swig_writes_landed gate clears itself on the next "
-                "open_project / IPC save."
+                "Reloaded KiCad's in-memory board from disk via revert; KiCad "
+                "now reflects the SWIG-written content."
             ),
-            "steps": [
-                "Switch to the PCB editor in KiCad.",
-                "File → Revert from saved (or close the file and reopen it).",
-                "Resume the workflow — the SWIG content is now in KiCad memory.",
-            ],
         }
 
     # direction == "ipc_to_swig"

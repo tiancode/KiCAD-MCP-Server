@@ -598,6 +598,34 @@ class IPCBoardAPI(BoardAPI):
             logger.error(f"Failed to save board: {e}")
             return False
 
+    def revert(self) -> bool:
+        """Discard KiCad's in-memory board and reload it from the .kicad_pcb
+        on disk (the IPC equivalent of File → Revert).
+
+        Used by ``reconcile_backends(swig_to_ipc)`` to pull SWIG-written disk
+        content into the running KiCad instance — the direction we long
+        (wrongly) documented as impossible.  kipy *does* expose this via
+        ``Board.revert()`` → ``RevertDocument`` (kicad-python ≥ 0.7, KiCad
+        ≥ 10.0.1).
+
+        WARNING: this throws away any *unsaved* IPC changes in KiCad memory,
+        so callers must only invoke it when the IPC side is known clean
+        (``_ipc_writes_pending`` is False).  We deliberately do NOT fire the
+        change callback here: ``_on_ipc_change`` would mark the IPC side dirty
+        for any non-``save`` event, but a revert leaves KiCad memory == disk.
+        The reconcile handler resets the gate flags explicitly instead.
+        """
+        try:
+            board = self._get_board()
+            board.revert()
+            # Drop the cached Board handle so the next query re-fetches against
+            # the freshly-reloaded document.
+            self._board = None
+            return True
+        except Exception as e:
+            logger.error(f"Failed to revert board: {e}")
+            return False
+
     def set_size(self, width: float, height: float, unit: str = "mm") -> bool:
         """
         Set board size.

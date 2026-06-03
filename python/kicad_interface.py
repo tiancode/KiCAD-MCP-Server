@@ -772,12 +772,11 @@ class KiCADInterface(BoardPersistenceMixin):
                 "message": (
                     "SWIG wrote new content to disk that KiCad's in-memory "
                     "state doesn't include. Saving via IPC now would "
-                    "overwrite those changes with KiCad's stale copy. "
-                    "Reload the .kicad_pcb file inside KiCad (File → Revert "
-                    "from saved, or close+reopen the file) to pick up the "
-                    "SWIG content; further IPC work is safe after that. "
-                    "This direction cannot be reconciled programmatically — "
-                    "kipy has no 'reload from disk' API."
+                    "overwrite those changes with KiCad's stale copy. Call "
+                    "`reconcile_backends` (direction=swig_to_ipc) to reload "
+                    "KiCad from disk (via board.revert()), or reload manually "
+                    "in KiCad (File → Revert from saved); further IPC work is "
+                    "safe after that."
                 ),
             }
         if attempting == "swig" and getattr(self, "_ipc_writes_pending", False):
@@ -812,10 +811,10 @@ class KiCADInterface(BoardPersistenceMixin):
         result["staleHint"] = (
             "Read from KiCad's live in-memory board, which is OLDER than the "
             ".kicad_pcb on disk: a SWIG-path write (e.g. sync_schematic_to_board) "
-            "landed content KiCad hasn't reloaded. Reload inside KiCad "
-            "(File → Revert from saved, or close+reopen the file) to see the "
-            "current data. kipy has no 'reload from disk' API, so the MCP "
-            "cannot refresh KiCad for you."
+            "landed content KiCad hasn't reloaded. Call `reconcile_backends` "
+            "(direction=swig_to_ipc) to reload KiCad from disk (via "
+            "board.revert()), or reload manually in KiCad (File → Revert from "
+            "saved)."
         )
 
     def _try_enable_ipc_backend(self, force: bool = False) -> bool:

@@ -213,21 +213,83 @@ def test_ipc_change_callback_ignores_selection_events():
 # ---------------------------------------------------------------------------
 # reconcile_backends handler behaviour
 # ---------------------------------------------------------------------------
-def test_reconcile_backends_swig_to_ipc_refused_with_manual_steps():
-    """The IPC side has no reload-from-disk API, so this direction returns
-    manual recovery steps instead of attempting anything."""
+def test_reconcile_backends_swig_to_ipc_reverts_kicad_from_disk(monkeypatch):
+    """SWIG landed disk content and IPC is clean → reload KiCad from disk via
+    board.revert() (kipy DOES expose this). Both gate flags clear on success."""
     from handlers import ui as ui_handler
+    from kicad_interface import KiCADInterface
 
     iface = _make_iface(use_ipc=True)
     iface._swig_writes_landed = True
+    iface._ipc_writes_pending = False
+    monkeypatch.setattr(KiCADInterface, "ensure_ipc", lambda self, **kw: (True, ""))
+    fake_revert = MagicMock(return_value=True)
+    iface.ipc_board_api.revert = fake_revert
+
+    out = ui_handler.handle_reconcile_backends(iface, {"direction": "swig_to_ipc"})
+
+    assert out["success"] is True
+    assert out["direction"] == "swig_to_ipc"
+    assert out["stepsTaken"] == ["ipc_revert"]
+    fake_revert.assert_called_once()
+    assert iface._swig_writes_landed is False
+    assert iface._ipc_writes_pending is False
+
+
+def test_reconcile_backends_swig_to_ipc_refused_when_ipc_also_dirty(monkeypatch):
+    """If KiCad also has unsaved IPC changes, reverting would discard them —
+    a genuine two-sided conflict only the user can resolve. revert must NOT
+    be called."""
+    from handlers import ui as ui_handler
+    from kicad_interface import KiCADInterface
+
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = True
+    iface._ipc_writes_pending = True
+    monkeypatch.setattr(KiCADInterface, "ensure_ipc", lambda self, **kw: (True, ""))
+    fake_revert = MagicMock(return_value=True)
+    iface.ipc_board_api.revert = fake_revert
 
     out = ui_handler.handle_reconcile_backends(iface, {"direction": "swig_to_ipc"})
 
     assert out["success"] is False
-    assert out["direction"] == "swig_to_ipc"
+    assert out["needs_manual_action"] is True
+    assert "discard" in out["message"].lower()
+    fake_revert.assert_not_called()
+
+
+def test_reconcile_backends_swig_to_ipc_noop_when_nothing_landed():
+    """No SWIG writes landed → nothing to push into KiCad."""
+    from handlers import ui as ui_handler
+
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = False
+
+    out = ui_handler.handle_reconcile_backends(iface, {"direction": "swig_to_ipc"})
+
+    assert out["success"] is True
+    assert out["noop"] is True
+
+
+def test_reconcile_backends_swig_to_ipc_falls_back_when_revert_fails(monkeypatch):
+    """board.revert() returning False → surface manual recovery steps rather
+    than claiming success."""
+    from handlers import ui as ui_handler
+    from kicad_interface import KiCADInterface
+
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = True
+    iface._ipc_writes_pending = False
+    monkeypatch.setattr(KiCADInterface, "ensure_ipc", lambda self, **kw: (True, ""))
+    iface.ipc_board_api.revert = MagicMock(return_value=False)
+
+    out = ui_handler.handle_reconcile_backends(iface, {"direction": "swig_to_ipc"})
+
+    assert out["success"] is False
     assert out["needs_manual_action"] is True
     assert "Revert" in out["message"]
-    assert isinstance(out["steps"], list) and len(out["steps"]) > 0
+    # gate flag stays set so the divergence isn't silently forgotten
+    assert iface._swig_writes_landed is True
 
 
 def test_reconcile_backends_ipc_to_swig_noop_when_both_clean():
@@ -296,6 +358,37 @@ def test_reconcile_backends_ipc_to_swig_flushes_and_reloads(monkeypatch, tmp_pat
     assert iface._ipc_writes_pending is False
     assert iface._swig_writes_landed is False
     fake_save.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# IPCBoardAPI.revert() — the binding the codebase wrongly called nonexistent
+# ---------------------------------------------------------------------------
+def test_ipc_board_api_revert_proxies_and_drops_cache():
+    """revert() calls kipy Board.revert(), invalidates the cached board, and
+    must NOT fire the change callback (a revert leaves KiCad memory == disk;
+    _on_ipc_change would otherwise mark the IPC side dirty)."""
+    from kicad_api.ipc_backend import IPCBoardAPI
+
+    notifications = []
+    board = MagicMock()
+    api = IPCBoardAPI(None, lambda *a: notifications.append(a))
+    api._board = board
+
+    assert api.revert() is True
+    board.revert.assert_called_once()
+    assert api._board is None  # cache dropped → next query re-fetches
+    assert notifications == []  # no dirty-marking notify
+
+
+def test_ipc_board_api_revert_returns_false_on_error():
+    from kicad_api.ipc_backend import IPCBoardAPI
+
+    board = MagicMock()
+    board.revert.side_effect = RuntimeError("RevertDocument not supported")
+    api = IPCBoardAPI(None, lambda *a: None)
+    api._board = board
+
+    assert api.revert() is False
 
 
 def test_reconcile_backends_rejects_unknown_direction():
