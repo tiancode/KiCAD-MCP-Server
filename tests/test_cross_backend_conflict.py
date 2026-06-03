@@ -271,6 +271,22 @@ def test_reconcile_backends_swig_to_ipc_noop_when_nothing_landed():
     assert out["noop"] is True
 
 
+def test_reconcile_backends_swig_to_ipc_points_to_other_direction_when_only_ipc_dirty():
+    """SWIG has nothing to push but IPC is dirty → don't claim "in sync";
+    redirect the caller to ipc_to_swig and don't touch KiCad."""
+    from handlers import ui as ui_handler
+
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = False
+    iface._ipc_writes_pending = True
+
+    out = ui_handler.handle_reconcile_backends(iface, {"direction": "swig_to_ipc"})
+
+    assert out["success"] is False
+    assert "ipc_to_swig" in out["message"]
+    assert out.get("noop") is not True
+
+
 def test_reconcile_backends_swig_to_ipc_falls_back_when_revert_fails(monkeypatch):
     """board.revert() returning False → surface manual recovery steps rather
     than claiming success."""

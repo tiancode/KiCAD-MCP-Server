@@ -756,9 +756,10 @@ class KiCADInterface(BoardPersistenceMixin):
         The two cases:
         - SWIG wrote disk → KiCad memory is stale.  ``ipc_save_board``
           would overwrite the SWIG content with KiCad's old data; no IPC
-          mutation can proceed safely.  Direction: ``swig_to_ipc``.  No
-          programmatic fix — the user has to reload the .kicad_pcb file
-          inside KiCad (File → Revert, or close+reopen).
+          mutation can proceed safely.  Direction: ``swig_to_ipc``.
+          ``reconcile_backends`` fixes this automatically via
+          ``board.revert()`` (reload KiCad from disk), or the user can
+          File → Revert manually.
         - IPC has unsaved changes → SWIG mutations would read stale disk
           and the auto-save would lose the IPC changes.  Direction:
           ``ipc_to_swig``.  ``reconcile_backends`` can do this

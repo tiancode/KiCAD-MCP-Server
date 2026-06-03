@@ -365,6 +365,18 @@ def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -
     if direction == "swig_to_ipc":
         # Nothing landed on the SWIG side → nothing to push into KiCad.
         if not iface._swig_writes_landed:
+            if iface._ipc_writes_pending:
+                # Wrong direction: SWIG has nothing to push, but IPC has
+                # unsaved changes — that's the ipc_to_swig case.
+                return {
+                    "success": False,
+                    "direction": "swig_to_ipc",
+                    "message": (
+                        "Nothing landed on the SWIG side to push into KiCad, "
+                        "but IPC has unsaved changes. You probably want "
+                        "reconcile_backends(direction=ipc_to_swig)."
+                    ),
+                }
             return {
                 "success": True,
                 "direction": "swig_to_ipc",

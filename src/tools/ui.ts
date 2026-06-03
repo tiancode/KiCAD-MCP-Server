@@ -98,14 +98,16 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
     "Flush pending changes between the SWIG and IPC backends. " +
       "Use direction='ipc_to_swig' after IPC mutations (the tool calls " +
       "ipc_save_board and reloads the SWIG board from disk). " +
-      "direction='swig_to_ipc' returns the manual steps to take in KiCad " +
-      "because kipy has no reload-from-disk API.",
+      "Use direction='swig_to_ipc' after SWIG/file writes (e.g. " +
+      "sync_schematic_to_board) to reload KiCad's in-memory board from disk " +
+      "via board.revert(); it refuses only when IPC also has unsaved changes.",
     {
       direction: z
         .enum(["ipc_to_swig", "swig_to_ipc"])
         .describe(
           "Which side has pending changes that need to land on the other. " +
-            "ipc_to_swig is fully automatic; swig_to_ipc returns manual steps.",
+            "Both directions are automatic; swig_to_ipc refuses only when IPC " +
+            "also has unsaved changes (a true two-sided conflict).",
         ),
     },
     passthrough("reconcile_backends"),
