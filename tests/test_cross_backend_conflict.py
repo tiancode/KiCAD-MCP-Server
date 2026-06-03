@@ -91,6 +91,44 @@ def test_ipc_fastpath_read_only_allowed_even_when_swig_dirty():
     assert "needs_reconcile" not in result
 
 
+def test_ipc_read_flagged_stale_when_swig_wrote_disk():
+    """The user's footgun: after sync_schematic_to_board lands 359 footprints
+    on disk, get_board_info reads KiCad's stale in-memory board and would
+    return componentCount 0.  The read is let through (no data loss) but must
+    carry a staleVsDisk hint so the caller knows disk is ahead."""
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = True
+    iface._ipc_get_board_info = lambda params: {  # type: ignore[attr-defined]
+        "success": True,
+        "componentCount": 0,
+    }
+
+    result = iface.handle_command("get_board_info", {})
+
+    assert result["success"] is True
+    assert result["staleVsDisk"] is True
+    assert "Revert" in result["staleHint"]
+    # Still a let-through read, not a refusal.
+    assert "needs_reconcile" not in result
+
+
+def test_ipc_read_not_flagged_stale_when_backends_clean():
+    """No SWIG writes pending → the IPC read reflects disk, so no stale flag
+    is attached (the hint must stay targeted, not a blanket banner)."""
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = False
+    iface._ipc_get_board_info = lambda params: {  # type: ignore[attr-defined]
+        "success": True,
+        "componentCount": 359,
+    }
+
+    result = iface.handle_command("get_board_info", {})
+
+    assert result["success"] is True
+    assert "staleVsDisk" not in result
+    assert "staleHint" not in result
+
+
 # ---------------------------------------------------------------------------
 # Gate at the SWIG dispatch (BOARD_MUTATING_COMMANDS)
 # ---------------------------------------------------------------------------

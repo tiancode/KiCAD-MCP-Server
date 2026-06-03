@@ -796,6 +796,28 @@ class KiCADInterface(BoardPersistenceMixin):
             }
         return None
 
+    def _annotate_stale_vs_disk(self, result: Dict[str, Any]) -> None:
+        """Flag an IPC read whose live KiCad-memory data is older than disk.
+
+        When SWIG has landed writes to the .kicad_pcb that the running KiCad
+        instance hasn't reloaded (``_swig_writes_landed``), an IPC query reads
+        KiCad's stale in-memory board.  The read is safe — it can't lose data
+        — so the gate lets it through; but returning a clean-looking value
+        (e.g. ``componentCount: 0`` right after ``sync_schematic_to_board``
+        wrote 359 footprints to disk) is a footgun.  Attach a targeted,
+        on-demand hint — not a blanket backend banner — so the caller knows
+        disk is ahead and how to resync.
+        """
+        result["staleVsDisk"] = True
+        result["staleHint"] = (
+            "Read from KiCad's live in-memory board, which is OLDER than the "
+            ".kicad_pcb on disk: a SWIG-path write (e.g. sync_schematic_to_board) "
+            "landed content KiCad hasn't reloaded. Reload inside KiCad "
+            "(File → Revert from saved, or close+reopen the file) to see the "
+            "current data. kipy has no 'reload from disk' API, so the MCP "
+            "cannot refresh KiCad for you."
+        )
+
     def _try_enable_ipc_backend(self, force: bool = False) -> bool:
         """Try to switch an already-running interface to IPC when KiCAD is available."""
         if KICAD_BACKEND == "swig":
@@ -1103,11 +1125,16 @@ class KiCADInterface(BoardPersistenceMixin):
                 # Cross-backend conflict: refuse IPC writes when SWIG has
                 # landed content on disk that KiCad memory doesn't include
                 # (an IPC save here would overwrite it).  Read-only queries
-                # are safe to let through.
+                # are safe to let through — but when SWIG has landed writes,
+                # the live KiCad memory they read is stale vs disk, so flag
+                # the result instead of returning a clean-looking value.
+                read_is_stale_vs_disk = False
                 if command not in self._IPC_READ_ONLY_COMMANDS:
                     conflict = self._cross_backend_conflict(attempting="ipc")
                     if conflict is not None:
                         return conflict
+                elif getattr(self, "_swig_writes_landed", False):
+                    read_is_stale_vs_disk = True
 
                 ipc_handler_name = self.IPC_CAPABLE_COMMANDS[command]
                 ipc_handler = getattr(self, ipc_handler_name, None)
@@ -1116,6 +1143,8 @@ class KiCADInterface(BoardPersistenceMixin):
                     logger.info(f"Using IPC backend for {command} (real-time sync)")
                     result = ipc_handler(params)
                     logger.debug(f"IPC command result: {result}")
+                    if read_is_stale_vs_disk and isinstance(result, dict):
+                        self._annotate_stale_vs_disk(result)
                     return result
 
             # Fall back to SWIG-based handler
