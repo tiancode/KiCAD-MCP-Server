@@ -1110,11 +1110,14 @@ class KiCADInterface(BoardPersistenceMixin):
             if command in self.IPC_CAPABLE_COMMANDS:
                 self._try_enable_ipc_backend()
 
-            # Footprint-library queries must see the open project's fp-lib-table,
-            # not just the global one.  Scope the manager to the current project
-            # (works in pure-IPC too — derives the dir from the live board path).
+            # Footprint/symbol-library queries must see the open project's
+            # fp-lib-table / sym-lib-table, not just the global one.  Scope the
+            # manager to the current project (works in pure-IPC too — derives
+            # the dir from the live board path).
             if command in self._FOOTPRINT_LIBRARY_COMMANDS:
                 self._ensure_footprint_library_for_current_project()
+            elif command in self._SYMBOL_LIBRARY_COMMANDS:
+                self._ensure_symbol_library_for_current_project()
 
             # Check if we can use IPC for this command (real-time UI sync)
             if self.use_ipc and self.ipc_board_api and command in self.IPC_CAPABLE_COMMANDS:
@@ -1609,6 +1612,19 @@ class KiCADInterface(BoardPersistenceMixin):
         }
     )
 
+    # Symbol-library query commands whose manager must be scoped to the open
+    # project (so project ``sym-lib-table`` entries are visible).  The handlers
+    # already scope from caller params; the dispatch hook adds the pure-IPC,
+    # no-param, no-open_project case via the live board path.
+    _SYMBOL_LIBRARY_COMMANDS = frozenset(
+        {
+            "list_symbol_libraries",
+            "search_symbols",
+            "list_library_symbols",
+            "get_symbol_info",
+        }
+    )
+
     def _refresh_footprint_library_for_project(self, project_path: Optional[Path]) -> None:
         """Re-scope the footprint library manager to ``project_path`` so the
         project ``fp-lib-table`` is visible to list_libraries /
@@ -1642,24 +1658,54 @@ class KiCADInterface(BoardPersistenceMixin):
         except Exception as e:
             logger.warning(f"Failed to refresh footprint library for project {project_path}: {e}")
 
+    def _project_dir_for_library_scope(self) -> Optional[Path]:
+        """Best-effort project directory for scoping the symbol/footprint library
+        managers: the explicitly-opened project if known, else the directory of
+        the live board.  The board-path fallback is what covers pure-IPC use,
+        where ``open_project`` never ran through the MCP but KiCad has the board
+        open and reachable over IPC.
+        """
+        project_dir = getattr(self, "_current_project_path", None)
+        if project_dir is not None:
+            return Path(project_dir)
+        board_path = self._current_board_path()
+        if board_path:
+            return Path(board_path).parent
+        return None
+
     def _ensure_footprint_library_for_current_project(self) -> None:
         """Scope the footprint library manager to the open project before a
         footprint-library query.
 
         open_project / create_project already call
-        :meth:`_refresh_footprint_library_for_project`, but in pure-IPC use
-        (KiCad has the board open, ``open_project`` never ran through the MCP)
-        the project dir is only knowable from the live board path — derive it
-        from ``_current_board_path`` here so the project's ``.pretty`` libs are
-        still visible.
+        :meth:`_refresh_footprint_library_for_project`, but in pure-IPC use the
+        project dir is only knowable from the live board path — derive it so the
+        project's ``.pretty`` libs are still visible.
         """
-        project_dir: Optional[Path] = getattr(self, "_current_project_path", None)
-        if project_dir is None:
-            board_path = self._current_board_path()
-            if board_path:
-                project_dir = Path(board_path).parent
+        project_dir = self._project_dir_for_library_scope()
         if project_dir is not None:
-            self._refresh_footprint_library_for_project(Path(project_dir))
+            self._refresh_footprint_library_for_project(project_dir)
+
+    def _ensure_symbol_library_for_current_project(self) -> None:
+        """Scope the symbol library manager to the open project before a
+        symbol-library query — the pure-IPC counterpart to the params-based
+        :meth:`SymbolLibraryCommands._ensure_manager_for`.
+
+        The symbol handlers already derive a project from caller params
+        (projectPath / schematicPath / boardPath); this fills the gap where
+        none was passed and ``open_project`` never ran, deriving the project
+        from the live board path instead.  ``use_project`` is idempotent
+        (no-op when already scoped), so calling it per query is cheap, and it
+        composes with the handler's own params-based scoping (an explicit param
+        path still wins, running after this).
+        """
+        project_dir = self._project_dir_for_library_scope()
+        if project_dir is None:
+            return
+        try:
+            self.symbol_library_commands.use_project(project_dir)
+        except Exception as e:
+            logger.warning(f"Failed to scope symbol library to project {project_dir}: {e}")
 
     # Project handlers live in handlers/project.py.
     # Built-in property names that have dedicated parameters and cannot be removed
