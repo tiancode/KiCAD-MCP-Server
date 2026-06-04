@@ -289,6 +289,26 @@ class JLCPCBPartsManager:
             self._column_has_data_cache[column] = bool(cursor.fetchone()[0])
         return self._column_has_data_cache[column]
 
+    @staticmethod
+    def _quote_fts_term(term: str) -> str:
+        """Build a safe FTS5 prefix phrase ``"term"*`` from a raw search word.
+
+        Quoting makes the word a literal phrase, so FTS5 query metacharacters
+        ('.', '@', '~', parentheses) and tokenizer splits ('4.7uF' -> '4',
+        '7uf') can't raise a syntax error or be misread as operators. This is
+        the fix for value+unit queries silently returning nothing: an unquoted
+        ``4.7uF*`` is a hard FTS5 syntax error ("syntax error near .") that
+        ``_run_fts_query`` swallowed into an empty result. A trailing '*'
+        (prefix match) is re-applied outside the quotes, where FTS5 expects it.
+        Returns '' for a word with no alphanumeric character (pure punctuation),
+        so it is dropped rather than poisoning the whole MATCH.
+        """
+        term = term.strip().rstrip("*").strip()
+        if not term or not any(c.isalnum() for c in term):
+            return ""
+        escaped = term.replace('"', '""')
+        return f'"{escaped}"*'
+
     def _run_fts_query(
         self,
         fts_match: str,
@@ -345,49 +365,64 @@ class JLCPCBPartsManager:
         Tries an exact (index-backed, BINARY) match first, then a
         case-insensitive prefix match (``LIKE 'mpn%'`` uses SQLite's default
         case-insensitive LIKE, so a lowercase candidate still resolves).
+
+        When an in-stock lookup finds nothing, it retries with the stock
+        filter dropped and flags ``out_of_stock_only`` if matches exist that
+        are simply out of stock — so a real catalogued MPN is reported as
+        "exists but out of stock" instead of an ambiguous empty result that
+        can't be told apart from "JLC doesn't carry it".
         """
-        extra: List[str] = []
-        extra_params: List[Any] = []
+        base_extra: List[str] = []
+        base_params: List[Any] = []
         if package:
-            extra.append("AND package LIKE ?")
-            extra_params.append(f"%{package}%")
+            base_extra.append("AND package LIKE ?")
+            base_params.append(f"%{package}%")
         if library_type:
-            extra.append("AND library_type = ?")
-            extra_params.append(library_type)
-        if in_stock:
-            extra.append("AND stock > 0")
-        tail = " ".join(extra)
-        cursor = self.conn.cursor()
+            base_extra.append("AND library_type = ?")
+            base_params.append(library_type)
 
-        cursor.execute(
-            f"SELECT * FROM components WHERE mfr_part = ? {tail} LIMIT ?",
-            [mpn, *extra_params, limit],
-        )
-        rows = [dict(r) for r in cursor.fetchall()]
-        if rows:
-            return {
-                "parts": rows,
-                "count": len(rows),
-                "match_mode": "mpn_exact",
-                "fuzzy": False,
-                "warnings": [],
-            }
+        def _lookup(apply_stock: bool) -> Tuple[List[Dict], str]:
+            extra = list(base_extra)
+            if apply_stock:
+                extra.append("AND stock > 0")
+            tail = " ".join(extra)
+            cursor = self.conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM components WHERE mfr_part = ? {tail} LIMIT ?",
+                [mpn, *base_params, limit],
+            )
+            found = [dict(r) for r in cursor.fetchall()]
+            if found:
+                return found, "mpn_exact"
+            cursor.execute(
+                f"SELECT * FROM components WHERE mfr_part LIKE ? {tail} LIMIT ?",
+                [f"{mpn}%", *base_params, limit],
+            )
+            found = [dict(r) for r in cursor.fetchall()]
+            return found, ("mpn_prefix" if found else "mpn_none")
 
-        cursor.execute(
-            f"SELECT * FROM components WHERE mfr_part LIKE ? {tail} LIMIT ?",
-            [f"{mpn}%", *extra_params, limit],
-        )
-        rows = [dict(r) for r in cursor.fetchall()]
+        rows, match_mode = _lookup(in_stock)
+        out_of_stock_only = False
+        if not rows and in_stock:
+            rows, match_mode = _lookup(False)
+            out_of_stock_only = bool(rows)
+
         warnings: List[str] = []
-        if rows:
+        if match_mode == "mpn_prefix":
             warnings.append(
                 f"No exact MPN match for '{mpn}'; showing parts whose MPN starts with it."
+            )
+        if out_of_stock_only:
+            warnings.append(
+                f"'{mpn}' is in the catalog but every match is out of stock — pass "
+                "in_stock=false to include out-of-stock parts in searches."
             )
         return {
             "parts": rows,
             "count": len(rows),
-            "match_mode": "mpn_prefix" if rows else "mpn_none",
-            "fuzzy": bool(rows),
+            "match_mode": match_mode,
+            "fuzzy": match_mode == "mpn_prefix",
+            "out_of_stock_only": out_of_stock_only,
             "warnings": warnings,
         }
 
@@ -404,14 +439,21 @@ class JLCPCBPartsManager:
     ) -> Dict[str, Any]:
         """Search for parts, returning matches plus match metadata.
 
-        Returns a dict ``{parts, count, match_mode, fuzzy, warnings}``:
+        Returns a dict
+        ``{parts, count, match_mode, fuzzy, out_of_stock_only, warnings}``:
 
         - ``mpn`` (if given) takes priority and routes to an exact/prefix
           lookup on the manufacturer part number — the most reliable path.
-        - Otherwise free text is matched against the FTS index. Terms are
-          first combined with AND (precise); if that yields nothing and there
-          is more than one term, it retries with OR and flags ``fuzzy``, so a
-          descriptive query degrades to best-effort instead of returning empty.
+        - Otherwise free text is matched against the FTS index. Each term is
+          quoted as an FTS5 prefix phrase, so value/unit words ('4.7uF',
+          '0.5A') don't blow up the query. Terms are first combined with AND
+          (precise); if that yields nothing and there is more than one term,
+          it retries with OR and flags ``fuzzy``, so a descriptive query
+          degrades to best-effort instead of returning empty.
+        - When ``in_stock`` is set and a search finds nothing, it retries with
+          the stock filter dropped; if out-of-stock matches exist they are
+          returned with ``out_of_stock_only=True``, so an empty result is
+          known to mean "not in catalog" rather than "all out of stock".
         - ``category``/``manufacturer`` are blank in the JLCSearch DB, so when
           those columns hold no data the value is folded into the text search
           and a warning is recorded rather than silently matching nothing.
@@ -460,34 +502,72 @@ class JLCPCBPartsManager:
         if library_type:
             structured_filters.append("c.library_type = ?")
             structured_params.append(library_type)
-        if in_stock:
-            structured_filters.append("c.stock > 0")
+
+        # Keep the stock filter out of structured_filters so it can be dropped
+        # on a retry: an in-stock search that finds nothing is re-run without
+        # it, and any hits are flagged out_of_stock_only (Fix A) — an empty
+        # in-stock result is then known to mean "not in catalog", not "all out
+        # of stock".
+        out_of_stock_only = False
+
+        def _run(fts_match: Optional[str]) -> List[Dict]:
+            nonlocal out_of_stock_only
+            stocked = structured_filters + (["c.stock > 0"] if in_stock else [])
+
+            def _exec(filters: List[str]) -> List[Dict]:
+                if fts_match is None:
+                    return self._run_structured_query(filters, structured_params, limit)
+                return self._run_fts_query(fts_match, filters, structured_params, limit)
+
+            rows = _exec(stocked)
+            if not rows and in_stock:
+                rows = _exec(structured_filters)
+                if rows:
+                    out_of_stock_only = True
+            return rows
 
         # No text to match — pure filter query.
         if not fts_terms:
-            parts = self._run_structured_query(structured_filters, structured_params, limit)
+            parts = _run(None)
+            if out_of_stock_only:
+                warnings.append(
+                    "No in-stock matches; showing parts that exist but are out of stock "
+                    "(pass in_stock=false to include these directly)."
+                )
             return {
                 "parts": parts,
                 "count": len(parts),
                 "match_mode": "filter",
                 "fuzzy": False,
+                "out_of_stock_only": out_of_stock_only,
                 "warnings": warnings,
             }
 
-        prefixed = [t if t.endswith("*") else f"{t}*" for t in fts_terms]
+        # Quote each term so value/unit words ('4.7uF', '0.5A', '510kΩ') and
+        # punctuation can't raise an FTS5 syntax error or be parsed as
+        # operators (Fix B). Drop pure-punctuation tokens.
+        prefixed = [q for q in (self._quote_fts_term(t) for t in fts_terms) if q]
+
+        # Every token was noise — degrade to a filter-only query.
+        if not prefixed:
+            parts = _run(None)
+            return {
+                "parts": parts,
+                "count": len(parts),
+                "match_mode": "filter",
+                "fuzzy": False,
+                "out_of_stock_only": out_of_stock_only,
+                "warnings": warnings,
+            }
 
         # Precise pass: all terms must match.
-        parts = self._run_fts_query(
-            " ".join(prefixed), structured_filters, structured_params, limit
-        )
+        parts = _run(" ".join(prefixed))
         match_mode = "and"
         fuzzy = False
 
         # Graceful fallback: any term may match, ranked by relevance.
         if not parts and len(prefixed) > 1:
-            parts = self._run_fts_query(
-                " OR ".join(prefixed), structured_filters, structured_params, limit
-            )
+            parts = _run(" OR ".join(prefixed))
             match_mode = "or"
             fuzzy = True
             if parts:
@@ -497,11 +577,18 @@ class JLCPCBPartsManager:
                     "the 'mpn' parameter for an exact lookup."
                 )
 
+        if out_of_stock_only:
+            warnings.append(
+                "No in-stock matches; showing parts that exist but are out of stock "
+                "(pass in_stock=false to include these directly)."
+            )
+
         return {
             "parts": parts,
             "count": len(parts),
             "match_mode": match_mode,
             "fuzzy": fuzzy,
+            "out_of_stock_only": out_of_stock_only,
             "warnings": warnings,
         }
 

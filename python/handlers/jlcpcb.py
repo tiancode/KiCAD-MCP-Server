@@ -95,6 +95,7 @@ def handle_search_jlcpcb_parts(iface: "KiCADInterface", params: Dict[str, Any]) 
             "count": len(parts),
             "match_mode": result.get("match_mode"),
             "fuzzy": result.get("fuzzy", False),
+            "out_of_stock_only": result.get("out_of_stock_only", False),
             "warnings": result.get("warnings", []),
         }
     except Exception as e:

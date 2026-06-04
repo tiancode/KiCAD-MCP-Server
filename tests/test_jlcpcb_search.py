@@ -79,10 +79,45 @@ def test_mpn_no_match(manager):
     assert r["count"] == 0
 
 
-def test_mpn_respects_in_stock(manager):
-    # The out-of-stock buck must be filtered even on an exact-ish prefix.
+def test_mpn_out_of_stock_is_surfaced_not_hidden(manager):
+    # An in-stock MPN search that finds only out-of-stock parts no longer
+    # returns empty (which is ambiguous with "not in catalog"); it retries
+    # without the stock filter and flags out_of_stock_only so the caller can
+    # tell "exists but out of stock" from "JLC doesn't carry it".
     r = manager.search_parts_meta(mpn="TPS54331QDRQ1", in_stock=True)
+    assert _lcscs(r) == {"C_OOS"}
+    assert r["match_mode"] == "mpn_exact"
+    assert r["out_of_stock_only"] is True
+    assert any("out of stock" in w.lower() for w in r["warnings"])
+
+    # Explicit in_stock=False returns the same part, but unflagged.
+    r2 = manager.search_parts_meta(mpn="TPS54331QDRQ1", in_stock=False)
+    assert _lcscs(r2) == {"C_OOS"}
+    assert r2["out_of_stock_only"] is False
+
+
+def test_mpn_truly_absent_stays_empty(manager):
+    # The out-of-stock retry must not turn a genuinely-missing MPN into a hit.
+    r = manager.search_parts_meta(mpn="NOSUCHPARTXYZ", in_stock=True)
     assert r["count"] == 0
+    assert r["out_of_stock_only"] is False
+
+
+def test_query_value_unit_term_does_not_crash_fts(manager):
+    # '3.5V' is an FTS5 syntax error when unquoted ("syntax error near .") and
+    # used to silently zero the whole search; quoting each term as a prefix
+    # phrase makes value/unit words match instead.
+    r = manager.search_parts_meta(query="3.5V buck")
+    assert r["match_mode"] == "and"
+    assert {"C9865", "C90761"} <= _lcscs(r)
+
+
+def test_query_punctuation_only_degrades_to_filter(manager):
+    # Pure-punctuation terms are dropped rather than poisoning the MATCH; with
+    # a package filter present the search degrades to a filter-only query.
+    r = manager.search_parts_meta(query=". ± +", package="SOIC-8")
+    assert r["match_mode"] == "filter"
+    assert {"C9865", "C90761"} <= _lcscs(r)
 
 
 def test_query_and_is_precise(manager):

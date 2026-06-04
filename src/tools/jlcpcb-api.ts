@@ -63,9 +63,10 @@ for fast offline searching.`,
 
 MATCHING — read this, it changes how you should call the tool:
 - BEST: if you have a candidate manufacturer part number, pass it as 'mpn'. It does an exact (then prefix) lookup and is by far the most reliable path. Prefer searching by a few candidate MPNs over describing the part.
-- 'query' is full-text over description + MPN. Multiple words must ALL appear in the text (AND); one synonym/format mismatch ('buck' vs 'Step-Down', '0.5A' vs '500mA') drops the whole result. If nothing matches it auto-retries OR-style and flags the result as fuzzy.
+- 'query' is full-text over description + MPN. Value/unit words now match safely ('4.7uF', '0.5A', '510kΩ'). Multiple words must ALL appear in the text (AND); a synonym/format mismatch ('buck' vs 'Step-Down', '0.5A' vs '500mA', 'µH' vs 'uH') can still drop the result. If nothing matches it auto-retries OR-style and flags the result as fuzzy.
 - Put package in the 'package' filter, NOT in 'query'.
-- 'category' and 'manufacturer' are BLANK in the public JLCSearch database, so filtering by them matches nothing — the value is folded into the text search and a warning is returned. Don't rely on them for precision.`,
+- 'category' and 'manufacturer' are BLANK in the public JLCSearch database, so filtering by them matches nothing — the value is folded into the text search and a warning is returned. Don't rely on them for precision.
+- in_stock defaults true. A zero in-stock result auto-retries without the stock filter; if matches exist they are returned with out_of_stock_only=true. So an empty result now reliably means "not in this catalog" rather than "just out of stock" — distrust 'not found' less.`,
     {
       query: z
         .string()
@@ -120,7 +121,7 @@ MATCHING — read this, it changes how you should call the tool:
                 type: "text",
                 text:
                   warningText +
-                  `No JLCPCB parts found matching your criteria.\n\n` +
+                  `No JLCPCB parts found matching your criteria (incl. out-of-stock).\n\n` +
                   `Tip: search by a candidate manufacturer part number via the 'mpn' parameter — ` +
                   `it's the most reliable path. For free-text, fewer/looser words match better ` +
                   `(all words must match), and put package in the 'package' filter.`,
@@ -128,6 +129,10 @@ MATCHING — read this, it changes how you should call the tool:
             ],
           };
         }
+
+        const oosNote = result.out_of_stock_only
+          ? `⚠️ No in-stock matches — these parts exist in the catalog but are OUT OF STOCK.\n\n`
+          : "";
 
         const fuzzyNote = result.fuzzy
           ? `⚠️ Fuzzy match (no exact all-terms hit) — results are best-effort, ranked by relevance.\n\n`
@@ -150,6 +155,7 @@ MATCHING — read this, it changes how you should call the tool:
               type: "text",
               text:
                 warningText +
+                oosNote +
                 fuzzyNote +
                 `Found ${result.count} JLCPCB parts:\n\n${partsList}\n\n` +
                 `💡 Basic parts have free assembly. Extended parts charge $3 setup fee per unique part.`,
