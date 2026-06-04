@@ -1612,13 +1612,18 @@ class KiCADInterface(BoardPersistenceMixin):
     def _refresh_footprint_library_for_project(self, project_path: Optional[Path]) -> None:
         """Re-scope the footprint library manager to ``project_path`` so the
         project ``fp-lib-table`` is visible to list_libraries /
-        list_library_footprints / search_footprints / get_footprint_info.
+        list_library_footprints / search_footprints / get_footprint_info — and
+        to ``place_component`` (SWIG), which resolves footprints by name through
+        the same manager.
 
         The footprint side mirrors :meth:`_refresh_symbol_library_for_project`
         — without it ``LibraryCommands`` stays pinned to the global-only manager
         built at startup and project-registered ``.pretty`` libs read back as
         empty.  ``get_library_manager`` is process-cached + mtime-invalidated,
-        so re-pointing here is cheap.
+        so re-pointing here is cheap.  Every holder of the startup global-only
+        manager is re-pointed so the project scope is coherent across them (a
+        project-scoped manager is a superset of global, so this never drops a
+        global lib).
         """
         if project_path is None:
             return
@@ -1628,6 +1633,12 @@ class KiCADInterface(BoardPersistenceMixin):
             manager = get_library_manager(project_path=Path(project_path))
             self.footprint_library = manager
             self.library_commands.library_manager = manager
+            # component_commands.place_component resolves footprints via the same
+            # manager; keep it in lock-step or project footprints would be
+            # listable but not placeable.
+            component_commands = getattr(self, "component_commands", None)
+            if component_commands is not None:
+                component_commands.library_manager = manager
         except Exception as e:
             logger.warning(f"Failed to refresh footprint library for project {project_path}: {e}")
 

@@ -76,6 +76,7 @@ def test_global_only_manager_blind_to_project_library(no_global_fp_table, tmp_pa
 # iface re-scoping (the fix)
 # ---------------------------------------------------------------------------
 def test_refresh_footprint_library_repoints_manager(no_global_fp_table, tmp_path):
+    from commands.component import ComponentCommands
     from commands.library import LibraryCommands, get_library_manager
     from kicad_interface import KiCADInterface
 
@@ -83,6 +84,7 @@ def test_refresh_footprint_library_repoints_manager(no_global_fp_table, tmp_path
     iface = KiCADInterface.__new__(KiCADInterface)
     iface.footprint_library = get_library_manager(project_path=None)
     iface.library_commands = LibraryCommands(iface.footprint_library)
+    iface.component_commands = ComponentCommands(None, iface.footprint_library)
 
     # Before: global-only manager can't see the project lib.
     assert iface.library_commands.list_library_footprints({"library": "mylib"})["footprints"] == []
@@ -92,6 +94,10 @@ def test_refresh_footprint_library_repoints_manager(no_global_fp_table, tmp_path
     # After: re-scoped manager sees it.
     out = iface.library_commands.list_library_footprints({"library": "mylib"})
     assert out["footprints"] == ["FOO"]
+    # All holders of the startup manager re-point together so project footprints
+    # are placeable, not just listable.
+    assert iface.component_commands.library_manager is iface.library_commands.library_manager
+    assert iface.component_commands.library_manager is iface.footprint_library
 
 
 def test_handle_command_lazy_scopes_from_board_path(no_global_fp_table, tmp_path, monkeypatch):
