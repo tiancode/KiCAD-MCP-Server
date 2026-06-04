@@ -338,6 +338,7 @@ def handle_open_project(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
             project_info.get("path") or project_info.get("boardPath") or params.get("filename")
         )
         iface._refresh_symbol_library_for_project(project_dir)
+        iface._refresh_footprint_library_for_project(project_dir)
         result["kicadUi"] = _autolaunch_for_project(
             iface, _launch_file_for_result(result, params), params
         )
@@ -358,6 +359,7 @@ def handle_create_project(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
             or params.get("filename")
         )
         iface._refresh_symbol_library_for_project(project_dir)
+        iface._refresh_footprint_library_for_project(project_dir)
         result["kicadUi"] = _autolaunch_for_project(
             iface, _launch_file_for_result(result, params), params
         )

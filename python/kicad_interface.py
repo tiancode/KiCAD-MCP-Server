@@ -1110,6 +1110,12 @@ class KiCADInterface(BoardPersistenceMixin):
             if command in self.IPC_CAPABLE_COMMANDS:
                 self._try_enable_ipc_backend()
 
+            # Footprint-library queries must see the open project's fp-lib-table,
+            # not just the global one.  Scope the manager to the current project
+            # (works in pure-IPC too — derives the dir from the live board path).
+            if command in self._FOOTPRINT_LIBRARY_COMMANDS:
+                self._ensure_footprint_library_for_current_project()
+
             # Check if we can use IPC for this command (real-time UI sync)
             if self.use_ipc and self.ipc_board_api and command in self.IPC_CAPABLE_COMMANDS:
                 # IPC board ops are dispatched directly here (not through
@@ -1590,6 +1596,59 @@ class KiCADInterface(BoardPersistenceMixin):
             self.symbol_library_commands.use_project(project_path)
         except Exception as e:
             logger.warning(f"Failed to refresh symbol library for project {project_path}: {e}")
+
+    # Footprint-library query commands whose manager must be scoped to the open
+    # project (so project ``fp-lib-table`` entries — typically
+    # ``${KIPRJMOD}/*.pretty`` — are visible, not just the global table).
+    _FOOTPRINT_LIBRARY_COMMANDS = frozenset(
+        {
+            "list_libraries",
+            "list_library_footprints",
+            "search_footprints",
+            "get_footprint_info",
+        }
+    )
+
+    def _refresh_footprint_library_for_project(self, project_path: Optional[Path]) -> None:
+        """Re-scope the footprint library manager to ``project_path`` so the
+        project ``fp-lib-table`` is visible to list_libraries /
+        list_library_footprints / search_footprints / get_footprint_info.
+
+        The footprint side mirrors :meth:`_refresh_symbol_library_for_project`
+        — without it ``LibraryCommands`` stays pinned to the global-only manager
+        built at startup and project-registered ``.pretty`` libs read back as
+        empty.  ``get_library_manager`` is process-cached + mtime-invalidated,
+        so re-pointing here is cheap.
+        """
+        if project_path is None:
+            return
+        try:
+            from commands.library import get_library_manager
+
+            manager = get_library_manager(project_path=Path(project_path))
+            self.footprint_library = manager
+            self.library_commands.library_manager = manager
+        except Exception as e:
+            logger.warning(f"Failed to refresh footprint library for project {project_path}: {e}")
+
+    def _ensure_footprint_library_for_current_project(self) -> None:
+        """Scope the footprint library manager to the open project before a
+        footprint-library query.
+
+        open_project / create_project already call
+        :meth:`_refresh_footprint_library_for_project`, but in pure-IPC use
+        (KiCad has the board open, ``open_project`` never ran through the MCP)
+        the project dir is only knowable from the live board path — derive it
+        from ``_current_board_path`` here so the project's ``.pretty`` libs are
+        still visible.
+        """
+        project_dir: Optional[Path] = getattr(self, "_current_project_path", None)
+        if project_dir is None:
+            board_path = self._current_board_path()
+            if board_path:
+                project_dir = Path(board_path).parent
+        if project_dir is not None:
+            self._refresh_footprint_library_for_project(Path(project_dir))
 
     # Project handlers live in handlers/project.py.
     # Built-in property names that have dedicated parameters and cannot be removed

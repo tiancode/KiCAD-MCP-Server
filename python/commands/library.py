@@ -704,14 +704,27 @@ class LibraryCommands:
             # Try to find the footprint
             result = self.library_manager.find_footprint(footprint_spec)
 
-            if result:
-                library_path, footprint_name = result
-                # Extract library nickname from path
-                library_nickname = None
-                for nick, path in self.library_manager.libraries.items():
-                    if path == library_path:
-                        library_nickname = nick
-                        break
+            if not result:
+                # Not found — return a clean failure rather than falling through
+                # to reference unbound locals (library_path / footprint_name),
+                # which raised a NameError the outer handler didn't catch.
+                return {
+                    "success": False,
+                    "message": "Footprint not found",
+                    "errorDetails": (
+                        f"Could not resolve footprint '{footprint_spec}' in any "
+                        "registered library. If it lives in a project library, "
+                        "open the project first so its fp-lib-table is loaded."
+                    ),
+                }
+
+            library_path, footprint_name = result
+            # Extract library nickname from path
+            library_nickname = None
+            for nick, path in self.library_manager.libraries.items():
+                if path == library_path:
+                    library_nickname = nick
+                    break
 
             # Minimal info — always returned even if the parser fails
             info: Dict = {
