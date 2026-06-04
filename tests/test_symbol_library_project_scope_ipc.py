@@ -41,6 +41,7 @@ def _bare_iface(symbol_commands, board_path, monkeypatch):
     iface.command_routes = {
         "list_symbol_libraries": symbol_commands.list_symbol_libraries,
         "list_library_symbols": symbol_commands.list_library_symbols,
+        "refresh_symbol_libraries": symbol_commands.refresh_symbol_libraries,
     }
     monkeypatch.setattr(KiCADInterface, "_current_board_path", lambda self: board_path)
     return iface
@@ -73,6 +74,23 @@ def test_symbol_query_no_scope_without_board_or_project(monkeypatch):
 
     assert out["success"] is True
     cmds.use_project.assert_not_called()  # global browsing left undisturbed
+
+
+def test_refresh_symbol_libraries_also_scopes(monkeypatch, tmp_path):
+    """refresh_symbol_libraries is in the scoped set, so a pure-IPC refresh
+    warms project libs (not just global) by scoping first."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    board_path = str(proj / "board.kicad_pcb")
+
+    cmds = MagicMock()
+    cmds.refresh_symbol_libraries = lambda params: {"success": True, "refreshed": 0}
+    iface = _bare_iface(cmds, board_path, monkeypatch)
+
+    out = iface.handle_command("refresh_symbol_libraries", {})
+
+    assert out["success"] is True
+    cmds.use_project.assert_called_once_with(proj)
 
 
 # ---------------------------------------------------------------------------

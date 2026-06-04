@@ -1622,6 +1622,9 @@ class KiCADInterface(BoardPersistenceMixin):
             "search_symbols",
             "list_library_symbols",
             "get_symbol_info",
+            # Scope before refreshing so a pure-IPC refresh warms project libs
+            # too, not just the global ones.
+            "refresh_symbol_libraries",
         }
     )
 
@@ -1660,17 +1663,25 @@ class KiCADInterface(BoardPersistenceMixin):
 
     def _project_dir_for_library_scope(self) -> Optional[Path]:
         """Best-effort project directory for scoping the symbol/footprint library
-        managers: the explicitly-opened project if known, else the directory of
-        the live board.  The board-path fallback is what covers pure-IPC use,
-        where ``open_project`` never ran through the MCP but KiCad has the board
-        open and reachable over IPC.
+        managers.
+
+        Prefer the LIVE board — ground truth for what's open right now, including
+        after the user switches boards in the KiCad UI over IPC — resolved
+        through the same resolver ``open_project`` uses.  Fall back to the
+        explicitly-opened project only when no board is reachable (e.g. the SWIG
+        board went unhealthy / was closed).  In the normal open_project flow both
+        agree; the live-board-first order only matters in the mixed case
+        (open_project A, then switch to B in the UI), where following the live
+        board is the correct scope.
         """
+        board_path = self._current_board_path()
+        if board_path:
+            resolved = self._project_path_from_filename(board_path)
+            if resolved is not None:
+                return resolved
         project_dir = getattr(self, "_current_project_path", None)
         if project_dir is not None:
             return Path(project_dir)
-        board_path = self._current_board_path()
-        if board_path:
-            return Path(board_path).parent
         return None
 
     def _ensure_footprint_library_for_current_project(self) -> None:

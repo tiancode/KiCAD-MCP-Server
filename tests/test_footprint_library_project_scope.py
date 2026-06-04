@@ -130,6 +130,33 @@ def test_handle_command_lazy_scopes_from_board_path(no_global_fp_table, tmp_path
 
 
 # ---------------------------------------------------------------------------
+# _project_dir_for_library_scope: live board wins over stale _current_project_path
+# ---------------------------------------------------------------------------
+def test_library_scope_prefers_live_board_over_stale_project_path(tmp_path):
+    """open_project set project A, but the user switched to board B in the KiCad
+    UI (IPC) — library scope must follow the live board (B), not stale A."""
+    from kicad_interface import KiCADInterface
+
+    iface = KiCADInterface.__new__(KiCADInterface)
+    iface._current_project_path = tmp_path / "projA"
+    board_b = str(tmp_path / "projB" / "board.kicad_pcb")
+    iface._current_board_path = lambda: board_b  # type: ignore[method-assign]
+
+    assert iface._project_dir_for_library_scope() == tmp_path / "projB"
+
+
+def test_library_scope_falls_back_to_project_path_without_board(tmp_path):
+    """No live board reachable → use the explicitly-opened project."""
+    from kicad_interface import KiCADInterface
+
+    iface = KiCADInterface.__new__(KiCADInterface)
+    iface._current_project_path = tmp_path / "projA"
+    iface._current_board_path = lambda: None  # type: ignore[method-assign]
+
+    assert iface._project_dir_for_library_scope() == tmp_path / "projA"
+
+
+# ---------------------------------------------------------------------------
 # get_footprint_info not-found: clean failure, not NameError
 # ---------------------------------------------------------------------------
 def test_get_footprint_info_not_found_returns_clean_failure(no_global_fp_table):
