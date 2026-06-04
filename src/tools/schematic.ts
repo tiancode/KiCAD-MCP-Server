@@ -15,8 +15,14 @@ export function registerSchematicTools(server: McpServer, callKicadScript: Funct
     {
       name: z.string().describe("Schematic name"),
       path: z.string().optional().describe("Optional path"),
+      overwrite: z
+        .boolean()
+        .optional()
+        .describe(
+          "Replace an existing schematic file. Defaults to false: if the target .kicad_sch already exists, the tool refuses (errorCode SCHEMATIC_EXISTS) instead of overwriting it. Set true only when you intend to replace it.",
+        ),
     },
-    async (args: { name: string; path?: string }) => {
+    async (args: { name: string; path?: string; overwrite?: boolean }) => {
       const result = await callKicadScript("create_schematic", args);
       return formatKicadResult(result);
     },

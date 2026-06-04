@@ -20,8 +20,14 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
         .describe(
           "Launch the KiCAD UI for this project after creation so the IPC backend can attach. Defaults to true. Set false for headless / CI runs.",
         ),
+      overwrite: z
+        .boolean()
+        .optional()
+        .describe(
+          "Replace an existing project at this path. Defaults to false: if the target .kicad_pro/.kicad_pcb/.kicad_sch already exist, the tool refuses (errorCode PROJECT_EXISTS) instead of clobbering them. Set true only when you intend to overwrite.",
+        ),
     },
-    async (args: { path: string; name: string; autoLaunch?: boolean }) => {
+    async (args: { path: string; name: string; autoLaunch?: boolean; overwrite?: boolean }) => {
       const result = await callKicadScript("create_project", args);
       return formatKicadResult(result);
     },

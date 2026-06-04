@@ -37,6 +37,10 @@ PROJECT_TOOLS = [
                     "type": "string",
                     "description": "Optional path to template board file to copy settings from",
                 },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace an existing project. Defaults to false: if the target .kicad_pro/.kicad_pcb/.kicad_sch already exist the tool refuses (errorCode PROJECT_EXISTS) instead of clobbering them.",
+                },
             },
             "required": ["projectName"],
         },
@@ -1599,6 +1603,10 @@ SCHEMATIC_TOOLS = [
                     "description": "Path for the new schematic file (.kicad_sch)",
                 },
                 "title": {"type": "string", "description": "Schematic title"},
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace an existing schematic file. Defaults to false: if the target .kicad_sch already exists the tool refuses (errorCode SCHEMATIC_EXISTS) instead of overwriting it.",
+                },
             },
             "required": ["filename"],
         },

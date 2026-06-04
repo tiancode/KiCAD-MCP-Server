@@ -32,6 +32,35 @@ class ProjectCommands:
             if not project_path.endswith(".kicad_pro"):
                 project_path += ".kicad_pro"
 
+            # Sibling files this command writes; needed up front for the
+            # overwrite guard below.
+            board_path = project_path.replace(".kicad_pro", ".kicad_pcb")
+            schematic_path = project_path.replace(".kicad_pro", ".kicad_sch")
+
+            # Refuse to clobber an existing project. SaveBoard / shutil.copy
+            # below would otherwise silently overwrite the user's board and
+            # schematic. Mirrors create_footprint / create_symbol, which
+            # default overwrite=False and refuse when the target exists.
+            overwrite = bool(params.get("overwrite", False))
+            if not overwrite:
+                existing = [
+                    p for p in (project_path, board_path, schematic_path) if os.path.exists(p)
+                ]
+                if existing:
+                    return {
+                        "success": False,
+                        "message": (
+                            f'Project "{project_name}" already exists at {path}. '
+                            "Pass overwrite=true to replace it, or choose a different name."
+                        ),
+                        "errorCode": "PROJECT_EXISTS",
+                        "hint": (
+                            "Refusing to overwrite an existing project. Use open_project "
+                            "to edit it, pick a new name/path, or set overwrite=true."
+                        ),
+                        "existingFiles": existing,
+                    }
+
             # Create project directory if it doesn't exist
             os.makedirs(os.path.dirname(project_path), exist_ok=True)
 
@@ -56,13 +85,11 @@ class ProjectCommands:
                     board.SetDesignSettings(template_board.GetDesignSettings())
                     board.SetLayerStack(template_board.GetLayerStack())
 
-            # Save the board
-            board_path = project_path.replace(".kicad_pro", ".kicad_pcb")
+            # Save the board (board_path computed above for the overwrite guard)
             board.SetFileName(board_path)
             pcbnew.SaveBoard(board_path, board)
 
             # Create schematic from template (use expanded template with symbol definitions)
-            schematic_path = project_path.replace(".kicad_pro", ".kicad_sch")
             template_sch_path = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "..",

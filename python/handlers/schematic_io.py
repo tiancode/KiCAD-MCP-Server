@@ -1224,15 +1224,30 @@ def handle_create_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> 
                 "message": "Schematic name is required. Provide 'name', 'projectName', or 'filename' parameter.",
             }
 
-        sch_path = path if path and path != "." else None
-        schematic = SchematicManager.create_schematic(
-            project_name, path=sch_path, metadata=metadata
-        )
         base_name = (
             project_name if project_name.endswith(".kicad_sch") else f"{project_name}.kicad_sch"
         )
         normalized_path = path or "."
         file_path = os.path.join(normalized_path, base_name)
+
+        # Refuse to clobber an existing schematic. create_schematic copies the
+        # template over file_path unconditionally, so without this guard a name
+        # collision silently wipes the user's sheet.
+        if not bool(params.get("overwrite", False)) and os.path.exists(file_path):
+            return {
+                "success": False,
+                "message": (
+                    f"Schematic already exists: {file_path}. "
+                    "Pass overwrite=true to replace it, or choose a different name."
+                ),
+                "errorCode": "SCHEMATIC_EXISTS",
+                "hint": "Refusing to overwrite an existing schematic. Pick a new name or set overwrite=true.",
+            }
+
+        sch_path = path if path and path != "." else None
+        schematic = SchematicManager.create_schematic(
+            project_name, path=sch_path, metadata=metadata
+        )
         success = SchematicManager.save_schematic(schematic, file_path)
 
         return {"success": success, "file_path": file_path}
