@@ -14,19 +14,20 @@ export type McpTextResult = {
   isError?: true;
 };
 
-function isKicadFailure(result: unknown): boolean {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    "success" in result &&
-    (result as { success?: unknown }).success === false
-  );
-}
-
+/**
+ * Narrow a result to a plain object (record). Arrays are excluded: although
+ * `typeof [] === "object"`, MCP's outbound CallToolResultSchema requires
+ * `structuredContent` to be an object, so attaching an array there would make
+ * the SDK reject an otherwise-successful tool result.
+ */
 function asRecord(result: unknown): Record<string, unknown> | null {
-  return typeof result === "object" && result !== null
+  return typeof result === "object" && result !== null && !Array.isArray(result)
     ? (result as Record<string, unknown>)
     : null;
+}
+
+function isKicadFailure(record: Record<string, unknown> | null): boolean {
+  return record !== null && record.success === false;
 }
 
 function pickString(record: Record<string, unknown>, key: string): string {
@@ -58,7 +59,7 @@ function summarize(record: Record<string, unknown> | null, isError: boolean): st
 
 export function formatKicadResult(result: unknown): McpTextResult {
   const record = asRecord(result);
-  const isError = isKicadFailure(result);
+  const isError = isKicadFailure(record);
 
   const summary = summarize(record, isError);
   const json = JSON.stringify(result) ?? String(result);

@@ -362,14 +362,18 @@ def classify_failure(
         )
 
     # No project / board loaded — the single most common recoverable failure.
-    # A dehydrated SWIG board surfaces as AttributeError on a NoneType board.
+    # Match the specific phrasings handlers actually emit (dominant: "No board
+    # is loaded", 57 call sites) rather than bare "no board" / "no project",
+    # which false-positive on benign text like "...no board errors". A
+    # dehydrated SWIG board surfaces as AttributeError on a NoneType board.
     if (
-        "no board" in text
-        or "no project" in text
+        "no board is loaded" in text
+        or "no board loaded" in text
         or "board is none" in text
         or "no current project" in text
         or "open a project" in text
         or "no project is loaded" in text
+        or "no kicad project is loaded" in text
         or ("nonetype" in text and "board" in text)
     ):
         return (
@@ -413,6 +417,10 @@ def enrich_failure(command: str, result: "Dict[str, Any]") -> "Dict[str, Any]":
     if result.get("errorCode"):
         return result
 
+    # Copy before stamping so a handler that returns a shared/cached failure
+    # constant isn't permanently mutated (which would then trip the
+    # errorCode-present guard above on the next, unrelated failure).
+    result = dict(result)
     message = str(result.get("message") or "")
     details = str(result.get("errorDetails") or result.get("errorDetail") or "")
     # The PCB-editor gate is a known, pre-classified recoverable state.
@@ -1213,6 +1221,20 @@ class KiCADInterface(BoardPersistenceMixin):
         return layer_name
 
     def handle_command(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Dispatch a command and enrich every failure with errorCode/hint.
+
+        _dispatch_command has many early returns (IPC handler results, the
+        PCB-editor gate, cross-backend conflicts, the SWIG-dehydration bailout,
+        the normal handler result).  Routing them all through enrich_failure
+        HERE — at the single process exit — guarantees the errorCode contract
+        holds for every backend, instead of only the SWIG path.  The `except`
+        branch inside _dispatch_command pre-classifies using the exception type
+        (which enrich_failure can't see), so its already-coded result passes
+        through enrich_failure untouched.
+        """
+        return enrich_failure(command, self._dispatch_command(command, params))
+
+    def _dispatch_command(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Route command to appropriate handler, preferring IPC when available"""
         logger.info(f"Handling command: {command}")
         logger.debug(f"Command parameters: {params}")
@@ -1374,9 +1396,10 @@ class KiCADInterface(BoardPersistenceMixin):
                             # write is gated until KiCad reloads the file.
                             self._swig_writes_landed = True
 
-                # Enrich any handler-level failure with a stable errorCode +
-                # actionable hint before it leaves the process.
-                return enrich_failure(command, result)
+                # Failure enrichment happens once, in handle_command, so every
+                # return path (incl. the IPC/gate/conflict branches above) is
+                # covered uniformly.
+                return result
             else:
                 logger.error(f"Unknown command: {command}")
                 return {
