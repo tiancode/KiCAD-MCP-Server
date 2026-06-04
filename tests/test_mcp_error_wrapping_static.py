@@ -24,7 +24,8 @@ class TestMcpErrorWrapping:
 
         assert "export function formatKicadResult" in helper
         assert "success === false" in helper
-        assert "isError: true" in helper
+        # Failures are flagged by setting isError on the result object.
+        assert "out.isError = true" in helper
 
     def test_design_rule_tools_use_shared_error_wrapper(self):
         """DRC/design-rule wrappers must not return success:false as a plain OK result."""

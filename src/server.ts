@@ -59,6 +59,7 @@ import { registerUITools } from "./tools/ui.js";
 import { registerFreeroutingTools } from "./tools/freerouting.js";
 import { registerShapesTools } from "./tools/shapes.js";
 import { registerTransactionTools } from "./tools/transactions.js";
+import { withToolAnnotations } from "./tools/annotations.js";
 
 // Import resource registration functions
 import { registerProjectResources } from "./resources/project.js";
@@ -407,7 +408,13 @@ export class KiCADMcpServer {
       registerShapesTools,
       registerTransactionTools,
     ];
-    for (const register of toolRegistrars) register(this.server, cb);
+    // Register tools through an annotation-injecting proxy: the registrars
+    // still call `server.tool(...)`, but the proxy forwards to
+    // `registerTool` with the behaviour hints classified in annotations.ts
+    // (readOnly / destructive / idempotent / openWorld). Resources and
+    // prompts below use the real server — they don't take annotations.
+    const annotatedServer = withToolAnnotations(this.server);
+    for (const register of toolRegistrars) register(annotatedServer, cb);
 
     const resourceRegistrars = [
       registerProjectResources,
