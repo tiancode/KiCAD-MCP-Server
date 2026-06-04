@@ -8,16 +8,23 @@ from GitHub Pages in ~5 minutes instead of the broken JLCSearch API approach.
 The cache.sqlite3 file contains all JLCPCB parts with stock, pricing,
 and category data. We then convert it into the format expected by the
 KiCad MCP server's JLCPCBPartsManager.
+
+The upstream archive is monolithic (no incremental/delta publishing), so a
+"cheap" re-run is impossible once it changes. What this script *can* avoid:
+
+  * Re-runs when upstream hasn't changed: cache.zip's Last-Modified is recorded
+    next to the DB; a matching probe exits immediately with zero downloads.
+  * Restarting an interrupted download: the volume archives are kept between
+    runs and resumed (`curl -C -`); only the bulky extracted SQLite is deleted.
 """
 
 import json
-import os
-import shutil
 import sqlite3
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional, Tuple
 
 # Anchored at the repo root: scripts/.. → /python
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
@@ -34,41 +41,102 @@ MAX_PARTS = 60  # probe up to this many split volumes
 
 TARGET_DB = DATA_DIR / "jlcpcb_parts.db"
 
+# Sidecar recording the upstream cache.zip Last-Modified that the *completed*
+# TARGET_DB was built from. A re-run skips entirely while this still matches.
+LM_MARKER = DATA_DIR / "jlcpcb_parts.last_modified"
+# Snapshot the partially-downloaded volumes in CACHE_DIR belong to. Lets an
+# interrupted download resume; a mismatch means the cached volumes are stale.
+INPROGRESS_MARKER = CACHE_DIR / ".downloading_lm"
 
-def curl_download(url: str, dest: Path) -> bool:
-    """Download url to dest with curl. Returns False on 4xx/5xx or network error."""
-    result = subprocess.run(
-        ["curl", "-L", "-f", "-o", str(dest), "--progress-bar", url], capture_output=False
-    )
+
+def curl_download(url: str, dest: Path, resume: bool = False) -> bool:
+    """Download url to dest with curl. Returns False on 4xx/5xx or network error.
+
+    With resume=True, continues a partial file (`curl -C -`) instead of restarting.
+    """
+    cmd = ["curl", "-L", "-f", "-o", str(dest), "--progress-bar"]
+    if resume:
+        cmd += ["-C", "-"]
+    cmd.append(url)
+    result = subprocess.run(cmd, capture_output=False)
     return result.returncode == 0
 
 
+def remote_head(url: str) -> Tuple[bool, Optional[int], Optional[str]]:
+    """HEAD `url`; return (reachable, content_length, last_modified).
+
+    Follows redirects and keeps the final response's headers. `reachable` is
+    True only on a 2xx status, so a 404 (past the last split volume) reads as
+    not-reachable rather than as an error.
+    """
+    result = subprocess.run(["curl", "-sI", "-L", url], capture_output=True, text=True)
+    if result.returncode != 0:
+        return (False, None, None)
+    reachable = False
+    length: Optional[int] = None
+    last_modified: Optional[str] = None
+    for raw in result.stdout.splitlines():
+        line = raw.strip()
+        low = line.lower()
+        if low.startswith("http/"):
+            parts = line.split()
+            reachable = len(parts) >= 2 and parts[1].isdigit() and 200 <= int(parts[1]) < 300
+        elif low.startswith("content-length:"):
+            try:
+                length = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                length = None
+        elif low.startswith("last-modified:"):
+            last_modified = line.split(":", 1)[1].strip()
+    return (reachable, length, last_modified)
+
+
+def _fetch_one(url: str, dest: Path) -> str:
+    """Ensure `dest` is a complete copy of `url`.
+
+    Returns "done" (already complete or freshly downloaded), "missing" (remote
+    404 — expected past the last split volume), or "error".
+    """
+    reachable, remote_len, _ = remote_head(url)
+    if not reachable:
+        if dest.exists():
+            dest.unlink()
+        return "missing"
+    if dest.exists() and remote_len is not None:
+        local_len = dest.stat().st_size
+        if local_len == remote_len:
+            print(f"  {dest.name} already complete, skipping")
+            return "done"
+        if local_len > remote_len:
+            print(f"  {dest.name} corrupt (local > remote), re-downloading")
+            dest.unlink()
+    resume = dest.exists() and dest.stat().st_size > 0
+    print(f"  {'Resuming' if resume else 'Downloading'} {dest.name}...")
+    return "done" if curl_download(url, dest, resume=resume) else "error"
+
+
 def download_files() -> bool:
-    """Download split archive volumes (z01..zNN) then cache.zip, stopping volumes at 404 or MAX_PARTS."""
+    """Download split archive volumes (z01..zNN) then cache.zip.
+
+    Per file: skip when the local copy already matches the remote size, resume a
+    short local copy, and re-fetch a too-large (corrupt) one. Volume enumeration
+    stops at the first 404 (or MAX_PARTS).
+    """
     print("Downloading jlcparts database (~421MB)...")
 
     for i in range(1, MAX_PARTS + 1):
         part = f"cache.z{i:02d}"
-        dest = CACHE_DIR / part
-        if dest.exists() and dest.stat().st_size > 1000:
-            print(f"  {part} already exists, skipping")
-            continue
-        print(f"  Downloading {part}...")
-        if not curl_download(f"{BASE_URL}/{part}", dest):
-            # -f causes non-zero exit on 4xx/5xx; treat as end of volumes
-            if dest.exists():
-                dest.unlink()
+        status = _fetch_one(f"{BASE_URL}/{part}", CACHE_DIR / part)
+        if status == "missing":
             print(f"  {part} not found — {i - 1} volumes total")
             break
-
-    dest = CACHE_DIR / "cache.zip"
-    if dest.exists() and dest.stat().st_size > 1000:
-        print("  cache.zip already exists, skipping")
-    else:
-        print("  Downloading cache.zip...")
-        if not curl_download(f"{BASE_URL}/cache.zip", dest):
-            print("  ERROR downloading cache.zip")
+        if status == "error":
+            print(f"  ERROR downloading {part}")
             return False
+
+    if _fetch_one(f"{BASE_URL}/cache.zip", CACHE_DIR / "cache.zip") != "done":
+        print("  ERROR downloading cache.zip")
+        return False
 
     return True
 
@@ -99,6 +167,28 @@ def extract_database() -> bool:
 
     print("\nERROR: 7z not found. Install with: brew install p7zip")
     return False
+
+
+def parse_price_breaks(raw: Optional[str]) -> list:
+    """Parse jlcparts' price string into MCP price breaks.
+
+    Upstream stores tiered pricing as "1-199:0.0188,200-599:0.0162,..." — each
+    segment is "<qtyLow>-<qtyHigh>:<unitPrice>", with an open-ended final tier
+    ("20000-:0.01"). We keep {qty: <low>, price: <unit>} per tier.
+    """
+    breaks: list = []
+    if not raw:
+        return breaks
+    for seg in str(raw).split(","):
+        qty_range, sep, price_s = seg.strip().partition(":")
+        if not sep:
+            continue
+        low = qty_range.split("-", 1)[0].strip()
+        try:
+            breaks.append({"qty": int(low), "price": float(price_s)})
+        except ValueError:
+            continue
+    return breaks
 
 
 def convert_to_mcp_format() -> bool:
@@ -163,9 +253,11 @@ def convert_to_mcp_format() -> bool:
     dst.execute("CREATE INDEX idx_library_type ON components(library_type)")
     dst.execute("CREATE INDEX idx_mfr_part ON components(mfr_part)")
 
-    # Map source columns to our schema
-    # jlcparts schema varies but commonly has:
-    # lcsc, mfr, description, joint, manufacturer, basic, preferred, stock, price, url, etc.
+    # Map source columns to our schema. Current jlcparts (table `jlc_components`)
+    # exposes: lcsc, category, subcategory, mfr, package, joints, manufacturer,
+    # library_type ('base'/'expand'), preferred (0/1), stock, price (tiered
+    # string), description, datasheet. (Legacy 'basic'/'First Category'/'url'
+    # fallbacks are kept for older snapshots.)
     print(f"\nConverting parts to MCP format...")
     now = int(time.time())
     batch = []
@@ -192,21 +284,22 @@ def convert_to_mcp_format() -> bool:
         subcategory = row_dict.get("subcategory") or row_dict.get("Second Category") or ""
         datasheet = row_dict.get("datasheet") or row_dict.get("url") or ""
 
-        # Library type
+        # Library type: upstream uses library_type='base'/'expand' plus a
+        # preferred 0/1 flag (the older 'basic'/'is_basic' columns are gone, so
+        # the previous mapping classified every part as Extended).
+        raw_lib = str(row_dict.get("library_type") or "").strip().lower()
         is_basic = row_dict.get("basic") or row_dict.get("is_basic") or row_dict.get("Basic")
-        is_preferred = (
-            row_dict.get("preferred") or row_dict.get("is_preferred") or row_dict.get("Preferred")
-        )
-        if is_basic:
+        if raw_lib in ("base", "basic") or is_basic:
             lib_type = "Basic"
-        elif is_preferred:
+        elif row_dict.get("preferred") in (1, "1", True):
             lib_type = "Preferred"
         else:
             lib_type = "Extended"
 
-        # Price
-        price = row_dict.get("price") or row_dict.get("Price") or 0
-        price_json = json.dumps([{"qty": 1, "price": price}] if price else [])
+        solder_joints = row_dict.get("joints") or row_dict.get("solder_joints") or 0
+        # Price: upstream is a tiered string ("1-199:0.0188,..."); parse it into
+        # real {qty, price} breaks instead of stuffing the raw string into one.
+        price_json = json.dumps(parse_price_breaks(row_dict.get("price")))
 
         batch.append(
             (
@@ -215,7 +308,7 @@ def convert_to_mcp_format() -> bool:
                 subcategory,
                 mfr_part,
                 package,
-                0,
+                int(solder_joints) if solder_joints else 0,
                 manufacturer,
                 lib_type,
                 description,
@@ -276,9 +369,14 @@ def convert_to_mcp_format() -> bool:
     dst.close()
     src.close()
 
-    print("Cleaning up source database...")
-    shutil.rmtree(CACHE_DIR)
-    print(f"  Removed {CACHE_DIR}")
+    # Keep the downloaded volume archives (so an upstream-unchanged re-run stays
+    # free and an interrupted one can resume); only the bulky extracted SQLite
+    # is disposable.
+    print("Cleaning up extracted database (keeping downloaded archives)...")
+    if source.exists():
+        freed = source.stat().st_size / (1024 * 1024)
+        source.unlink()
+        print(f"  Removed cache.sqlite3 ({freed:.0f}MB); kept volumes in {CACHE_DIR}")
 
     db_size = TARGET_DB.stat().st_size / (1024 * 1024)
     print(f"\nDatabase ready: {TARGET_DB}")
@@ -289,11 +387,49 @@ def convert_to_mcp_format() -> bool:
     return True
 
 
+def prepare_cache(upstream_lm: Optional[str]) -> None:
+    """Drop cached volumes that don't belong to the current upstream snapshot.
+
+    Volumes are kept (and later resumed) only when the in-progress marker still
+    matches `upstream_lm`; otherwise their provenance is stale or unknown.
+    """
+    inprog = INPROGRESS_MARKER.read_text().strip() if INPROGRESS_MARKER.exists() else ""
+    have_volumes = (CACHE_DIR / "cache.zip").exists() or any(CACHE_DIR.glob("cache.z[0-9]*"))
+    if have_volumes and inprog != (upstream_lm or ""):
+        reason = "different snapshot" if inprog else "unknown provenance"
+        print(f"  Discarding stale cached volumes ({reason})")
+        for f in CACHE_DIR.iterdir():
+            if f.is_file():
+                f.unlink()
+    INPROGRESS_MARKER.write_text(upstream_lm or "")
+
+
 def main() -> None:
     print("=" * 60)
     print("JLCPCB Parts Database Downloader (jlcparts method)")
     print("=" * 60)
     start = time.time()
+
+    # Cheap freshness probe: the upstream split archive is monolithic (no deltas),
+    # so the only "skip" possible is detecting it hasn't changed since we built
+    # TARGET_DB. cache.zip's Last-Modified is that snapshot stamp.
+    reachable, _, upstream_lm = remote_head(f"{BASE_URL}/cache.zip")
+    if not reachable:
+        print("ERROR: cannot reach upstream cache.zip — check network/URL")
+        sys.exit(1)
+    print(f"Upstream snapshot: {upstream_lm or 'unknown'}")
+
+    if upstream_lm and TARGET_DB.exists():
+        prev = LM_MARKER.read_text().strip() if LM_MARKER.exists() else ""
+        if prev == upstream_lm:
+            print(f"Local database already matches upstream ({upstream_lm}).")
+            print("Nothing to download. Done.")
+            return
+        if prev:
+            print(f"Upstream changed: {prev} -> {upstream_lm}; refreshing.")
+
+    # Reuse cached volumes only if they belong to this snapshot; else discard.
+    prepare_cache(upstream_lm)
 
     if not download_files():
         sys.exit(1)
@@ -303,6 +439,9 @@ def main() -> None:
 
     if not convert_to_mcp_format():
         sys.exit(1)
+
+    if upstream_lm:
+        LM_MARKER.write_text(upstream_lm)
 
     elapsed = time.time() - start
     print(f"\nTotal time: {elapsed/60:.1f} minutes")
