@@ -62,17 +62,18 @@ def curl_download(url: str, dest: Path, resume: bool = False) -> bool:
     return result.returncode == 0
 
 
-def remote_head(url: str) -> Tuple[bool, Optional[int], Optional[str]]:
-    """HEAD `url`; return (reachable, content_length, last_modified).
+def remote_head(url: str) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    """HEAD `url`; return (status_code, content_length, last_modified).
 
-    Follows redirects and keeps the final response's headers. `reachable` is
-    True only on a 2xx status, so a 404 (past the last split volume) reads as
-    not-reachable rather than as an error.
+    status_code is the final HTTP status after redirects, or None when curl got
+    no response at all (DNS/connection/timeout). The None-vs-number distinction
+    lets callers tell a real network error apart from a server 404, so a blip
+    mid-enumeration is not mistaken for "no more volumes".
     """
     result = subprocess.run(["curl", "-sI", "-L", url], capture_output=True, text=True)
     if result.returncode != 0:
-        return (False, None, None)
-    reachable = False
+        return (None, None, None)
+    status: Optional[int] = None
     length: Optional[int] = None
     last_modified: Optional[str] = None
     for raw in result.stdout.splitlines():
@@ -80,7 +81,8 @@ def remote_head(url: str) -> Tuple[bool, Optional[int], Optional[str]]:
         low = line.lower()
         if low.startswith("http/"):
             parts = line.split()
-            reachable = len(parts) >= 2 and parts[1].isdigit() and 200 <= int(parts[1]) < 300
+            if len(parts) >= 2 and parts[1].isdigit():
+                status = int(parts[1])
         elif low.startswith("content-length:"):
             try:
                 length = int(line.split(":", 1)[1].strip())
@@ -88,20 +90,26 @@ def remote_head(url: str) -> Tuple[bool, Optional[int], Optional[str]]:
                 length = None
         elif low.startswith("last-modified:"):
             last_modified = line.split(":", 1)[1].strip()
-    return (reachable, length, last_modified)
+    return (status, length, last_modified)
 
 
 def _fetch_one(url: str, dest: Path) -> str:
     """Ensure `dest` is a complete copy of `url`.
 
-    Returns "done" (already complete or freshly downloaded), "missing" (remote
-    404 — expected past the last split volume), or "error".
+    Returns "done", "missing" (server 404 — expected past the last split
+    volume), or "error" (network failure or other HTTP error — must NOT be read
+    as end-of-volumes).
     """
-    reachable, remote_len, _ = remote_head(url)
-    if not reachable:
+    status, remote_len, _ = remote_head(url)
+    if status is None:
+        return "error"  # network error — distinct from a 404
+    if status == 404:
         if dest.exists():
             dest.unlink()
         return "missing"
+    if not 200 <= status < 300:
+        print(f"  {dest.name}: unexpected HTTP {status}")
+        return "error"
     if dest.exists() and remote_len is not None:
         local_len = dest.stat().st_size
         if local_len == remote_len:
@@ -110,7 +118,10 @@ def _fetch_one(url: str, dest: Path) -> str:
         if local_len > remote_len:
             print(f"  {dest.name} corrupt (local > remote), re-downloading")
             dest.unlink()
-    resume = dest.exists() and dest.stat().st_size > 0
+    # Resume only a genuine partial prefix (shorter than the known remote size).
+    # If the remote length is unknown we can't tell complete from partial, so we
+    # re-download fresh rather than risk `curl -C -` hitting 416 on a full file.
+    resume = dest.exists() and remote_len is not None and 0 < dest.stat().st_size < remote_len
     print(f"  {'Resuming' if resume else 'Downloading'} {dest.name}...")
     return "done" if curl_download(url, dest, resume=resume) else "error"
 
@@ -401,6 +412,10 @@ def prepare_cache(upstream_lm: Optional[str]) -> None:
         for f in CACHE_DIR.iterdir():
             if f.is_file():
                 f.unlink()
+    # Never trust a leftover extracted SQLite across runs: extract_database's
+    # size check can't tell a half-written file from a complete one, and it is
+    # cheap to re-extract from the kept volumes. Always start extraction fresh.
+    (CACHE_DIR / "cache.sqlite3").unlink(missing_ok=True)
     INPROGRESS_MARKER.write_text(upstream_lm or "")
 
 
@@ -413,8 +428,8 @@ def main() -> None:
     # Cheap freshness probe: the upstream split archive is monolithic (no deltas),
     # so the only "skip" possible is detecting it hasn't changed since we built
     # TARGET_DB. cache.zip's Last-Modified is that snapshot stamp.
-    reachable, _, upstream_lm = remote_head(f"{BASE_URL}/cache.zip")
-    if not reachable:
+    status, _, upstream_lm = remote_head(f"{BASE_URL}/cache.zip")
+    if status is None or not 200 <= status < 300:
         print("ERROR: cannot reach upstream cache.zip — check network/URL")
         sys.exit(1)
     print(f"Upstream snapshot: {upstream_lm or 'unknown'}")

@@ -11,13 +11,11 @@ export function registerJLCPCBApiTools(server: McpServer, callKicadScript: Funct
   // Download JLCPCB parts database
   server.tool(
     "download_jlcpcb_database",
-    `Download the complete JLCPCB parts catalog to local database.
+    `Populate the local JLCPCB parts DB (used by search_jlcpcb_parts) via the public JLCSearch API (tscircuit) — no credentials.
 
-This is a one-time setup that downloads ~2.5M+ parts from JLCSearch API.
-No API credentials required - uses public JLCSearch API.
+This path is paginated (100 parts/request -> ~2.5M parts, ~40-60 min) and leaves category/manufacturer BLANK in the DB. RECOMMENDED INSTEAD: run scripts/download_jlcpcb.py, which pulls the prebuilt jlcparts dataset (~7.15M parts, with category/manufacturer and tiered pricing populated) in ~5 min.
 
-The download takes 5-10 minutes and creates a local SQLite database
-for fast offline searching.`,
+An existing non-empty DB is kept; pass force=true to re-download.`,
     {
       force: z
         .boolean()
@@ -49,7 +47,7 @@ for fast offline searching.`,
             type: "text",
             text:
               `✗ Failed to download JLCPCB database: ${result.message || "Unknown error"}\n\n` +
-              `Make sure JLCPCB_API_KEY and JLCPCB_API_SECRET environment variables are set.`,
+              `The JLCSearch path needs no credentials but is slow/flaky; for a reliable, fuller catalog run scripts/download_jlcpcb.py instead.`,
           },
         ],
       };
