@@ -59,14 +59,18 @@ for fast offline searching.`,
   // Search JLCPCB parts
   server.tool(
     "search_jlcpcb_parts",
-    `Search the local JLCPCB parts catalog (download_jlcpcb_database first). Returns real pricing, stock, and library type (Basic = free assembly).
+    `Search the local JLCPCB parts catalog (download_jlcpcb_database first). Returns real pricing, stock, and library type (Basic/Preferred = free or low assembly fee).
 
 MATCHING — read this, it changes how you should call the tool:
 - BEST: if you have a candidate manufacturer part number, pass it as 'mpn'. It does an exact (then prefix) lookup and is by far the most reliable path. Prefer searching by a few candidate MPNs over describing the part.
 - 'query' is full-text over description + MPN. Value/unit words now match safely ('4.7uF', '0.5A', '510kΩ'). Multiple words must ALL appear in the text (AND); a synonym/format mismatch ('buck' vs 'Step-Down', '0.5A' vs '500mA', 'µH' vs 'uH') can still drop the result. If nothing matches it auto-retries OR-style and flags the result as fuzzy.
 - Put package in the 'package' filter, NOT in 'query'.
-- 'category' and 'manufacturer' are BLANK in the public JLCSearch database, so filtering by them matches nothing — the value is folded into the text search and a warning is returned. Don't rely on them for precision.
-- in_stock defaults true. A zero in-stock result auto-retries without the stock filter; if matches exist they are returned with out_of_stock_only=true. So an empty result now reliably means "not in this catalog" rather than "just out of stock" — distrust 'not found' less.`,
+- 'category'/'manufacturer' are populated and filter correctly when the DB was built from the jlcparts dataset (scripts/download_jlcpcb.py). They are blank only with the older JLCSearch download, in which case the tool detects that, folds the value into the text search, and returns a warning. Check for a warning instead of assuming they don't work.
+- in_stock defaults true. A zero in-stock result auto-retries without the stock filter; if matches exist they are returned with out_of_stock_only=true. So an empty result now reliably means "not in this catalog" rather than "just out of stock" — distrust 'not found' less.
+
+COST — JLCPCB assembly economics, apply unless the user says otherwise:
+- Prefer Basic, then Preferred, then Extended. Basic parts have no per-part setup fee; Extended parts add a ~$3 one-time fee per unique part number; Preferred are extended parts JLCPCB keeps stocked (better availability, lower/often-waived fee).
+- Basic is a SMALL set (~350 parts total), so a Basic-only search returns nothing for most ICs. Strategy: try library_type='Basic', then 'Preferred', then fall back to 'All'/'Extended' — never conclude "no such part" from a Basic-only miss. There is no combined Basic+Preferred filter, so that is two calls.`,
     {
       query: z
         .string()
@@ -84,7 +88,7 @@ MATCHING — read this, it changes how you should call the tool:
         .string()
         .optional()
         .describe(
-          "Category filter (e.g. 'Resistors'). NOTE: blank in the JLCSearch DB — folded into text search, returns a warning.",
+          "Category filter (e.g. 'Resistors'). Works when the DB was built from jlcparts (scripts/download_jlcpcb.py); blank only with the older JLCSearch DB, where it's folded into text search and a warning is returned.",
         ),
       package: z
         .string()
@@ -94,12 +98,14 @@ MATCHING — read this, it changes how you should call the tool:
         .enum(["Basic", "Extended", "Preferred", "All"])
         .optional()
         .default("All")
-        .describe("Filter by library type (Basic = free assembly at JLCPCB)"),
+        .describe(
+          "Filter by library type. Cost order Basic < Preferred < Extended (Basic has no setup fee; Extended adds ~$3 per unique part). Basic is a small set (~350) — try Basic, then Preferred, then All; don't infer 'no part' from a Basic-only miss.",
+        ),
       manufacturer: z
         .string()
         .optional()
         .describe(
-          "Manufacturer filter. NOTE: blank in the JLCSearch DB — folded into text search, returns a warning.",
+          "Manufacturer filter (e.g. 'Sunlord'). Works when the DB was built from jlcparts; blank only with the older JLCSearch DB, where it's folded into text search and a warning is returned.",
         ),
       in_stock: z
         .boolean()
@@ -158,7 +164,7 @@ MATCHING — read this, it changes how you should call the tool:
                 oosNote +
                 fuzzyNote +
                 `Found ${result.count} JLCPCB parts:\n\n${partsList}\n\n` +
-                `💡 Basic parts have free assembly. Extended parts charge $3 setup fee per unique part.`,
+                `💡 Cost: prefer Basic (no setup fee), then Preferred (stocked, low/no fee), then Extended (~$3 setup fee per unique part).`,
             },
           ],
         };
