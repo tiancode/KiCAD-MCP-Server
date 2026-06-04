@@ -156,6 +156,23 @@ def test_library_scope_falls_back_to_project_path_without_board(tmp_path):
     assert iface._project_dir_for_library_scope() == tmp_path / "projA"
 
 
+def test_library_scope_keeps_project_when_board_is_in_subdir(tmp_path):
+    """A board inside a subdir of the opened project must still scope to the
+    project ROOT (where fp-lib-table/sym-lib-table live), not the board subdir —
+    the live board belongs to the opened project, so don't naively take its
+    parent."""
+    from kicad_interface import KiCADInterface
+
+    proj = tmp_path / "proj"
+    (proj / "boards").mkdir(parents=True)
+    iface = KiCADInterface.__new__(KiCADInterface)
+    iface._current_project_path = proj
+    board = str(proj / "boards" / "main.kicad_pcb")
+    iface._current_board_path = lambda: board  # type: ignore[method-assign]
+
+    assert iface._project_dir_for_library_scope() == proj
+
+
 # ---------------------------------------------------------------------------
 # get_footprint_info not-found: clean failure, not NameError
 # ---------------------------------------------------------------------------

@@ -1665,24 +1665,32 @@ class KiCADInterface(BoardPersistenceMixin):
         """Best-effort project directory for scoping the symbol/footprint library
         managers.
 
-        Prefer the LIVE board — ground truth for what's open right now, including
-        after the user switches boards in the KiCad UI over IPC — resolved
-        through the same resolver ``open_project`` uses.  Fall back to the
-        explicitly-opened project only when no board is reachable (e.g. the SWIG
-        board went unhealthy / was closed).  In the normal open_project flow both
-        agree; the live-board-first order only matters in the mixed case
-        (open_project A, then switch to B in the UI), where following the live
-        board is the correct scope.
+        Follow the LIVE board — ground truth for what's open right now,
+        including after the user switches boards in the KiCad UI over IPC — but
+        only when it diverges from the explicitly-opened project.  When the live
+        board still belongs to the opened project (the normal case, even with
+        the board in a subdirectory) keep ``_current_project_path``: it's
+        resolved more carefully and points at the project root where
+        fp-lib-table / sym-lib-table live, not a board subdir.  Falls back to
+        whichever single source is available.
         """
-        board_path = self._current_board_path()
-        if board_path:
-            resolved = self._project_path_from_filename(board_path)
-            if resolved is not None:
-                return resolved
         project_dir = getattr(self, "_current_project_path", None)
-        if project_dir is not None:
-            return Path(project_dir)
-        return None
+        board_path = self._current_board_path()
+        board_dir = self._project_path_from_filename(board_path) if board_path else None
+
+        if project_dir is None:
+            return board_dir  # pure-IPC (or no open_project): trust the live board
+        project_dir = Path(project_dir)
+        if board_dir is None:
+            return project_dir  # board not reachable: trust the opened project
+        try:
+            # Live board inside the opened project tree → keep the project root.
+            board_dir.resolve().relative_to(project_dir.resolve())
+        except ValueError:
+            return board_dir  # user switched to a board outside the project
+        except Exception:
+            pass  # resolve() failed (e.g. symlink loop) → conservative default
+        return project_dir
 
     def _ensure_footprint_library_for_current_project(self) -> None:
         """Scope the footprint library manager to the open project before a
