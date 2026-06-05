@@ -722,6 +722,12 @@ export class KiCADMcpServer {
         "list_schematic_nets",
         "list_schematic_labels",
         "get_schematic_view",
+        // Aggregators that fan out to the slow list_* handlers above (nets +
+        // labels each already warrant the extended timeout on their own), so
+        // the bundled call must inherit it too — otherwise a large schematic
+        // blows the 30s default.
+        "get_schematic_overview",
+        "get_pcb_overview",
         // Symbol library queries: cold-parse of all .kicad_sym can exceed 30s
         // on Flatpak/NFS the very first time, then is fast forever after.
         "search_symbols",
