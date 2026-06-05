@@ -124,7 +124,7 @@ def test_omitted_outline_falls_back_to_board_edge_rect(iface, monkeypatch):
     from handlers import ipc_fastpath
 
     monkeypatch.setattr(
-        ipc_fastpath,
+        ipc_fastpath._zones,
         "_ipc_board_edge_rect",
         lambda api: [
             {"x": 0.0, "y": 0.0},
@@ -152,7 +152,7 @@ def test_omitted_outline_with_no_edge_cuts_returns_actionable_error(iface, monke
     (pass an outline, or add a board outline first)."""
     from handlers import ipc_fastpath
 
-    monkeypatch.setattr(ipc_fastpath, "_ipc_board_edge_rect", lambda api: None)
+    monkeypatch.setattr(ipc_fastpath._zones, "_ipc_board_edge_rect", lambda api: None)
 
     out = ipc_fastpath.handle_add_copper_pour(iface, {"layer": "B.Cu", "net": "GND"})
 
@@ -168,7 +168,7 @@ def test_short_outline_falls_back_to_board_when_possible(iface, monkeypatch):
     from handlers import ipc_fastpath
 
     monkeypatch.setattr(
-        ipc_fastpath,
+        ipc_fastpath._zones,
         "_ipc_board_edge_rect",
         lambda api: _square(60),
     )
