@@ -105,7 +105,9 @@ def test_symbol_query_sees_project_lib_end_to_end(monkeypatch, tmp_path):
     # Isolate the on-disk symbol cache to tmp so the test neither reads nor
     # rewrites the real ~/.kicad-mcp cache (established pattern, test_symbol_library).
     monkeypatch.setattr(
-        lib_sym, "_DISK_CACHE_PATH", tmp_path / ".kicad-mcp" / "cache" / "symbol_libraries.pickle"
+        lib_sym._manager_loading,
+        "_DISK_CACHE_PATH",
+        tmp_path / ".kicad-mcp" / "cache" / "symbol_libraries.pickle",
     )
 
     proj = tmp_path / "proj"

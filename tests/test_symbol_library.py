@@ -143,7 +143,7 @@ class TestSymbolDiskCache:
         import commands.library_symbol as lib_sym
 
         monkeypatch.setattr(
-            lib_sym,
+            lib_sym._manager_loading,
             "_DISK_CACHE_PATH",
             tmp_path / ".kicad-mcp" / "cache" / "symbol_libraries.pickle",
         )
@@ -165,7 +165,7 @@ class TestSymbolDiskCache:
         import commands.library_symbol as lib_sym
 
         monkeypatch.setattr(
-            lib_sym,
+            lib_sym._manager_loading,
             "_DISK_CACHE_PATH",
             tmp_path / ".kicad-mcp" / "cache" / "symbol_libraries.pickle",
         )
@@ -226,7 +226,7 @@ class TestSymbolDiskCache:
         import commands.library_symbol as lib_sym
 
         cache_path = tmp_path / ".kicad-mcp" / "cache" / "symbol_libraries.pickle"
-        monkeypatch.setattr(lib_sym, "_DISK_CACHE_PATH", cache_path)
+        monkeypatch.setattr(lib_sym._manager_loading, "_DISK_CACHE_PATH", cache_path)
 
         mgr1 = SymbolLibraryManager.__new__(SymbolLibraryManager)
         mgr1.project_path = None
