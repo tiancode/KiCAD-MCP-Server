@@ -32,7 +32,9 @@ def _disable_default_grid_snap(monkeypatch):
     position-assertion-after-move tests.  Opt out at the test-file
     level so the wire-drag behaviour stays pinpoint-verifiable; the
     snap default itself is covered in test_add_schematic_component.py."""
-    from handlers import schematic_component as sc
+    # handle_move_schematic_component resolves _apply_grid_snap from its own
+    # module (handlers.schematic_component._placement) after the package split.
+    from handlers.schematic_component import _placement as sc
 
     original = sc._apply_grid_snap
 
