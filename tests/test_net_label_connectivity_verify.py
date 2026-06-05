@@ -39,11 +39,15 @@ def _stub_skip_module():
 
 
 def _stub_pins(monkeypatch, pins):
-    """Stub ``_scan_all_pin_positions`` to return the given pin list."""
-    from handlers import schematic_wire
+    """Stub ``_scan_all_pin_positions`` to return the given pin list.
+
+    handle_add_schematic_net_label resolves this helper from its own module
+    (handlers.schematic_wire._labels) after the package split, so patch there.
+    """
+    from handlers.schematic_wire import _labels
 
     monkeypatch.setattr(
-        schematic_wire,
+        _labels,
         "_scan_all_pin_positions",
         lambda path: pins,
     )
