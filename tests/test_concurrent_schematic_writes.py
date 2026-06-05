@@ -39,15 +39,7 @@ from commands.schematic_locks import (  # noqa: E402
     schematic_path_lock,
     serialize_on_path,
 )
-
-_wm_spec = importlib.util.spec_from_file_location(
-    "wire_manager",
-    os.path.join(os.path.dirname(__file__), "..", "python", "commands", "wire_manager.py"),
-)
-_wm_mod = importlib.util.module_from_spec(_wm_spec)
-_wm_spec.loader.exec_module(_wm_mod)
-WireManager = _wm_mod.WireManager
-
+from commands.wire_manager import WireManager  # noqa: E402
 
 _EMPTY_SCH = """\
 (kicad_sch (version 20250114) (generator "KiCAD-MCP-Server")
