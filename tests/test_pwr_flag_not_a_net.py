@@ -69,9 +69,10 @@ def test_parse_virtual_connections_uses_sentinel_for_pwr_flag(monkeypatch, tmp_p
 
     monkeypatch.setattr(wire_connectivity.PinLocator, "get_all_symbol_pins", fake_pins)
     # _parse_labels_sexp would read the file; stub it empty so this test
-    # only exercises the power-symbol branch.
-    monkeypatch.setattr(wire_connectivity, "_parse_labels_sexp", lambda sexp: ({}, {}))
-    monkeypatch.setattr(wire_connectivity, "_load_sexp", lambda path: [])
+    # only exercises the power-symbol branch. _parse_virtual_connections resolves
+    # these from the _parsing submodule after the package split.
+    monkeypatch.setattr(wire_connectivity._parsing, "_parse_labels_sexp", lambda sexp: ({}, {}))
+    monkeypatch.setattr(wire_connectivity._parsing, "_load_sexp", lambda path: [])
 
     point_to_label, label_to_points = _parse_virtual_connections(schematic, str(sch_path))
 
@@ -113,9 +114,11 @@ def test_get_net_at_point_does_not_surface_pwr_flag(monkeypatch, tmp_path):
         "get_all_symbol_pins",
         lambda self, path, ref: {"1": (50.0, 80.0)} if ref == "#FLG01" else {},
     )
-    monkeypatch.setattr(wire_connectivity, "_parse_labels_sexp", lambda sexp: ({}, {}))
-    monkeypatch.setattr(wire_connectivity, "_load_sexp", lambda path: [])
-    monkeypatch.setattr(wire_connectivity, "_parse_wires", lambda sch: [])
+    # _parse_virtual_connections resolves _load_sexp/_parse_labels_sexp from
+    # _parsing; get_net_at_point resolves _parse_wires from _queries.
+    monkeypatch.setattr(wire_connectivity._parsing, "_parse_labels_sexp", lambda sexp: ({}, {}))
+    monkeypatch.setattr(wire_connectivity._parsing, "_load_sexp", lambda path: [])
+    monkeypatch.setattr(wire_connectivity._queries, "_parse_wires", lambda sch: [])
 
     result = get_net_at_point(schematic, str(sch_path), 50.0, 80.0)
 
