@@ -48,7 +48,7 @@ import { registerComponentTools } from "./tools/component.js";
 import { registerRoutingTools } from "./tools/routing.js";
 import { registerDesignRuleTools } from "./tools/design-rules.js";
 import { registerExportTools } from "./tools/export.js";
-import { registerSchematicTools } from "./tools/schematic.js";
+import { registerSchematicTools } from "./tools/schematic/index.js";
 import { registerLibraryTools } from "./tools/library.js";
 import { registerSymbolLibraryTools } from "./tools/library-symbol.js";
 import { registerJLCPCBApiTools } from "./tools/jlcpcb-api.js";
