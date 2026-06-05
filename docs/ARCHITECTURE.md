@@ -38,11 +38,18 @@ KiCAD-MCP-Server/
     index.ts                    # Entry point — wires together server + config
     config.ts                   # Config loader (LOG_LEVEL, optional --config file)
     logger.ts                   # Logging
+    package-info.ts             # package.json metadata read once at load
+    python-discovery.ts         # findPythonExecutable (venv/KICAD_PYTHON/
+                                # bundled/Flatpak/system) — extracted from server.ts
     tools/                      # MCP tool registrations (one file per category)
       project.ts, board.ts, component.ts, routing.ts, design-rules.ts,
-      export.ts, schematic.ts, library.ts, library-symbol.ts,
+      export.ts, library.ts, library-symbol.ts,
       footprint.ts, symbol-creator.ts, datasheet.ts, jlcpcb-api.ts,
       freerouting.ts, ui.ts     # Each calls server.tool(...) for its commands
+      schematic/                # Schematic tools, split by sub-category:
+                                # component.ts, wire.ts, query.ts, io.ts,
+                                # view.ts; index.ts re-exports
+                                # registerSchematicTools
     resources/                  # kicad:// resource handlers
     prompts/                    # MCP prompt templates
 
@@ -78,12 +85,17 @@ KiCAD-MCP-Server/
       ipc_backend.py            # kipy IPC client (KiCAD 9.0+ / 10.0+)
                                 # (SWIG path is direct pcbnew via
                                 #  command_routes, not a backend object)
-    schemas/tool_schemas.py     # JSON Schema definitions for every tool
+    schemas/                    # JSON Schema definitions for every tool
+      tool_schemas.py           # Aggregator: re-exports the *_TOOLS lists and
+                                # builds the combined TOOL_SCHEMAS lookup
+      categories/               # One module per category (project, board,
+                                # component, routing, library, design_rule,
+                                # export, schematic, ui)
     annotations/                # IPC-annotation loader for tool descriptions
     resources/                  # Resource read handlers
     templates/                  # Pre-built schematic / project templates
     parsers/                    # KiCAD file format parsers (kicad_mod)
-    utils/                      # platform_helper, kicad_process
+    utils/                      # platform_helper, kicad_process, sexpr
 
   tests/                        # Flat test layout; pytest discovers test_*.py
     conftest.py                 # pcbnew + skip MagicMock stubbing
