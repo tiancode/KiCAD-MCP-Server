@@ -17,20 +17,12 @@ from typing import Any, Dict, List, Optional
 import sexpdata
 from commands.schematic_locks import atomic_write_text, serialize_on_path
 
+# Shared S-expression escaper (was a byte-identical local copy; consolidated
+# into utils.sexpr). Kept under the private name so existing call sites and
+# any ``from dynamic_symbol_loader import _escape_sexpr_string`` keep working.
+from utils.sexpr import escape_sexpr_string as _escape_sexpr_string
+
 logger = logging.getLogger("kicad_interface")
-
-
-def _escape_sexpr_string(value: str) -> str:
-    """Escape a string for safe insertion into a double-quoted S-expression token.
-
-    Backslash first (so the quote-escape's backslash isn't doubled), then the
-    double-quote.  A user-supplied value like ``2.9" EPD FPC (24P)`` carries a
-    literal ``"`` that, written raw into ``(property "Value" "...")``, opens a
-    second string and corrupts the whole ``.kicad_sch`` — KiCad/kicad-cli then
-    refuse to load it and every sexpdata-based reader fails with
-    ``'NoneType' object has no attribute 'start'``.
-    """
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 class DynamicSymbolLoader:
