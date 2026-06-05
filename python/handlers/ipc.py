@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, Dict
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
+from handlers.ipc_gate import require_ipc
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,12 +39,7 @@ def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
     reason text stays a short tail clause rather than getting doubly
     prefixed by the upstream "IPC backend not available:" envelope.
     """
-    gate = iface.require_ipc_board_op(allow_launch=True)
-    if not gate:
-        return {}
-    if gate.get("needs_pcb_editor"):
-        return gate
-    return _ipc_unavailable(gate.get("_ipc_reason", ""))
+    return require_ipc(iface, _ipc_unavailable)
 
 
 def handle_ipc_add_track(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

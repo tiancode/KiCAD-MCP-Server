@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
+from handlers.ipc_gate import require_ipc
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,12 +46,7 @@ def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
       message reads cleanly instead of nesting two "IPC backend not
       available" prefixes.
     """
-    gate = iface.require_ipc_board_op(allow_launch=True)
-    if not gate:
-        return {}
-    if gate.get("needs_pcb_editor"):
-        return gate
-    return _ipc_unavailable(gate.get("_ipc_reason", ""))
+    return require_ipc(iface, _ipc_unavailable)
 
 
 def _xy_from_params(params: Dict[str, Any]) -> tuple:

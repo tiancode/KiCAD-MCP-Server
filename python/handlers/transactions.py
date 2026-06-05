@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any, Dict
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
+from handlers.ipc_gate import require_ipc
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,12 +38,7 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
 
 def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
     """Gate transactions on IPC + an open PCB editor frame."""
-    gate = iface.require_ipc_board_op(allow_launch=True)
-    if not gate:
-        return {}
-    if gate.get("needs_pcb_editor"):
-        return gate
-    return _ipc_unavailable(gate.get("_ipc_reason", ""))
+    return require_ipc(iface, _ipc_unavailable)
 
 
 def handle_begin_transaction(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
