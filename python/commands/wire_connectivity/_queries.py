@@ -30,6 +30,7 @@ from ._parsing import (
 
 from ._traversal import (
     _build_adjacency,
+    _build_sheet_context,
     _discover_sub_sheets,
     _find_connected_wires,
     _find_pins_on_net,
@@ -320,17 +321,29 @@ def get_net_at_point(
     return {"net_name": None, "position": position, "source": None}
 
 
-def get_connections_for_net(schematic: Any, schematic_path: str, net_name: str) -> List[Dict]:
+def get_connections_for_net(
+    schematic: Any,
+    schematic_path: str,
+    net_name: str,
+    sheet_contexts: Optional[Dict[Any, Any]] = None,
+) -> List[Dict]:
     """Find all component pins connected to a named net across all schematic sheets.
 
     Recursively discovers sub-sheets, processes each sheet independently, and
     merges results. Handles label, global_label, hierarchical_label, and
     power symbol connections.
 
+    When iterating many nets on the same schematic (e.g. list_schematic_nets),
+    pass a shared ``sheet_contexts`` dict: each sheet is then parsed and its
+    O(wires^2) adjacency graph built only once across the whole net loop instead
+    of once per net. Omitting it (single-net callers) keeps the previous
+    behaviour exactly — a fresh, call-local cache parses each sheet once.
+
     Returns a list of {"component": ref, "pin": pin_num} dicts.
     """
     from skip import Schematic as SkipSchematic
 
+    cache = sheet_contexts if sheet_contexts is not None else {}
     seen: Set[Tuple[str, str]] = set()
     all_pins: List[Dict] = []
 
@@ -341,13 +354,23 @@ def get_connections_for_net(schematic: Any, schematic_path: str, net_name: str) 
                 seen.add(key)
                 all_pins.append(pin)
 
-    _collect(_process_single_sheet(schematic, schematic_path, net_name))
+    if schematic_path not in cache:
+        cache[schematic_path] = _build_sheet_context(schematic, schematic_path)
+    top_ctx = cache[schematic_path]
+    if top_ctx is not None:
+        _collect(_process_single_sheet(schematic, schematic_path, net_name, context=top_ctx))
 
-    sub_sheets = _discover_sub_sheets(schematic_path)
-    for sub_path in sub_sheets:
+    subs_key = ("__sub_sheets__", schematic_path)
+    if subs_key not in cache:
+        cache[subs_key] = _discover_sub_sheets(schematic_path)
+    for sub_path in cache[subs_key]:
         try:
-            sub_sch = SkipSchematic(sub_path)
-            _collect(_process_single_sheet(sub_sch, sub_path, net_name))
+            if sub_path not in cache:
+                sub_sch = SkipSchematic(sub_path)
+                cache[sub_path] = _build_sheet_context(sub_sch, sub_path)
+            sub_ctx = cache[sub_path]
+            if sub_ctx is not None:
+                _collect(_process_single_sheet(None, sub_path, net_name, context=sub_ctx))
         except Exception as e:
             logger.warning(f"Error processing sub-sheet {sub_path}: {e}")
 

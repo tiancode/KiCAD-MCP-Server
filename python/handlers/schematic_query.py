@@ -451,9 +451,15 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
             adjacency, iu_to_wires = [], {}
         point_to_label, label_to_points = _parse_virtual_connections(schematic, schematic_path)
 
+        # Parse + index each sheet once and reuse across every net, instead of
+        # rebuilding the O(wires^2) adjacency graph per net (the old behaviour
+        # made a large schematic's overview time out).
+        sheet_contexts: Dict[Any, Any] = {}
         nets = []
         for net_name in sorted(net_names):
-            connections = get_connections_for_net(schematic, schematic_path, net_name)
+            connections = get_connections_for_net(
+                schematic, schematic_path, net_name, sheet_contexts=sheet_contexts
+            )
             pin_count = count_pins_on_net(
                 schematic,
                 schematic_path,

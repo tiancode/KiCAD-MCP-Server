@@ -24,6 +24,7 @@ from ._parsing import (
 )
 from ._traversal import (
     _build_adjacency,
+    _build_sheet_context,
     _discover_sub_sheets,
     _find_connected_wires,
     _find_pins_on_net,
@@ -41,6 +42,7 @@ __all__ = [
     "PWRFLAG_LABEL_SENTINEL",
     "_IU_PER_MM",
     "_build_adjacency",
+    "_build_sheet_context",
     "_discover_sub_sheets",
     "_find_connected_wires",
     "_find_pins_on_net",

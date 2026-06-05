@@ -149,6 +149,7 @@ def _find_pins_on_net(
     schematic_path: Any,
     schematic: Any,
     sexp: Optional[list] = None,
+    instances: Optional[list] = None,
 ) -> List[Dict]:
     """Find component pins that land on net points.
 
@@ -176,7 +177,8 @@ def _find_pins_on_net(
     logger.debug(f"Searching {len(net_points)} net points for matching pins")
 
     locator = PinLocator()
-    instances = _parse_symbol_instances_sexp(sexp)
+    if instances is None:
+        instances = _parse_symbol_instances_sexp(sexp)
     logger.debug(f"Found {len(instances)} symbol instances via sexpdata")
 
     pins: List[Dict] = []
@@ -271,26 +273,28 @@ def _discover_sub_sheets(schematic_path: str) -> List[str]:
     return result
 
 
-def _process_single_sheet(
-    schematic: Any,
-    schematic_path: str,
-    net_name: str,
-) -> List[Dict]:
-    """Find pins connected to *net_name* on a single schematic sheet.
+def _build_sheet_context(
+    schematic: Any, schematic_path: str, sexp: Optional[list] = None
+) -> Optional[Dict[str, Any]]:
+    """Parse and index one sheet once so the result can be reused across nets.
 
-    Handles label, global_label, hierarchical_label, and power symbols.
-    All wire and label data is parsed directly from the raw .kicad_sch file
-    via sexpdata for maximum reliability.
+    ``_process_single_sheet`` used to re-load the sexp and rebuild the
+    wire-adjacency graph (whose T-junction detection is O(wires^2)) for *every*
+    net, making ``list_schematic_nets`` O(nets * wires^2).  A caller iterating
+    many nets passes a shared cache of these contexts (see
+    ``get_connections_for_net``) so each sheet is parsed and indexed only once,
+    dropping the cost to O(sheets * wires^2).
+
+    Returns ``None`` when the sheet cannot be read.
     """
-    try:
-        sexp = _load_sexp(schematic_path)
-    except Exception as e:
-        logger.warning(f"Could not load sexp for {schematic_path}: {e}")
-        return []
+    if sexp is None:
+        try:
+            sexp = _load_sexp(schematic_path)
+        except Exception as e:
+            logger.warning(f"Could not load sexp for {schematic_path}: {e}")
+            return None
 
     all_wires = _parse_wires_sexp(sexp)
-    logger.debug(f"Parsed {len(all_wires)} wires from {schematic_path}")
-
     adjacency: List[Set[int]] = []
     iu_to_wires: Dict[Tuple[int, int], Set[int]] = {}
     if all_wires:
@@ -299,6 +303,45 @@ def _process_single_sheet(
     point_to_label, label_to_points = _parse_virtual_connections(
         schematic, schematic_path, sexp=sexp
     )
+
+    return {
+        "sexp": sexp,
+        "all_wires": all_wires,
+        "adjacency": adjacency,
+        "iu_to_wires": iu_to_wires,
+        "point_to_label": point_to_label,
+        "label_to_points": label_to_points,
+        "instances": _parse_symbol_instances_sexp(sexp),
+    }
+
+
+def _process_single_sheet(
+    schematic: Any,
+    schematic_path: str,
+    net_name: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> List[Dict]:
+    """Find pins connected to *net_name* on a single schematic sheet.
+
+    Handles label, global_label, hierarchical_label, and power symbols.
+    All wire and label data is parsed directly from the raw .kicad_sch file
+    via sexpdata for maximum reliability.
+
+    ``context`` is the per-sheet parse/index produced by ``_build_sheet_context``;
+    when omitted it is built on the fly (single-net path). Passing a shared one
+    across many nets is what avoids the per-net O(wires^2) adjacency rebuild.
+    """
+    if context is None:
+        context = _build_sheet_context(schematic, schematic_path)
+        if context is None:
+            return []
+
+    sexp = context["sexp"]
+    all_wires = context["all_wires"]
+    adjacency = context["adjacency"]
+    iu_to_wires = context["iu_to_wires"]
+    point_to_label = context["point_to_label"]
+    label_to_points = context["label_to_points"]
 
     seed_positions = label_to_points.get(net_name, [])
     if not seed_positions:
@@ -339,4 +382,6 @@ def _process_single_sheet(
 
     logger.debug(f"Net '{net_name}': total {len(net_points)} IU points in net after BFS")
 
-    return _find_pins_on_net(net_points, schematic_path, schematic, sexp=sexp)
+    return _find_pins_on_net(
+        net_points, schematic_path, schematic, sexp=sexp, instances=context["instances"]
+    )
