@@ -4,6 +4,7 @@ Split out of the former monolithic commands/routing.py."""
 
 import logging
 import math
+import os
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -199,6 +200,8 @@ class NetMixin:
             diff_pair_width = params.get("diffPairWidth")
             diff_pair_gap = params.get("diffPairGap")
             nets = params.get("nets", [])
+            # Optional wildcard membership patterns (e.g. ["+24V_*", "*VCC"]).
+            patterns = params.get("patterns", []) or []
 
             if not name:
                 return {
@@ -262,6 +265,24 @@ class NetMixin:
                     net = nets_map[net_name]
                     net.SetClass(netclass)
 
+            # Persist to the .kicad_pro project JSON.  In KiCad 9/10 net
+            # classes live in the project file, NOT the board object — the
+            # in-memory SWIG mutation above is never written by board.Save().
+            # This read-modify-write is what actually makes the class survive.
+            persisted = self._persist_netclass_to_project(
+                name=name,
+                clearance=clearance,
+                track_width=track_width,
+                via_diameter=via_diameter,
+                via_drill=via_drill,
+                uvia_diameter=uvia_diameter,
+                uvia_drill=uvia_drill,
+                diff_pair_width=diff_pair_width,
+                diff_pair_gap=diff_pair_gap,
+                nets=nets,
+                patterns=patterns,
+            )
+
             # Defensive accessors — KiCad 10's NETCLASS dropped some legacy getters.
             def _safe_get(method_name):
                 method = getattr(netclass, method_name, None)
@@ -275,6 +296,8 @@ class NetMixin:
             return {
                 "success": True,
                 "message": f"Created net class: {name}",
+                "persisted": persisted.get("persisted", False),
+                "projectFile": persisted.get("projectFile"),
                 "netClass": {
                     "name": name,
                     "clearance": _safe_get("GetClearance"),
@@ -286,6 +309,7 @@ class NetMixin:
                     "diffPairWidth": _safe_get("GetDiffPairWidth"),
                     "diffPairGap": _safe_get("GetDiffPairGap"),
                     "nets": nets,
+                    "patterns": patterns,
                 },
             }
 
@@ -294,5 +318,215 @@ class NetMixin:
             return {
                 "success": False,
                 "message": "Failed to create net class",
+                "errorDetails": str(e),
+            }
+
+    def _persist_netclass_to_project(
+        self,
+        name: str,
+        clearance=None,
+        track_width=None,
+        via_diameter=None,
+        via_drill=None,
+        uvia_diameter=None,
+        uvia_drill=None,
+        diff_pair_width=None,
+        diff_pair_gap=None,
+        nets=None,
+        patterns=None,
+    ) -> Dict[str, Any]:
+        """Write a net class (+ memberships) to the sibling .kicad_pro JSON.
+
+        Returns ``{"persisted": bool, "projectFile": str | None}``.  Never
+        raises — a persistence failure must not turn a successful in-memory
+        mutation into a hard error; it is reported via the flag instead.
+        """
+        from utils import kicad_pro
+
+        project_file = kicad_pro.project_path_for_board(self.board)
+        if not project_file or not os.path.exists(project_file):
+            logger.warning(
+                "create_netclass: no .kicad_pro found for board; "
+                "net class not persisted (project_file=%s)",
+                project_file,
+            )
+            return {"persisted": False, "projectFile": project_file}
+
+        try:
+            data, indent = kicad_pro.load_kicad_pro(project_file)
+            net_settings = kicad_pro._net_settings(data)
+
+            # mm floats straight into the project JSON — no nm scaling here.
+            overrides = {
+                "clearance": clearance,
+                "track_width": track_width,
+                "via_diameter": via_diameter,
+                "via_drill": via_drill,
+                "microvia_diameter": uvia_diameter,
+                "microvia_drill": uvia_drill,
+                "diff_pair_width": diff_pair_width,
+                "diff_pair_gap": diff_pair_gap,
+            }
+            kicad_pro.upsert_netclass(net_settings, name, overrides)
+
+            for net_name in nets or []:
+                kicad_pro.assign_net_to_class(net_settings, net_name, name)
+
+            for pattern in patterns or []:
+                kicad_pro.add_netclass_pattern(net_settings, name, pattern)
+
+            kicad_pro.save_kicad_pro(project_file, data, indent)
+            return {"persisted": True, "projectFile": project_file}
+        except Exception as e:
+            logger.error("create_netclass: failed to persist to project: %s", e)
+            return {"persisted": False, "projectFile": project_file}
+
+    def assign_net_to_class(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Assign an existing net to a net class, persisting to the project.
+
+        Mirrors the SWIG in-memory assignment (so the live board reflects it)
+        AND writes ``net_settings.netclass_assignments`` in the .kicad_pro so
+        the assignment survives on disk (the in-memory ``net.SetClass`` is lost
+        otherwise — net-class membership is project-file state in KiCad 9/10).
+        """
+        try:
+            if not self.board:
+                return {
+                    "success": False,
+                    "message": "No board is loaded",
+                    "errorDetails": "Load or create a board first",
+                }
+
+            net_name = params.get("net") or params.get("netName")
+            class_name = params.get("netClass") or params.get("className")
+
+            if not net_name or not class_name:
+                return {
+                    "success": False,
+                    "message": "Missing net or netClass",
+                    "errorDetails": "Both 'net' and 'netClass' parameters are required",
+                }
+
+            # In-memory SWIG assignment (best-effort — keeps the live board
+            # consistent; the on-disk write below is what actually persists).
+            try:
+                netinfo = self.board.GetNetInfo()
+                nets_map = netinfo.NetsByName()
+                if nets_map.has_key(net_name):  # noqa: W601 - SWIG map API
+                    net = nets_map[net_name]
+                    net_classes = self.board.GetNetClasses()
+                    netclass = None
+                    if hasattr(net_classes, "Find"):
+                        netclass = net_classes.Find(class_name)
+                    else:
+                        try:
+                            if class_name in net_classes:
+                                netclass = net_classes[class_name]
+                        except Exception:
+                            netclass = None
+                    if netclass is not None:
+                        net.SetClass(netclass)
+            except Exception as swig_err:
+                logger.warning("assign_net_to_class: in-memory assign skipped: %s", swig_err)
+
+            # Persist to the .kicad_pro project JSON.
+            from utils import kicad_pro
+
+            project_file = kicad_pro.project_path_for_board(self.board)
+            persisted = False
+            if project_file and os.path.exists(project_file):
+                try:
+                    data, indent = kicad_pro.load_kicad_pro(project_file)
+                    net_settings = kicad_pro._net_settings(data)
+                    kicad_pro.assign_net_to_class(net_settings, net_name, class_name)
+                    kicad_pro.save_kicad_pro(project_file, data, indent)
+                    persisted = True
+                except Exception as e:
+                    logger.error("assign_net_to_class: failed to persist: %s", e)
+            else:
+                logger.warning(
+                    "assign_net_to_class: no .kicad_pro found (project_file=%s)",
+                    project_file,
+                )
+
+            return {
+                "success": True,
+                "message": f"Assigned net '{net_name}' to class '{class_name}'",
+                "persisted": persisted,
+                "projectFile": project_file,
+                "net": net_name,
+                "netClass": class_name,
+            }
+
+        except Exception as e:
+            logger.error(f"Error assigning net to class: {str(e)}")
+            return {
+                "success": False,
+                "message": "Failed to assign net to class",
+                "errorDetails": str(e),
+            }
+
+    def assign_netclass_pattern(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Append a wildcard pattern -> net-class rule to the project JSON.
+
+        Patterns match the full (hierarchical) net name, so a leading ``*`` is
+        usually needed (e.g. ``*VLV?_DRAIN``).  Persisted to
+        ``net_settings.netclass_patterns`` in the .kicad_pro.
+        """
+        try:
+            if not self.board:
+                return {
+                    "success": False,
+                    "message": "No board is loaded",
+                    "errorDetails": "Load or create a board first",
+                }
+
+            class_name = params.get("netClass") or params.get("className")
+            pattern = params.get("pattern")
+
+            if not class_name or not pattern:
+                return {
+                    "success": False,
+                    "message": "Missing netClass or pattern",
+                    "errorDetails": "Both 'netClass' and 'pattern' parameters are required",
+                }
+
+            from utils import kicad_pro
+
+            project_file = kicad_pro.project_path_for_board(self.board)
+            if not project_file or not os.path.exists(project_file):
+                return {
+                    "success": False,
+                    "message": "No project file found",
+                    "errorDetails": (
+                        "Could not locate the .kicad_pro sibling of the loaded board; "
+                        "save the project first"
+                    ),
+                }
+
+            data, indent = kicad_pro.load_kicad_pro(project_file)
+            net_settings = kicad_pro._net_settings(data)
+            added = kicad_pro.add_netclass_pattern(net_settings, class_name, pattern)
+            kicad_pro.save_kicad_pro(project_file, data, indent)
+
+            return {
+                "success": True,
+                "message": (
+                    f"Added pattern '{pattern}' -> class '{class_name}'"
+                    if added
+                    else f"Pattern '{pattern}' -> class '{class_name}' already existed"
+                ),
+                "added": added,
+                "persisted": True,
+                "projectFile": project_file,
+                "netClass": class_name,
+                "pattern": pattern,
+            }
+
+        except Exception as e:
+            logger.error(f"Error assigning netclass pattern: {str(e)}")
+            return {
+                "success": False,
+                "message": "Failed to assign netclass pattern",
                 "errorDetails": str(e),
             }

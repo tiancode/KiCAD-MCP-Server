@@ -107,9 +107,18 @@ class DesignRuleCommands:
                 "viasMinAnnularWidth": design_settings.m_ViasMinAnnularWidth / scale,
             }
 
+            # Persist to the .kicad_pro project JSON.  In KiCad 9/10 the
+            # design-rule minimums live in board.design_settings.rules in the
+            # project file, NOT the .kicad_pcb — the in-memory mutation above is
+            # never written by board.Save().  This read-modify-write is what
+            # actually makes the rules survive on disk.
+            persisted = self._persist_design_rules_to_project(params)
+
             return {
                 "success": True,
                 "message": "Updated design rules",
+                "persisted": persisted.get("persisted", False),
+                "projectFile": persisted.get("projectFile"),
                 "rules": response_rules,
             }
 
@@ -120,6 +129,77 @@ class DesignRuleCommands:
                 "message": "Failed to set design rules",
                 "errorDetails": str(e),
             }
+
+    def _persist_design_rules_to_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Write design-rule minimums to the sibling .kicad_pro JSON.
+
+        Returns ``{"persisted": bool, "projectFile": str | None}``.  Lengths in
+        ``params`` are mm floats and are written verbatim (the project JSON
+        stores mm, not nm).  Never raises — a persistence failure is reported
+        via the flag rather than turning a successful mutation into an error.
+        """
+        from utils import kicad_pro
+
+        project_file = kicad_pro.project_path_for_board(self.board)
+        if not project_file or not os.path.exists(project_file):
+            logger.warning(
+                "set_design_rules: no .kicad_pro found for board; "
+                "rules not persisted (project_file=%s)",
+                project_file,
+            )
+            return {"persisted": False, "projectFile": project_file}
+
+        # MCP/TS param name -> board.design_settings.rules key (all mm floats).
+        rule_key_map = {
+            "clearance": "min_clearance",
+            "minTrackWidth": "min_track_width",
+            "minViaDiameter": "min_via_diameter",
+            "minViaDrill": "min_through_hole_diameter",
+            "minHoleDiameter": "min_through_hole_diameter",
+            "minMicroViaDiameter": "min_microvia_diameter",
+            "minMicroViaDrill": "min_microvia_drill",
+            "holeToHoleMin": "min_hole_to_hole",
+            "holeClearance": "min_hole_clearance",
+            "copperEdgeClearance": "min_copper_edge_clearance",
+        }
+
+        try:
+            data, indent = kicad_pro.load_kicad_pro(project_file)
+
+            board = data.get("board")
+            if not isinstance(board, dict):
+                board = {}
+                data["board"] = board
+            design_settings = board.get("design_settings")
+            if not isinstance(design_settings, dict):
+                design_settings = {}
+                board["design_settings"] = design_settings
+            rules = design_settings.get("rules")
+            if not isinstance(rules, dict):
+                rules = {}
+                design_settings["rules"] = rules
+
+            for param_key, rule_key in rule_key_map.items():
+                if param_key in params and params[param_key] is not None:
+                    rules[rule_key] = params[param_key]
+
+            # The board's default track/via widths come from the Default net
+            # class entry; mirror trackWidth/viaDiameter/viaDrill there so the
+            # UI default reflects the change.
+            net_settings = kicad_pro._net_settings(data)
+            default_overrides = {
+                "track_width": params.get("trackWidth"),
+                "via_diameter": params.get("viaDiameter"),
+                "via_drill": params.get("viaDrill"),
+            }
+            if any(v is not None for v in default_overrides.values()):
+                kicad_pro.upsert_netclass(net_settings, "Default", default_overrides)
+
+            kicad_pro.save_kicad_pro(project_file, data, indent)
+            return {"persisted": True, "projectFile": project_file}
+        except Exception as e:
+            logger.error("set_design_rules: failed to persist to project: %s", e)
+            return {"persisted": False, "projectFile": project_file}
 
     def get_design_rules(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get current design rules - KiCAD 9.0 compatible"""
