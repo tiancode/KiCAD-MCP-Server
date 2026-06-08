@@ -218,6 +218,8 @@ EXPECTED_ROUTING_COMMANDS = {
     "add_gnd_stitching_vias",
     "add_net",
     "add_via",
+    "assign_net_to_class",
+    "assign_netclass_pattern",
     "copy_routing_pattern",
     "create_netclass",
     "delete_trace",

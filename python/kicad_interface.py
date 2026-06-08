@@ -153,14 +153,6 @@ utils_dir = os.path.join(os.path.dirname(__file__))
 if utils_dir not in sys.path:
     sys.path.insert(0, utils_dir)
 
-from utils.kicad_process import (  # noqa: F401  (check_and_launch_kicad exposed for tests/mock.patch)
-    KiCADProcessManager,
-    check_and_launch_kicad,
-)
-
-# Import platform helper and add KiCAD paths
-from utils.platform_helper import PlatformHelper
-
 # Pure S-expression text helpers (extracted from this module so they can be
 # unit-tested standalone and shared with commands/dynamic_symbol_loader.py).
 from utils import sexpr
@@ -168,6 +160,13 @@ from utils import sexpr
 # Central failure classification (errorCode/hint stamping). Pure functions,
 # extracted from this module; handle_command routes results through them.
 from utils.failure import classify_failure, enrich_failure
+from utils.kicad_process import (  # noqa: F401  (check_and_launch_kicad exposed for tests/mock.patch)
+    KiCADProcessManager,
+    check_and_launch_kicad,
+)
+
+# Import platform helper and add KiCAD paths
+from utils.platform_helper import PlatformHelper
 
 logger.info(f"Detecting KiCAD Python paths for {PlatformHelper.get_platform_name()}...")
 paths_added = PlatformHelper.add_kicad_to_python_path()
@@ -609,6 +608,8 @@ class KiCADInterface(BoardPersistenceMixin):
             "copy_routing_pattern": self.routing_commands.copy_routing_pattern,
             "get_nets_list": self.routing_commands.get_nets_list,
             "create_netclass": self.routing_commands.create_netclass,
+            "assign_net_to_class": self.routing_commands.assign_net_to_class,
+            "assign_netclass_pattern": self.routing_commands.assign_netclass_pattern,
             "add_copper_pour": self._add_copper_pour_with_optional_refill,
             # ``add_zone`` is the same operation under a different MCP name
             # (the TS schema exposes both for historical reasons).  Route to

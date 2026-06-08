@@ -383,7 +383,12 @@ ROUTING_TOOLS = [
     {
         "name": "create_netclass",
         "title": "Create Net Class",
-        "description": "Defines a net class with specific routing rules (trace width, clearance, etc.).",
+        "description": (
+            "Defines (or updates) a net class with specific routing rules "
+            "(trace width, clearance, etc.) and persists it to the .kicad_pro "
+            "project file. In KiCad 9/10 net classes live in the project JSON, "
+            "not the board object, so this writes there."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -410,8 +415,66 @@ ROUTING_TOOLS = [
                     "type": "number",
                     "description": "Via drill diameter in millimeters",
                 },
+                "nets": {
+                    "type": "array",
+                    "description": "Exact net names to assign to this class",
+                    "items": {"type": "string"},
+                },
+                "patterns": {
+                    "type": "array",
+                    "description": (
+                        "Wildcard membership patterns ('*' = any, '?' = one "
+                        "char). Matches the full hierarchical net name, so a "
+                        "leading '*' is often needed (e.g. '*VLV?_DRAIN')."
+                    ),
+                    "items": {"type": "string"},
+                },
             },
             "required": ["name", "traceWidth", "clearance"],
+        },
+    },
+    {
+        "name": "assign_net_to_class",
+        "title": "Assign Net to Class",
+        "description": (
+            "Assigns an existing net to a net class and persists the "
+            "membership to the .kicad_pro project file "
+            "(net_settings.netclass_assignments)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "net": {"type": "string", "description": "Name of the net"},
+                "netClass": {
+                    "type": "string",
+                    "description": "Name of the (existing) net class",
+                },
+            },
+            "required": ["net", "netClass"],
+        },
+    },
+    {
+        "name": "assign_netclass_pattern",
+        "title": "Assign Net Class Pattern",
+        "description": (
+            "Appends a wildcard pattern -> net-class rule to the .kicad_pro "
+            "(net_settings.netclass_patterns). '*' = any, '?' = one char. "
+            "Patterns match the full hierarchical net name, so a leading '*' "
+            "is often needed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "netClass": {
+                    "type": "string",
+                    "description": "Name of the (existing) net class",
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Wildcard pattern, e.g. '+24V_*' or '*VLV?_DRAIN'",
+                },
+            },
+            "required": ["netClass", "pattern"],
         },
     },
     {

@@ -330,16 +330,40 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Create netclass tool
   server.tool(
     "create_netclass",
-    "Create a new net class with custom design rules.",
+    "Create (or update) a net class with custom design rules and persist it to the .kicad_pro project file. In KiCad 9/10 net classes live in the project JSON, not the board, so this writes there. Optionally assign nets directly or by wildcard pattern.",
     {
       name: z.string().describe("Net class name"),
       traceWidth: z.number().optional().describe("Default trace width in mm"),
       clearance: z.number().optional().describe("Clearance in mm"),
       viaDiameter: z.number().optional().describe("Via diameter in mm"),
       viaDrill: z.number().optional().describe("Via drill size in mm"),
+      nets: z
+        .array(z.string())
+        .optional()
+        .describe("Exact net names to assign to this class (netclass_assignments)"),
+      patterns: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Wildcard membership patterns (netclass_patterns). '*' = any, '?' = one char. Matches the full hierarchical net name, so a leading '*' is often needed (e.g. '*VLV?_DRAIN').",
+        ),
     },
     async (args: any) => {
       const result = await callKicadScript("create_netclass", args);
+      return formatKicadResult(result);
+    },
+  );
+
+  // Assign netclass pattern tool
+  server.tool(
+    "assign_netclass_pattern",
+    "Append a wildcard pattern -> net-class rule to the .kicad_pro (net_settings.netclass_patterns). '*' = any, '?' = one char. Patterns match the full hierarchical net name (e.g. '/5_Valve_Drive/VLV1_DRAIN'), so a leading '*' is often needed.",
+    {
+      netClass: z.string().describe("Name of the (existing) net class to assign nets to"),
+      pattern: z.string().describe("Wildcard pattern, e.g. '+24V_*' or '*VLV?_DRAIN'"),
+    },
+    async (args: any) => {
+      const result = await callKicadScript("assign_netclass_pattern", args);
       return formatKicadResult(result);
     },
   );
