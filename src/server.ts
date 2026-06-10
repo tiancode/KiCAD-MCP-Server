@@ -738,8 +738,26 @@ export class KiCADMcpServer {
         "download_jlcpcb_database",
         "import_jlcpcb_symbol",
         "import_jlcpcb_symbols",
+        // Specctra round-trip for the autoroute flow: DSN export and SES
+        // import both walk the whole board and can exceed 30s on large designs.
+        "export_dsn",
+        "import_ses",
       ];
-      if (longRunningCommands.includes(command)) {
+      if (command === "autoroute") {
+        // Freerouting runs `attempts` sequential passes, each up to the tool's
+        // per-attempt `timeout` (seconds), plus DSN-export + SES-import
+        // overhead. The fixed 10-minute bucket below isn't enough for best-of-N,
+        // so derive the Node-side cap from the tool's own params. Without this
+        // the worker is killed at the 30s default mid-route (the Python
+        // subprocess timeout never gets a chance to apply).
+        const attempts = Math.max(1, Number((params as any)?.attempts) || 1);
+        const perAttempt = Math.max(60, Number((params as any)?.timeout) || 300);
+        commandTimeout = (attempts * (perAttempt + 30) + 180) * 1000;
+        logger.info(
+          `Using autoroute timeout (${commandTimeout / 1000}s) for ${attempts} attempt(s) ` +
+            `@ ${perAttempt}s each`,
+        );
+      } else if (longRunningCommands.includes(command)) {
         commandTimeout = 600000; // 10 minutes for long operations
         logger.info(`Using extended timeout (${commandTimeout / 1000}s) for command: ${command}`);
       }
