@@ -859,14 +859,145 @@ class KiCADInterface(BoardPersistenceMixin):
             logger.info(f"Runtime IPC connection not available: {e}")
             return False
 
+    # Candidate TOOL_ACTION names that open the PCB editor frame from the
+    # project manager.  KiCad-internal and unstable across releases — walked
+    # in order, stopping on the first whose effect verifies via
+    # get_open_documents().  Mirrors handlers/project.py's
+    # _autolaunch_for_project candidates.
+    _PCB_EDITOR_OPEN_ACTIONS: Tuple[str, ...] = (
+        "kicadManager.Control.editPCB",
+        "kicadManager.Control.editPcbnew",
+        "common.Control.openPcbnew",
+        "pcbnew.EditorControl.openBoardEditor",
+    )
+
+    # After a failed auto-open attempt, skip re-attempting for this many
+    # seconds so a permanently-failing open (modal dialog in KiCad, missing
+    # file) doesn't add the poll timeout to every gated call.
+    _AUTO_OPEN_RETRY_COOLDOWN_S = 60.0
+    _auto_open_cooldown_until: float = 0.0
+
+    @staticmethod
+    def _auto_open_board_allowed() -> bool:
+        """KICAD_AUTO_LAUNCH=false is the explicit opt-out for both the
+        KiCad auto-launch and the board auto-open that completes it."""
+        return os.environ.get("KICAD_AUTO_LAUNCH", "").strip().lower() != "false"
+
+    def _board_path_for_auto_open(self) -> Optional[Path]:
+        """Best-known .kicad_pcb path for auto-opening the PCB editor.
+
+        Prefers the loaded board (works on both backends); falls back to the
+        project path remembered from open_project/create_project, resolving
+        its .kicad_pro → .kicad_pcb sibling (or the single .kicad_pcb in the
+        project directory).
+        """
+        path = self._current_board_path()
+        if path and os.path.isfile(path):
+            return Path(path)
+        project_dir = getattr(self, "_current_project_path", None)
+        if not project_dir:
+            return None
+        project_dir = Path(project_dir)
+        if project_dir.suffix in (".kicad_pro", ".kicad_pcb"):
+            pcb = project_dir.with_suffix(".kicad_pcb")
+            return pcb if pcb.is_file() else None
+        if not project_dir.is_dir():
+            return None
+        for pro in sorted(project_dir.glob("*.kicad_pro")):
+            pcb = pro.with_suffix(".kicad_pcb")
+            if pcb.is_file():
+                return pcb
+        pcbs = sorted(project_dir.glob("*.kicad_pcb"))
+        if len(pcbs) == 1:
+            return pcbs[0]
+        return None
+
+    def _try_auto_open_board(self, timeout_s: float = 15.0) -> bool:
+        """Best-effort: make the running KiCad open the current board so the
+        PCB-editor gate passes without bouncing the call back to the user.
+
+        Two routes, most deterministic first:
+
+          1. Forward a file-open of the known ``.kicad_pcb`` to the running
+             KiCad (IPC open-file actions, then a single-instance spawn) via
+             ``handlers.ui._forward_file_open_to_running_kicad``.
+          2. Ask the project manager to open its PCB editor frame via the
+             ``_PCB_EDITOR_OPEN_ACTIONS`` run_action candidates — covers the
+             no-known-board-path case where KiCad already has the right
+             project loaded.
+
+        Then poll ``get_open_documents()`` until the board shows up or
+        ``timeout_s`` elapses.  A failed attempt arms a cooldown
+        (``_AUTO_OPEN_RETRY_COOLDOWN_S``) so a permanently-failing open
+        doesn't add the poll timeout to every gated call.  Returns True iff
+        a ``.kicad_pcb`` document is open when we're done.
+        """
+        if self._ipc_has_open_board_document():
+            return True
+        if not self._auto_open_board_allowed():
+            return False
+        if time.monotonic() < self._auto_open_cooldown_until:
+            logger.debug("Skipping board auto-open (cooldown after recent failure)")
+            return False
+
+        attempted = False
+        board_path = self._board_path_for_auto_open()
+        if board_path is not None:
+            try:
+                from handlers.ui import _forward_file_open_to_running_kicad
+
+                fwd = _forward_file_open_to_running_kicad(self, board_path)
+                if fwd.get("fileOpenMethod") == "already_open":
+                    return True
+                attempted = bool(fwd.get("fileOpenForwarded"))
+            except Exception as exc:
+                logger.debug(f"file-open forward for board auto-open failed: {exc}")
+
+        ipc_backend = getattr(self, "ipc_backend", None)
+        ipc_up = ipc_backend is not None and getattr(ipc_backend, "is_connected", lambda: False)()
+        if not attempted and ipc_up:
+            for action in self._PCB_EDITOR_OPEN_ACTIONS:
+                try:
+                    resp = ipc_backend.run_action(action)
+                except Exception as exc:
+                    logger.debug(f"board auto-open run_action({action!r}) raised: {exc}")
+                    continue
+                if isinstance(resp, dict) and resp.get("success"):
+                    attempted = True
+                    if self._ipc_has_open_board_document():
+                        logger.info(f"Opened PCB editor via run_action({action!r})")
+                        return True
+
+        if not attempted:
+            self._auto_open_cooldown_until = time.monotonic() + self._AUTO_OPEN_RETRY_COOLDOWN_S
+            return False
+
+        deadline = time.monotonic() + max(1.0, timeout_s)
+        while time.monotonic() < deadline:
+            self._try_enable_ipc_backend(force=True)
+            if self._ipc_has_open_board_document():
+                logger.info(f"Board auto-open landed: {board_path or '(project board)'}")
+                self._auto_open_cooldown_until = 0.0
+                return True
+            time.sleep(0.5)
+
+        self._auto_open_cooldown_until = time.monotonic() + self._AUTO_OPEN_RETRY_COOLDOWN_S
+        logger.warning(
+            f"Board auto-open did not land within {timeout_s:.0f}s; "
+            "falling back to the needs_pcb_editor gate"
+        )
+        return False
+
     @staticmethod
     def _pcb_editor_gate_reason() -> str:
         return (
-            "KiCAD has no .kicad_pcb document open over IPC. "
-            "The MCP server does NOT auto-launch the PCB editor — ask the user "
-            "to open the board in KiCAD (project manager → PCB icon, or open the "
-            ".kicad_pcb file directly), wait for them to confirm it's open, then "
-            "retry. Do not work around this by falling back to file-only edits."
+            "KiCAD has no .kicad_pcb document open over IPC, and the MCP "
+            "server's automatic attempt to open the board did not land "
+            "(no known board path, KICAD_AUTO_LAUNCH=false, or KiCad did not "
+            "accept the open request). Ask the user to open the board in "
+            "KiCAD (project manager → PCB icon, or open the .kicad_pcb file "
+            "directly), wait for them to confirm it's open, then retry. "
+            "Do not work around this by falling back to file-only edits."
         )
 
     def _pcb_editor_gate_response(self, command: Optional[str] = None) -> Dict[str, Any]:
@@ -961,14 +1092,17 @@ class KiCADInterface(BoardPersistenceMixin):
           1. Already connected → return immediately.
           2. KiCAD is running but we never connected → try to attach.
           3. KiCAD not running and ``allow_launch`` (gated by KICAD_AUTO_LAUNCH
-             ≠ "false") → launch the project manager and poll for the socket.
+             ≠ "false") → launch it (with the known board path, so the PCB
+             editor opens directly) and poll for the socket.
 
         With ``require_pcb_editor=True`` (the default for board-level handlers)
-        a connected IPC is still rejected when ``pcbnew`` isn't a running
-        process, because the project manager hosts the IPC server on its own
+        a connected IPC is still rejected when no ``.kicad_pcb`` document is
+        open, because the project manager hosts the IPC server on its own
         and board mutations against that bare server fail cryptically or
-        silently mutate a closed document.  Frame-agnostic callers like
-        ``run_action`` opt out via ``require_pcb_editor=False``.
+        silently mutate a closed document.  Before rejecting, the gate makes
+        one ``_try_auto_open_board`` attempt (file-open forward / run_action)
+        so the common case heals without user action.  Frame-agnostic callers
+        like ``run_action`` opt out via ``require_pcb_editor=False``.
 
         Returns ``(True, "")`` on success, ``(False, reason)`` otherwise. The
         reason text is meant to be surfaced to the agent so it can decide
@@ -976,6 +1110,10 @@ class KiCADInterface(BoardPersistenceMixin):
         """
         if KICAD_BACKEND == "swig":
             return (False, "KICAD_BACKEND=swig; IPC is disabled by configuration")
+
+        # Honor KICAD_AUTO_LAUNCH=false as an explicit opt-out (applies to
+        # both launching KiCad and auto-opening the board document).
+        env_optout = not self._auto_open_board_allowed()
 
         def _connected() -> bool:
             return bool(self.use_ipc and self.ipc_board_api)
@@ -988,6 +1126,10 @@ class KiCADInterface(BoardPersistenceMixin):
             # as a kiway worker without a board loaded.
             if self._ipc_has_open_board_document():
                 return None
+            # No board document open — try to open it ourselves (file-open
+            # forward / run_action) before bouncing the call to the user.
+            if allow_launch and not env_optout and self._try_auto_open_board():
+                return None
             return (False, self._pcb_editor_gate_reason())
 
         # Already connected?
@@ -997,8 +1139,6 @@ class KiCADInterface(BoardPersistenceMixin):
             if _connected():
                 return _check_editor_gate() or (True, "")
 
-        # Honor KICAD_AUTO_LAUNCH=false as an explicit opt-out.
-        env_optout = os.environ.get("KICAD_AUTO_LAUNCH", "").strip().lower() == "false"
         if not allow_launch or env_optout:
             if KiCADProcessManager.is_running():
                 return (
@@ -1012,10 +1152,14 @@ class KiCADInterface(BoardPersistenceMixin):
                 "(KICAD_AUTO_LAUNCH=false). Start KiCAD manually or call launch_kicad_ui.",
             )
 
-        # Launch KiCAD and poll for the socket.
+        # Launch KiCAD and poll for the socket.  Pass the known board path
+        # so the cold start opens the PCB editor directly instead of a bare
+        # project manager that would then fail the editor gate.
         if not KiCADProcessManager.is_running():
             logger.info("Auto-launching KiCAD UI to satisfy IPC requirement")
-            launched = KiCADProcessManager.launch(wait_for_start=True)
+            launched = KiCADProcessManager.launch(
+                self._board_path_for_auto_open(), wait_for_start=True
+            )
             if not launched:
                 return (
                     False,
@@ -1154,8 +1298,11 @@ class KiCADInterface(BoardPersistenceMixin):
                 # "is pcbnew a running process" — kicad may have pcbnew alive
                 # as a kiway worker with no board, in which case the process
                 # check falsely passes and every call returns empty data.
+                # Before refusing, try to open the board ourselves (file-open
+                # forward / run_action; KICAD_AUTO_LAUNCH=false opts out).
                 if not self._ipc_has_open_board_document():
-                    return self._pcb_editor_gate_response(command)
+                    if not self._try_auto_open_board():
+                        return self._pcb_editor_gate_response(command)
 
                 # Cross-backend conflict: refuse IPC writes when SWIG has
                 # landed content on disk that KiCad memory doesn't include

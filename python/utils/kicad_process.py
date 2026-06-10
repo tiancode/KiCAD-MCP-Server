@@ -8,6 +8,7 @@ import ctypes
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import time
 from ctypes import wintypes
@@ -212,16 +213,8 @@ class KiCADProcessManager:
         # schematic editors as panes, matching how users normally work.
         # Fall back to `pcbnew` only if the project manager isn't installed.
         for cmd in ["kicad", "pcbnew"]:
-            result = subprocess.run(
-                ["which", cmd] if system != "Windows" else ["where", cmd],
-                capture_output=True,
-                text=True,
-                encoding="mbcs" if system == "Windows" else None,
-                errors="ignore" if system == "Windows" else None,
-                timeout=5 if system == "Windows" else None,
-            )
-            if result.returncode == 0:
-                exe_path = result.stdout.strip().split("\n")[0]
+            exe_path = shutil.which(cmd)
+            if exe_path:
                 logger.info(f"Found KiCAD executable: {exe_path}")
                 return Path(exe_path)
 

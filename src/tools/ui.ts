@@ -66,9 +66,10 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   // the IPC code path for debugging.
   //
   // Editor-open requirement: these (and any board op) need KiCAD open with
-  // the board loaded.  The server does NOT auto-launch KiCAD/pcbnew — if
-  // the editor is closed the call returns `needs_pcb_editor: true`; ask the
-  // user to open the board and wait, don't auto-launch or work around it.
+  // the board loaded.  The server auto-launches KiCAD and auto-opens the
+  // board when needed (opt out with KICAD_AUTO_LAUNCH=false); only when that
+  // fails does the call return `needs_pcb_editor: true` — then ask the user
+  // to open the board and wait, don't work around it with file-only edits.
   // -----------------------------------------------------------------
   server.tool(
     "ipc_add_track",
