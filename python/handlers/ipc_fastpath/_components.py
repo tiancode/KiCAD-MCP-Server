@@ -243,3 +243,60 @@ def handle_get_component_pads(iface: "KiCADInterface", params: Dict[str, Any]) -
     except Exception as e:
         logger.error(f"IPC get_component_pads error: {e}")
         return {"success": False, "message": str(e)}
+
+
+def handle_get_pad_position(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """IPC handler for get_pad_position — XY of one pad, read live from KiCad.
+
+    Like get_component_pads, the SWIG handler reads ``iface.board`` and fails
+    "No board is loaded" when the board is open in KiCad but was never loaded
+    through the MCP (open_project). This path reads it over IPC instead so the
+    tool returns coordinates instead of NO_PROJECT_LOADED.
+
+    Pad selection mirrors the SWIG handler: the TS schema names the argument
+    ``pad``; legacy callers may send ``padName`` / ``padNumber`` — accept all
+    three.
+    """
+    try:
+        reference = params.get("reference", params.get("componentId", ""))
+        pad_name = params.get("pad") or params.get("padName") or params.get("padNumber")
+        unit = params.get("unit", "mm")
+
+        if not reference:
+            return {"success": False, "message": "reference parameter is required"}
+        if not pad_name:
+            return {
+                "success": False,
+                "message": "pad (or padName / padNumber) parameter is required",
+            }
+
+        result = iface.ipc_board_api.get_component_pads(reference, unit)
+        if result is None:
+            return {"success": False, "message": f"Component {reference} not found"}
+
+        pad_name = str(pad_name)
+        match = None
+        for pad in result.get("pads", []):
+            if str(pad.get("number")) == pad_name or str(pad.get("name")) == pad_name:
+                match = pad
+                break
+
+        if match is None:
+            available = ", ".join(str(p.get("number")) for p in result.get("pads", []))
+            return {
+                "success": False,
+                "message": f"Pad '{pad_name}' not found on {reference}. Available pads: {available}",
+            }
+
+        return {
+            "success": True,
+            "reference": reference,
+            "padName": match.get("number"),
+            "position": match.get("position"),
+            "net": match.get("net", ""),
+            "netCode": match.get("netCode"),
+            "size": match.get("size"),
+        }
+    except Exception as e:
+        logger.error(f"IPC get_pad_position error: {e}")
+        return {"success": False, "message": str(e)}

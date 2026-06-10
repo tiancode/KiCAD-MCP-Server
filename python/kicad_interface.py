@@ -673,6 +673,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "query_traces": "_ipc_query_traces",
         "get_nets_list": "_ipc_get_nets_list",
         # Zone commands
+        "query_zones": "_ipc_query_zones",
         "add_copper_pour": "_ipc_add_copper_pour",
         # MCP-name alias of add_copper_pour — both names go through the
         # same IPC fast-path so the schema isn't a dispatch-time landmine.
@@ -694,6 +695,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "get_component_list": "_ipc_get_component_list",
         "get_component_properties": "_ipc_get_component_properties",
         "get_component_pads": "_ipc_get_component_pads",
+        "get_pad_position": "_ipc_get_pad_position",
         # Save command
         "save_project": "_ipc_save_project",
     }
@@ -1348,12 +1350,14 @@ class KiCADInterface(BoardPersistenceMixin):
         {
             # IPC fast-path queries (subset of IPC_CAPABLE_COMMANDS).
             "query_traces",
+            "query_zones",
             "get_nets_list",
             "get_board_info",
             "get_layer_list",
             "get_component_list",
             "get_component_properties",
             "get_component_pads",
+            "get_pad_position",
             # Direct IPC queries (handlers/ipc.py).
             "ipc_list_components",
             "ipc_get_tracks",

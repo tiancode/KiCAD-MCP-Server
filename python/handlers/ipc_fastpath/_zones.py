@@ -156,6 +156,105 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         return {"success": False, "message": str(e)}
 
 
+def _normalize_zone_layer(raw_layer: Any) -> str:
+    """Turn a kipy BoardLayer enum (name ``BL_F_Cu`` or raw int) into ``F.Cu``."""
+    if raw_layer is None:
+        return ""
+    layer_name = getattr(raw_layer, "name", None) or str(raw_layer)
+    if layer_name.startswith("BL_"):
+        layer_name = layer_name[3:].replace("_", ".")
+    return layer_name
+
+
+def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """IPC handler for query_zones — copper zones read live from the KiCad board.
+
+    The SWIG handler reads ``iface.board`` and fails "No board is loaded" when
+    the board is open in KiCad but was never loaded through the MCP; this path
+    reads zones over IPC instead.  Output shape mirrors the SWIG handler (net,
+    layers, priority, isFilled, boundingBox) with the same net / layer /
+    boundingBox filters so callers don't have to branch on backend.
+    """
+    try:
+        net_filter = params.get("net")
+        layer_filter = params.get("layer")
+        bbox = params.get("boundingBox")
+
+        bbox_box = None
+        if bbox:
+            unit_scale = {"mm": 1.0, "inch": 25.4, "mil": 0.0254}.get(bbox.get("unit", "mm"), 1.0)
+            xs = sorted((bbox.get("x1", 0) * unit_scale, bbox.get("x2", 0) * unit_scale))
+            ys = sorted((bbox.get("y1", 0) * unit_scale, bbox.get("y2", 0) * unit_scale))
+            bbox_box = (xs[0], ys[0], xs[1], ys[1])
+
+        # nm → mm, same converter the IPC board API uses for footprint bboxes.
+        from kipy.util.units import to_mm as nm_to_mm  # type: ignore
+
+        board = iface.ipc_board_api._get_board()  # noqa: SLF001 — our wrapper's accessor
+        zones_out = []
+        for zone in board.get_zones():
+            try:
+                z_net = ""
+                try:
+                    z_net = zone.net.name if zone.net else ""
+                except Exception:
+                    z_net = ""
+                if net_filter and z_net != net_filter:
+                    continue
+
+                layer_names = []
+                try:
+                    layer_names = [_normalize_zone_layer(l) for l in zone.layers]
+                except Exception:
+                    layer_names = []
+                if layer_filter and layer_filter not in layer_names:
+                    continue
+
+                bbox_data = None
+                try:
+                    bb = board.get_item_bounding_box(zone)
+                    if bb:
+                        bbox_data = {
+                            "x1": nm_to_mm(bb.min.x),
+                            "y1": nm_to_mm(bb.min.y),
+                            "x2": nm_to_mm(bb.max.x),
+                            "y2": nm_to_mm(bb.max.y),
+                            "unit": "mm",
+                        }
+                except Exception:
+                    pass  # bounding box not always available via IPC
+
+                if bbox_box is not None and bbox_data is not None:
+                    fx1, fy1, fx2, fy2 = bbox_box
+                    if (
+                        bbox_data["x2"] < fx1
+                        or bbox_data["x1"] > fx2
+                        or bbox_data["y2"] < fy1
+                        or bbox_data["y1"] > fy2
+                    ):
+                        continue
+
+                entry: Dict[str, Any] = {
+                    "uuid": str(zone.id) if hasattr(zone, "id") else "",
+                    "net": z_net,
+                    "netCode": None,
+                    "layers": layer_names,
+                    "priority": zone.priority if hasattr(zone, "priority") else 0,
+                    "isFilled": bool(zone.filled) if hasattr(zone, "filled") else False,
+                }
+                if bbox_data is not None:
+                    entry["boundingBox"] = bbox_data
+                zones_out.append(entry)
+            except Exception as zone_err:
+                logger.warning(f"Skipping invalid zone object: {zone_err}")
+                continue
+
+        return {"success": True, "zoneCount": len(zones_out), "zones": zones_out}
+    except Exception as e:
+        logger.error(f"IPC query_zones error: {e}")
+        return {"success": False, "message": str(e)}
+
+
 def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """IPC handler for refill_zones — refills all zones with real-time UI update."""
     try:
