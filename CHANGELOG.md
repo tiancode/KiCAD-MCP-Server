@@ -4,6 +4,43 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Tool-Surface Cleanup + Graphic-Shape Editing (2026-06-11)
+
+- **New `list_shapes` / `delete_shape` / `edit_shape` tools (IPC).**
+  Graphic shapes created by `add_segment`/`add_circle`/… can now be
+  enumerated (with layer / kind / bounding-box filters), deleted, and
+  edited (move, layer, stroke width, fill). `delete_shape` refuses
+  multi-match filter deletes unless `all: true` (mirrors
+  `delete_copper_pour`).
+- **Removed redundant MCP tools** in favor of one canonical tool each
+  (Python command routes remain): `export_svg` →
+  `get_board_2d_view(format=svg)`, `export_schematic_svg` →
+  `get_schematic_view(format=svg)`, `get_drc_violations` → `run_drc`,
+  `get_backend_state` → `get_backend_info`, `export_dsn`/`import_ses`
+  → `autoroute`, raw `ipc_*` passthroughs → the high-level tools that
+  auto-route through IPC. Tool count: 164.
+- **IPC board API is cached per connection.** A fresh `IPCBoardAPI`
+  per dispatch dropped the open transaction handle — the next
+  mutation was refused with "client already has a commit in
+  progress" while `get_transaction_status` reported `open: false`.
+- **`reconcile_backends(swig_to_ipc)` detects external disk edits.**
+  A `.kicad_pcb` modified outside the MCP (text editor, git, script)
+  is detected via the content signature and triggers KiCad revert +
+  SWIG reload (`externalDiskChange: true`) instead of "already in
+  sync".
+- **Freerouting saves mark cross-backend divergence.** `autoroute` /
+  `import_ses` now set `_swig_writes_landed`, so an IPC save can no
+  longer clobber autoroute results with KiCad's stale memory. Eleven
+  missing mutators were also added to `_BOARD_MUTATING_COMMANDS`
+  (observed: `add_gnd_stitching_vias` results vanished on reconcile).
+- **`add_mounting_hole` IPC path delegates to SWIG.** The inline IPC
+  version read flat `x`/`y` keys (every hole landed at (0, 0)),
+  opened its own commit, and ignored `padDiameter`/`plated`.
+- KIIDs and layer names in IPC responses are normalized via shared
+  helpers (`kiid_str`, `normalize_board_layer`) — no more
+  `value: "uuid"` proto reprs or bare enum ints leaking into tool
+  output.
+
 ### Dual-Backend Safety + Lifecycle Robustness
 
 A series of fixes hardening the SWIG↔IPC interaction model and making

@@ -120,25 +120,15 @@ Run the full autorouting workflow (export DSN, route, import SES).
 Autoroute the current board using Freerouting with a 5-minute timeout.
 ```
 
-### `export_dsn`
+### Manual DSN/SES workflow
 
-Export the PCB to Specctra DSN format for manual routing workflows.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `boardPath` | string | No | Path to .kicad_pcb file (default: current board) |
-| `outputPath` | string | No | Output DSN file path (default: same directory as board) |
-
-### `import_ses`
-
-Import a routed Specctra SES file back into the PCB.
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `sesPath` | string | Yes | Path to the .ses file to import |
-| `boardPath` | string | No | Path to .kicad_pcb file (default: current board) |
+The standalone `export_dsn` / `import_ses` MCP tools were removed —
+`autoroute` runs the full DSN-export → route → SES-import chain
+internally, which covers the workflow they existed for. The underlying
+Python commands (`export_dsn`, `import_ses`) still exist for scripted
+callers that drive `kicad_interface.py` directly; if you need the
+intermediate files, `autoroute` leaves the `.dsn`/`.ses` next to the
+board.
 
 ---
 

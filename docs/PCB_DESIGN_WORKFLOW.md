@@ -176,7 +176,7 @@ Run the design rule check.
 Show me all DRC violations.
 ```
 
-**Tools:** `set_design_rules`, `run_drc`, `get_drc_violations`
+**Tools:** `set_design_rules`, `run_drc` (returns the violation summary and list)
 
 ### Visual Inspection
 
@@ -237,7 +237,7 @@ Export a PDF of the board layout.
 Export an SVG of the board.
 ```
 
-**Tools:** `export_pdf`, `export_svg`
+**Tools:** `export_pdf`, `get_board_2d_view` (PNG or SVG preview)
 
 ---
 

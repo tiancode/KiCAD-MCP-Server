@@ -1,7 +1,7 @@
 # KiCAD IPC Backend Implementation Status
 
 **Status:** Under Active Development and Testing
-**Date:** 2026-03-21
+**Date:** 2026-06-11
 **KiCAD Version:** 9.0+
 **kicad-python Version:** 0.5.0+
 
@@ -33,30 +33,32 @@ connect to IPC.
 
 The following MCP commands have IPC handlers:
 
-| Command                    | IPC Handler                     | Status               |
-| -------------------------- | ------------------------------- | -------------------- |
-| `route_trace`              | `_ipc_route_trace`              | Implemented          |
-| `add_via`                  | `_ipc_add_via`                  | Implemented          |
-| `add_net`                  | `_ipc_add_net`                  | Implemented          |
-| `delete_trace`             | `_ipc_delete_trace`             | Falls back to SWIG   |
-| `query_traces`             | `_ipc_query_traces`             | Implemented          |
-| `get_nets_list`            | `_ipc_get_nets_list`            | Implemented          |
-| `add_copper_pour`          | `_ipc_add_copper_pour`          | Implemented          |
-| `refill_zones`             | `_ipc_refill_zones`             | Implemented          |
-| `add_text`                 | `_ipc_add_text`                 | Implemented          |
-| `add_board_text`           | `_ipc_add_text`                 | Implemented          |
-| `set_board_size`           | `_ipc_set_board_size`           | Implemented          |
-| `get_board_info`           | `_ipc_get_board_info`           | Implemented          |
-| `add_board_outline`        | `_ipc_add_board_outline`        | Implemented          |
-| `add_mounting_hole`        | `_ipc_add_mounting_hole`        | Implemented          |
-| `get_layer_list`           | `_ipc_get_layer_list`           | Implemented          |
-| `place_component`          | `_ipc_place_component`          | Implemented (hybrid) |
-| `move_component`           | `_ipc_move_component`           | Implemented          |
-| `rotate_component`         | `_ipc_rotate_component`         | Implemented          |
-| `delete_component`         | `_ipc_delete_component`         | Implemented          |
-| `get_component_list`       | `_ipc_get_component_list`       | Implemented          |
-| `get_component_properties` | `_ipc_get_component_properties` | Implemented          |
-| `save_project`             | `_ipc_save_project`             | Implemented          |
+| Command                                                                    | IPC Handler                     | Status                 |
+| -------------------------------------------------------------------------- | ------------------------------- | ---------------------- |
+| `route_trace`                                                              | `_ipc_route_trace`              | Implemented            |
+| `add_via`                                                                  | `_ipc_add_via`                  | Implemented            |
+| `add_net`                                                                  | `_ipc_add_net`                  | Implemented            |
+| `delete_trace`                                                             | `_ipc_delete_trace`             | Falls back to SWIG     |
+| `query_traces`                                                             | `_ipc_query_traces`             | Implemented            |
+| `get_nets_list`                                                            | `_ipc_get_nets_list`            | Implemented            |
+| `add_copper_pour`                                                          | `_ipc_add_copper_pour`          | Implemented            |
+| `refill_zones`                                                             | `_ipc_refill_zones`             | Implemented            |
+| `add_text`                                                                 | `_ipc_add_text`                 | Implemented            |
+| `add_board_text`                                                           | `_ipc_add_text`                 | Implemented            |
+| `set_board_size`                                                           | `_ipc_set_board_size`           | Implemented            |
+| `get_board_info`                                                           | `_ipc_get_board_info`           | Implemented            |
+| `add_board_outline`                                                        | `_ipc_add_board_outline`        | Implemented            |
+| `add_mounting_hole`                                                        | `_ipc_add_mounting_hole`        | Falls back to SWIG     |
+| `get_layer_list`                                                           | `_ipc_get_layer_list`           | Implemented            |
+| `place_component`                                                          | `_ipc_place_component`          | Implemented (hybrid)   |
+| `move_component`                                                           | `_ipc_move_component`           | Implemented            |
+| `rotate_component`                                                         | `_ipc_rotate_component`         | Implemented            |
+| `delete_component`                                                         | `_ipc_delete_component`         | Implemented            |
+| `get_component_list`                                                       | `_ipc_get_component_list`       | Implemented            |
+| `get_component_properties`                                                 | `_ipc_get_component_properties` | Implemented            |
+| `save_project`                                                             | `_ipc_save_project`             | Implemented            |
+| `add_segment` / `add_arc` / `add_circle` / `add_rectangle` / `add_polygon` | `_ShapeMixin`                   | Implemented (IPC-only) |
+| `list_shapes` / `delete_shape` / `edit_shape`                              | `_ShapeMixin`                   | Implemented (IPC-only) |
 
 ### Implemented Backend Features
 

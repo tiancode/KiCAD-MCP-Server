@@ -60,20 +60,30 @@ KiCAD-MCP-Server/
     handlers/                   # Per-tool handler implementations
       __init__.py               # Calling convention docstring
       ui.py                     # check_kicad_ui, launch_kicad_ui,
-                                # get_backend_info, get_backend_state
+                                # get_backend_info, get_backend_state,
+                                # reconcile_backends
       project.py                # open / create / snapshot_project
       board.py                  # place_component, import_svg_logo
+      board_meta.py             # origins + title block (IPC-only)
+      shapes.py                 # add_segment/arc/circle/rectangle/polygon
+                                # + list/delete/edit_shape
+      selection.py              # selection / hit-test handlers (IPC-only)
+      transactions.py           # begin/commit/rollback transaction (IPC-only)
+      overview.py               # aggregate overview handlers
       footprint.py              # 4 custom-footprint handlers
       symbol_creator.py         # 4 custom-symbol handlers
       jlcpcb.py                 # 5 JLCPCB DB handlers
       datasheet.py              # enrich_datasheets, get_datasheet_url
-      ipc.py                    # 7 ipc_* real-time IPC handlers
+      ipc.py                    # raw ipc_* handlers (Python commands;
+                                # no longer exposed as MCP tools)
+      ipc_gate.py               # shared IPC + PCB-editor gating helpers
+      ipc_fastpath/             # per-command IPC fast paths w/ SWIG fallback
       routing.py                # refill_zones (only non-trivial routing handler)
-      schematic_component.py    # 9 component CRUD
-      schematic_wire.py         # 10 wire/label/connection handlers
-      schematic_query.py        # 13 list_/get_/find_ handlers
-      schematic_io.py           # 8 IO/export/erc/netlist/sync handlers
-      schematic_view.py         # 8 view/analysis handlers
+      schematic_component/      # component CRUD package
+      schematic_wire/           # wire/label/connection/sheet handlers
+      schematic_query.py        # list_/get_/find_ handlers
+      schematic_io/             # IO/export/erc/netlist/sync handlers
+      schematic_view.py         # view/analysis handlers
     commands/                   # Lower-level command classes (BoardCommands,
                                 # ComponentCommands, RoutingCommands, …) plus
                                 # pcbnew helpers (wire_manager, pin_locator,

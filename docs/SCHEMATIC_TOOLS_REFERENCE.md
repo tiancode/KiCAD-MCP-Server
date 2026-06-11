@@ -398,15 +398,12 @@ Create a new schematic.
 | name      | string | Yes      | Schematic name |
 | path      | string | No       | Optional path  |
 
-### export_schematic_svg
+### export_schematic_svg (removed)
 
-Export schematic to SVG format using kicad-cli.
-
-| Parameter     | Type    | Required | Description                 |
-| ------------- | ------- | -------- | --------------------------- |
-| schematicPath | string  | Yes      | Path to the .kicad_sch file |
-| outputPath    | string  | Yes      | Output SVG file path        |
-| blackAndWhite | boolean | No       | Export in black and white   |
+The standalone MCP tool was removed — use `get_schematic_view` with
+`format: "svg"` instead, which renders through the same kicad-cli path.
+The `export_schematic_svg` Python command still exists for scripted
+callers.
 
 ### export_schematic_pdf
 

@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 174 tools with JSON Schema validation, each registered directly as an MCP tool
+- 164 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 27 tools and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -23,6 +23,28 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 - Comprehensive error handling and logging
 
 ## What's New (post-2.2.3, on `main`)
+
+### Leaner tool surface + graphic-shape editing
+
+The MCP tool list was trimmed to 164 tools: duplicates were removed in
+favor of one canonical tool each (`export_svg` →
+`get_board_2d_view(format=svg)`, `export_schematic_svg` →
+`get_schematic_view(format=svg)`, `get_drc_violations` → `run_drc`,
+`get_backend_state` → `get_backend_info`, `export_dsn`/`import_ses` →
+`autoroute`, `add_zone` → `add_copper_pour`, raw `ipc_*` passthroughs →
+the high-level tools that auto-route through IPC). The underlying Python
+commands still exist, so scripted callers keep working.
+
+New `list_shapes` / `delete_shape` / `edit_shape` tools (IPC) close a
+long-standing gap: graphic shapes created by
+`add_segment`/`add_circle`/… can now be enumerated, deleted, moved, and
+restyled instead of requiring hand-edits to the `.kicad_pcb`.
+
+Cross-backend sync also got safer: `reconcile_backends` now detects
+`.kicad_pcb` files edited outside the MCP (text editor, git) via a disk
+signature, Freerouting saves correctly mark the KiCad UI as stale, and
+transactions survive across tool calls (the IPC board API is cached per
+connection instead of recreated per dispatch).
 
 ### Faster startup, lazy symbol library
 
@@ -58,11 +80,11 @@ End-to-end tested against KiCAD 10.0.3 (Flathub Flatpak):
   registered directly as an MCP tool and called by name, so the
   meta-tools and the hand-maintained category registry no longer earned
   their maintenance cost.
-- `get_backend_info` and seven `ipc_*` tools (`ipc_list_components`,
-  `ipc_add_track`, etc.) now have proper MCP wrappers; previously
-  only the Python handlers existed.
-- `get_backend_state` reports the correct project / board paths in
-  IPC mode.
+- `get_backend_info` now has a proper MCP wrapper and reports the
+  correct project / board paths in IPC mode. (The raw `ipc_*` tool
+  wrappers and the `get_backend_state` duplicate that briefly shipped
+  alongside it were later removed in the tool-surface cleanup — see
+  "Leaner tool surface" above.)
 
 ### Server architecture refactor
 
@@ -308,7 +330,7 @@ The server provides 174 tools, each registered directly as an MCP tool -- just a
 - `get_project_info` - Retrieve project metadata
 - `snapshot_project` - Save named checkpoint snapshot
 
-### Board Operations (12 tools)
+### Board Operations (11 tools)
 
 - `set_board_size` - Configure PCB dimensions
 - `add_board_outline` - Create board edge (rectangle, circle, polygon, rounded rectangle)
@@ -320,7 +342,6 @@ The server provides 174 tools, each registered directly as an MCP tool -- just a
 - `get_board_extents` - Get board bounding box
 - `add_mounting_hole` - Place mounting holes
 - `add_board_text` - Add text annotations
-- `add_zone` - Add copper zone/pour with clearance settings
 - `import_svg_logo` - Import SVG file as PCB silkscreen polygons
 
 ### Component Management (16 tools)
@@ -358,6 +379,12 @@ The server provides 174 tools, each registered directly as an MCP tool -- just a
 - `refill_zones` - Refill all copper zones
 - `copy_routing_pattern` - Replicate routing between component groups
 
+### Graphic Shapes (8 tools)
+
+- `add_segment` / `add_arc` / `add_circle` / `add_rectangle` / `add_polygon` - Draw graphic primitives (no net binding) on any layer
+- `list_shapes` - Enumerate shapes with layer / kind / bounding-box filters
+- `delete_shape` / `edit_shape` - Remove or modify existing shapes (move, layer, stroke width, fill)
+
 ### Schematic (27 tools)
 
 Complete schematic workflow with dynamic symbol loading (~10,000 symbols) and intelligent wiring.
@@ -391,26 +418,25 @@ Complete schematic workflow with dynamic symbol loading (~10,000 symbols) and in
 - `get_net_connections` - Trace net connectivity
 - `list_schematic_nets` / `list_schematic_wires` / `list_schematic_labels`
 - `create_schematic` - Create new schematic file
-- `get_schematic_view` - Rasterized schematic preview
-- `export_schematic_svg` / `export_schematic_pdf`
+- `get_schematic_view` - Schematic preview (PNG or SVG)
+- `export_schematic_pdf`
 - `run_erc` - Electrical rule check
 - `generate_netlist` - Generate netlist from schematic
 - `sync_schematic_to_board` - Import nets/pads to PCB (F8 equivalent)
 
 See [Schematic Tools Reference](docs/SCHEMATIC_TOOLS_REFERENCE.md) for details and examples.
 
-### Design Rules / DRC (8 tools)
+### Design Rules / DRC (7 tools)
 
 - `set_design_rules` / `get_design_rules` - Configure and inspect rules
-- `run_drc` - Execute design rule check
-- `get_drc_violations` - Get violation list by severity
+- `run_drc` - Execute design rule check (returns summary + violations)
 - `add_net_class` / `assign_net_to_class` - Net class management
 - `set_layer_constraints` / `check_clearance` - Layer and clearance rules
 
-### Export (8 tools)
+### Export (7 tools)
 
 - `export_gerber` - Gerber fabrication files
-- `export_pdf` / `export_svg` - Documentation and vector graphics
+- `export_pdf` - Documentation output (SVG via `get_board_2d_view`)
 - `export_3d` - 3D models (STEP, STL, VRML, OBJ)
 - `export_bom` - Bill of materials (CSV, XML, HTML, JSON)
 - `export_netlist` - Netlist (KiCad, Spice, Cadstar, OrcadPCB2)
@@ -449,10 +475,9 @@ See [Footprint and Symbol Creator Guide](docs/FOOTPRINT_SYMBOL_CREATOR_GUIDE.md)
 - `get_jlcpcb_database_stats` - Database statistics
 - `suggest_jlcpcb_alternatives` - Find cheaper or in-stock alternatives
 
-### Freerouting Autorouter (4 tools)
+### Freerouting Autorouter (2 tools)
 
-- `autoroute` - Run Freerouting autorouter (DSN export, route, SES import)
-- `export_dsn` / `import_ses` - Manual Specctra DSN/SES workflow
+- `autoroute` - Run Freerouting autorouter (DSN export, route, SES import — all internal)
 - `check_freerouting` - Verify Java and Freerouting availability
 
 See [Freerouting Guide](docs/FREEROUTING_GUIDE.md) for setup and usage.
