@@ -8,39 +8,6 @@ import { z } from "zod";
 import { formatKicadResult } from "../tool-response.js";
 
 export function registerSchematicIoTools(server: McpServer, callKicadScript: Function) {
-  // Export schematic to SVG
-  server.tool(
-    "export_schematic_svg",
-    "Export schematic to SVG format using kicad-cli.",
-    {
-      schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      outputPath: z.string().describe("Output SVG file path"),
-      blackAndWhite: z.boolean().optional().describe("Export in black and white"),
-    },
-    async (args: { schematicPath: string; outputPath: string; blackAndWhite?: boolean }) => {
-      const result = await callKicadScript("export_schematic_svg", args);
-      if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Exported schematic SVG to ${result.file?.path || args.outputPath}`,
-            },
-          ],
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to export SVG: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
-    },
-  );
-
   // Export schematic to PDF
   server.tool(
     "export_schematic_pdf",

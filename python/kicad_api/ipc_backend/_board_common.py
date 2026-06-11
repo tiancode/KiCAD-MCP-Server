@@ -426,9 +426,11 @@ class _CommonMixin:
         """Build a JSON-safe summary of a BoardItem for selection / hit-test
         responses.  Tolerates missing attributes — the kipy wrapper shape
         varies by item type."""
+        from ._helpers import kiid_str, normalize_board_layer
+
         info: Dict[str, Any] = {
             "type": type(item).__name__,
-            "id": str(getattr(item, "id", "")),
+            "id": kiid_str(getattr(item, "id", None)),
         }
         # Footprint-ish: surface reference + value when present.
         ref_field = getattr(item, "reference_field", None)
@@ -454,5 +456,5 @@ class _CommonMixin:
             pass
         layer = getattr(item, "layer", None)
         if layer is not None:
-            info["layer"] = str(layer)
+            info["layer"] = normalize_board_layer(layer)
         return info

@@ -17,6 +17,8 @@ from ._helpers import (
     _document_type_enum,
     get_open_documents_compat,
     has_open_pcb_document,
+    kiid_str,
+    normalize_board_layer,
 )
 
 logger = logging.getLogger("kicad_interface")
@@ -93,20 +95,9 @@ class _ComponentMixin:
                         except Exception as e:
                             logger.debug(f"Could not compute bbox from pads: {e}")
 
-                    # kipy returns ``fp.layer`` as a ``BoardLayer`` enum.  On
-                    # some kipy versions ``str(enum)`` is the enum *name*
-                    # (``"BL_F_Cu"``) which we can strip to ``"F.Cu"``; on
-                    # others it's the raw int value (``"3"``).  Prefer
-                    # ``.name`` when present so the user sees a layer name
-                    # instead of an opaque integer.
-                    raw_layer = getattr(fp, "layer", None)
-                    if raw_layer is None:
-                        layer_str = "F.Cu"
-                    else:
-                        layer_name = getattr(raw_layer, "name", None) or str(raw_layer)
-                        if layer_name.startswith("BL_"):
-                            layer_name = layer_name[3:].replace("_", ".")
-                        layer_str = layer_name
+                    # Normalize via the shared helper: kipy may return an
+                    # enum object, a name string, or a bare protobuf int.
+                    layer_str = normalize_board_layer(getattr(fp, "layer", None)) or "F.Cu"
 
                     components.append(
                         {
@@ -130,7 +121,7 @@ class _ComponentMixin:
                             },
                             "rotation": fp.orientation.degrees if fp.orientation else 0,
                             "layer": layer_str,
-                            "id": str(fp.id) if hasattr(fp, "id") else "",
+                            "id": kiid_str(getattr(fp, "id", None)),
                             "boundingBox": bbox_data,
                         }
                     )

@@ -41,7 +41,6 @@ class TestMcpErrorWrapping:
             "assign_net_to_class",
             "set_layer_constraints",
             "check_clearance",
-            "get_drc_violations",
         ):
             marker = f'callKicadScript("{command}"'
             command_index = source.find(marker)

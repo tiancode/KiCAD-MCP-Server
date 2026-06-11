@@ -97,34 +97,6 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
   );
 
   // ------------------------------------------------------
-  // Export SVG Tool
-  // ------------------------------------------------------
-  server.tool(
-    "export_svg",
-    "Export the PCB layout as an SVG vector image, optionally selecting layers and colour mode.",
-    {
-      outputPath: z.string().describe("Path to save the SVG file"),
-      layers: z
-        .array(z.string())
-        .optional()
-        .describe("Optional array of layer names to include (default: all)"),
-      blackAndWhite: z.boolean().optional().describe("Whether to export in black and white"),
-      includeComponents: z.boolean().optional().describe("Whether to include component outlines"),
-    },
-    async ({ outputPath, layers, blackAndWhite, includeComponents }) => {
-      logger.debug(`Exporting SVG to: ${outputPath}`);
-      const result = await callKicadScript("export_svg", {
-        outputPath,
-        layers,
-        blackAndWhite,
-        includeComponents,
-      });
-
-      return formatKicadResult(result);
-    },
-  );
-
-  // ------------------------------------------------------
   // Export 3D Model Tool
   // ------------------------------------------------------
   server.tool(

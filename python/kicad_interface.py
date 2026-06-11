@@ -439,6 +439,9 @@ class KiCADInterface(BoardPersistenceMixin):
         "add_polygon": "shapes",
         "add_rectangle": "shapes",
         "add_segment": "shapes",
+        "list_shapes": "shapes",
+        "delete_shape": "shapes",
+        "edit_shape": "shapes",
         "begin_transaction": "transactions",
         "commit_transaction": "transactions",
         "get_transaction_status": "transactions",
@@ -537,7 +540,7 @@ class KiCADInterface(BoardPersistenceMixin):
         self.component_commands = ComponentCommands(self.board, self.footprint_library)
         self.routing_commands = RoutingCommands(self.board)
         self.freerouting_commands = FreeroutingCommands(
-            self.board, signature_callback=self._record_board_signature
+            self.board, signature_callback=self._on_swig_direct_save
         )
         self.design_rule_commands = DesignRuleCommands(self.board)
         self.export_commands = ExportCommands(self.board)
@@ -756,6 +759,23 @@ class KiCADInterface(BoardPersistenceMixin):
         }:
             return
         self._ipc_writes_pending = True
+
+    def _on_swig_direct_save(self, path: Optional[str] = None) -> None:
+        """Bookkeeping for handlers that save the SWIG board to disk directly.
+
+        Records the new on-disk signature (so the next auto-save doesn't see a
+        false 'changed externally') AND marks ``_swig_writes_landed`` so the
+        cross-backend gate knows KiCad's in-memory board is now stale.
+
+        Regression context: FreeroutingCommands saved the routed board through
+        ``_record_board_signature`` alone — the signature stayed fresh but the
+        divergence flag was never set (autoroute/import_ses also aren't in
+        ``_BOARD_MUTATING_COMMANDS``), so ``reconcile_backends`` reported
+        'already in sync' and the next ``ipc_save_board`` clobbered the
+        autoroute results with KiCad's stale memory.
+        """
+        self._record_board_signature(path)
+        self._swig_writes_landed = True
 
     def _cross_backend_conflict(self, *, attempting: str) -> Optional[Dict[str, Any]]:
         """Refuse cross-backend writes that would silently lose data.
@@ -1186,15 +1206,13 @@ class KiCADInterface(BoardPersistenceMixin):
     # Commands that require IPC; surfaced via get_backend_info so agents
     # can tell which tools are unavailable on the current backend without
     # trial-and-error.
+    # Commands surfaced as MCP tools that require the IPC backend.  The
+    # raw ipc_* passthroughs (ipc_add_track, ipc_get_tracks, ...) are no
+    # longer exposed as MCP tools — their functionality lives in the
+    # high-level tools (route_trace, query_traces, get_component_list,
+    # save_project / reconcile_backends) which auto-route through IPC —
+    # so they are not reported here either.
     IPC_REQUIRED_COMMANDS: Tuple[str, ...] = (
-        # Real-time IPC mutations
-        "ipc_add_track",
-        "ipc_add_via",
-        "ipc_add_text",
-        "ipc_list_components",
-        "ipc_get_tracks",
-        "ipc_get_vias",
-        "ipc_save_board",
         # Board metadata (origins + title block)
         "get_origin",
         "set_origin",
@@ -1216,6 +1234,9 @@ class KiCADInterface(BoardPersistenceMixin):
         "add_circle",
         "add_rectangle",
         "add_polygon",
+        "list_shapes",
+        "delete_shape",
+        "edit_shape",
         # KiCad TOOL_ACTION dispatch
         "run_action",
     )
@@ -1491,6 +1512,21 @@ class KiCADInterface(BoardPersistenceMixin):
         "sync_schematic_to_board",
         "connect_passthrough",
         "connect_to_net",
+        # Audited 2026-06-11: these mutate the SWIG board in memory but were
+        # missing from this set, so their changes were never auto-saved and
+        # the next swig_reload silently dropped them (observed:
+        # add_gnd_stitching_vias placed 14 vias that vanished on reconcile).
+        "add_gnd_stitching_vias",
+        "add_layer",
+        "align_components",
+        "copy_routing_pattern",
+        "duplicate_component",
+        "edit_component",
+        "modify_trace",
+        "place_component_array",
+        "route_differential_pair",
+        "set_board_size",
+        "set_design_rules",
     }
 
     # IPC commands that only read the board.  Used by the cross-backend

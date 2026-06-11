@@ -190,41 +190,22 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
 
 
 def handle_add_mounting_hole(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """IPC handler for add_mounting_hole — adds mounting hole with real-time UI update."""
-    try:
-        from kipy.board_types import BoardCircle
-        from kipy.geometry import Vector2
-        from kipy.proto.board.board_types_pb2 import BoardLayer
-        from kipy.util.units import from_mm
+    """IPC handler for add_mounting_hole — delegates to the SWIG implementation.
 
-        board = iface.ipc_board_api._get_board()
-
-        x = params.get("x", 0)
-        y = params.get("y", 0)
-        diameter = params.get("diameter", 3.2)  # M3 hole default
-
-        commit = board.begin_commit()
-
-        # Create circle on Edge.Cuts layer for the hole
-        circle = BoardCircle()
-        circle.center = Vector2.from_xy(from_mm(x), from_mm(y))
-        # kipy's `radius` is a read-only computed method; set geometry via
-        # radius_point (a point on the circle), here one to the right of centre.
-        circle.radius_point = Vector2.from_xy(from_mm(x + diameter / 2), from_mm(y))
-        circle.layer = BoardLayer.BL_Edge_Cuts
-        circle.attributes.stroke.width = from_mm(0.1)
-
-        board.create_items(circle)
-        board.push_commit(commit, f"Added mounting hole at ({x}, {y})")
-
-        return {
-            "success": True,
-            "message": f"Added mounting hole at ({x}, {y}) mm (visible in KiCAD UI)",
-            "hole": {"position": {"x": x, "y": y}, "diameter": diameter},
-        }
-    except Exception as e:
-        logger.error(f"IPC add_mounting_hole error: {e}")
-        return {"success": False, "message": str(e)}
+    The old inline IPC version had three defects the SWIG path doesn't:
+    it read flat ``x``/``y`` keys while the tool schema sends a nested
+    ``position`` object (every hole landed at (0, 0)); it opened its own
+    kipy commit, conflicting with an open transaction; and it ignored
+    ``padDiameter``/``plated`` entirely (drew a bare Edge.Cuts circle
+    instead of an NPTH/PTH pad).  The SWIG implementation handles all of
+    that, so route through swig_fallback_mutation — which keeps the
+    cross-backend bookkeeping (conflict gate, auto-save,
+    _swig_writes_landed) — and let the caller reconcile to refresh KiCad.
+    """
+    logger.info("add_mounting_hole: delegating to SWIG implementation")
+    return swig_fallback_mutation(
+        iface, "add_mounting_hole", iface.board_commands.add_mounting_hole, params
+    )
 
 
 def handle_get_layer_list(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

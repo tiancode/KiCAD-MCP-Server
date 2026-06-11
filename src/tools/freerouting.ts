@@ -63,37 +63,6 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
     },
   );
 
-  // Export DSN only
-  server.tool(
-    "export_dsn",
-    "Export the current PCB to Specctra DSN format. Useful for manual Freerouting workflow or external autorouters.",
-    {
-      boardPath: z.string().optional().describe("Path to .kicad_pcb file (default: current board)"),
-      outputPath: z
-        .string()
-        .optional()
-        .describe("Output DSN file path (default: same dir as board)"),
-    },
-    async (args: any) => {
-      const result = await callKicadScript("export_dsn", args);
-      return formatKicadResult(result);
-    },
-  );
-
-  // Import SES
-  server.tool(
-    "import_ses",
-    "Import a Specctra SES (session) file into the current PCB. Use after running Freerouting externally.",
-    {
-      sesPath: z.string().describe("Path to the .ses file to import"),
-      boardPath: z.string().optional().describe("Path to .kicad_pcb file (default: current board)"),
-    },
-    async (args: any) => {
-      const result = await callKicadScript("import_ses", args);
-      return formatKicadResult(result);
-    },
-  );
-
   // Check Freerouting dependencies
   server.tool(
     "check_freerouting",

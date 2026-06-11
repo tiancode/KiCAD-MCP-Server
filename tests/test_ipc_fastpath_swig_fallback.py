@@ -92,3 +92,21 @@ def test_handle_delete_trace_routes_through_fallback_helper() -> None:
     assert result["success"] is True
     iface.routing_commands.delete_trace.assert_called_once_with({"net": "USB_DP"})
     assert iface._swig_writes_landed is True
+
+
+def test_handle_add_mounting_hole_routes_through_fallback_helper() -> None:
+    """Regression: the inline IPC version read flat x/y (schema sends a
+    nested position object → every hole landed at (0,0)), opened its own
+    kipy commit, and ignored padDiameter/plated.  It must delegate to the
+    SWIG implementation via the bookkeeping helper instead."""
+    from handlers.ipc_fastpath._board import handle_add_mounting_hole
+
+    iface = _iface()
+    iface.board_commands.add_mounting_hole.return_value = {"success": True}
+    params = {"position": {"x": 24, "y": 23.5, "unit": "mm"}, "diameter": 2.2}
+
+    result = handle_add_mounting_hole(iface, params)
+
+    assert result["success"] is True
+    iface.board_commands.add_mounting_hole.assert_called_once_with(params)
+    assert iface._swig_writes_landed is True

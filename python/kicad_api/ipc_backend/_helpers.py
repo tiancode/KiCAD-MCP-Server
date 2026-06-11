@@ -93,3 +93,47 @@ def has_open_pcb_document(kicad: Any) -> bool:
         if type_name in {"DOCTYPE_PCB", "PCB"}:
             return True
     return False
+
+
+def normalize_board_layer(raw_layer: Any) -> str:
+    """Normalize a kipy layer value to KiCad's dotted name (``F.Cu``).
+
+    kipy hands back layers in three shapes depending on version and call
+    path: an enum object with ``.name`` (``BL_F_Cu``), a bare protobuf enum
+    int (``3``), or occasionally a pre-stringified name.  Resolve ints via
+    the BoardLayer descriptor so callers never see an opaque integer.
+    """
+    if raw_layer is None:
+        return ""
+    layer_name = getattr(raw_layer, "name", None)
+    if layer_name is None and isinstance(raw_layer, int):
+        try:
+            from kipy.proto.board.board_types_pb2 import BoardLayer  # type: ignore
+
+            layer_name = BoardLayer.Name(raw_layer)
+        except Exception:
+            layer_name = str(raw_layer)
+    if layer_name is None:
+        layer_name = str(raw_layer)
+    if layer_name.startswith("BL_"):
+        layer_name = layer_name[3:].replace("_", ".")
+    return layer_name
+
+
+def kiid_str(kiid: Any) -> str:
+    """Bare uuid string for a kipy KIID value.
+
+    ``str()`` on the KIID *proto message* prints the field repr
+    ``value: "f7557a52-..."\\n`` rather than the uuid itself, which doesn't
+    round-trip into uuid-keyed tools.  Prefer the proto's ``.value`` field
+    and fall back to a cleaned repr.
+    """
+    if kiid is None:
+        return ""
+    value = getattr(kiid, "value", None)
+    if isinstance(value, str) and value:
+        return value
+    raw = str(kiid).strip()
+    if raw.startswith('value: "') and raw.endswith('"'):
+        raw = raw[len('value: "') : -1]
+    return raw

@@ -40,6 +40,13 @@ class IPCBackend(KiCADBackend):
         self._connected = False
         self._version: Optional[str] = None
         self._on_change_callbacks: List[Callable] = []
+        # Cached IPCBoardAPI — one instance per connection.  Board-API state
+        # (open transaction handle, cached Board wrapper) must survive across
+        # command dispatches; handing out a fresh instance per get_board()
+        # call silently dropped the open commit handle, so the next mutation
+        # opened a second KiCad commit and was refused with 'client already
+        # has a commit in progress'.
+        self._board_api: Any = None
 
     def connect(self, socket_path: Optional[str] = None) -> bool:
         """
@@ -207,6 +214,7 @@ class IPCBackend(KiCADBackend):
         if self._kicad:
             self._kicad = None
             self._connected = False
+            self._board_api = None  # stale handle; new connection gets a fresh one
             logger.info("Disconnected from KiCAD IPC")
 
     def is_connected(self) -> bool:
@@ -316,7 +324,12 @@ class IPCBackend(KiCADBackend):
         if not self.is_connected():
             raise ConnectionError("Not connected to KiCAD")
 
-        return IPCBoardAPI(self._kicad, self._notify_change)
+        # Reuse the per-connection instance (see __init__) so transaction
+        # state survives across command dispatches; recreate only when the
+        # underlying kipy client object was swapped by a reconnect.
+        if self._board_api is None or self._board_api._kicad is not self._kicad:
+            self._board_api = IPCBoardAPI(self._kicad, self._notify_change)
+        return self._board_api
 
     # KiCad-level operations (not specific to one document)
     def run_action(self, action: str) -> Dict[str, Any]:

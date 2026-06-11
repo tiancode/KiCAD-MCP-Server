@@ -133,3 +133,74 @@ def handle_add_polygon(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
         layer=str(params.get("layer", "F.SilkS")),
         filled=bool(params.get("filled", False)),
     )
+
+
+def handle_list_shapes(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """List graphic shapes with optional layer / kind / boundingBox filters."""
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
+    bbox = params.get("boundingBox")
+    if bbox is not None:
+        bbox = {
+            "x1": min(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
+            "y1": min(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
+            "x2": max(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
+            "y2": max(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
+        }
+    return iface.ipc_board_api.list_shapes(
+        layer=params.get("layer"),
+        kind=params.get("kind"),
+        bbox=bbox,
+    )
+
+
+def handle_delete_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete shapes by id(s) or layer / kind / boundingBox filters."""
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
+    ids = params.get("ids")
+    single = params.get("id")
+    if single and not ids:
+        ids = [single]
+    bbox = params.get("boundingBox")
+    if bbox is not None:
+        bbox = {
+            "x1": min(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
+            "y1": min(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
+            "x2": max(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
+            "y2": max(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
+        }
+    if not ids and not params.get("layer") and not params.get("kind") and bbox is None:
+        return {
+            "success": False,
+            "message": (
+                "Select shapes to delete: pass id/ids (from list_shapes) or "
+                "layer / kind / boundingBox filters"
+            ),
+        }
+    return iface.ipc_board_api.delete_shapes(
+        ids=ids,
+        layer=params.get("layer"),
+        kind=params.get("kind"),
+        bbox=bbox,
+        delete_all=bool(params.get("all", False)),
+    )
+
+
+def handle_edit_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Edit one shape (by id): newLayer, width, filled, move {dx, dy}."""
+    gate = _require_ipc(iface)
+    if gate:
+        return gate
+    shape_id = params.get("id")
+    if not shape_id:
+        return {"success": False, "message": "id is required (from list_shapes)"}
+    return iface.ipc_board_api.edit_shape(
+        shape_id=str(shape_id),
+        new_layer=params.get("newLayer"),
+        width=params.get("width"),
+        filled=params.get("filled"),
+        move=params.get("move"),
+    )

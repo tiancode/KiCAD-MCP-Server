@@ -363,8 +363,30 @@ def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -
         }
 
     if direction == "swig_to_ipc":
+        # Besides MCP-tracked SWIG writes, the .kicad_pcb may have been
+        # edited by an external actor (text editor, git, a script) that no
+        # runtime flag knows about.  Compare the on-disk content signature
+        # against the one recorded at load/save: a mismatch means disk has
+        # content neither backend memory includes — treat it exactly like a
+        # landed SWIG write (KiCad must revert; the SWIG board must reload).
+        disk_changed_externally = False
+        board_path = None
+        try:
+            board_path = iface.board.GetFileName() if iface.board else None
+        except Exception:
+            board_path = None
+        if board_path:
+            expected = getattr(iface, "_board_disk_signature", None)
+            current = iface._disk_signature(board_path)
+            if expected is not None and current is not None and expected[1] != current[1]:
+                disk_changed_externally = True
+                logger.info(
+                    "reconcile_backends: on-disk board changed externally; "
+                    "treating as swig_to_ipc content"
+                )
+
         # Nothing landed on the SWIG side → nothing to push into KiCad.
-        if not iface._swig_writes_landed:
+        if not iface._swig_writes_landed and not disk_changed_externally:
             if iface._ipc_writes_pending:
                 # Wrong direction: SWIG has nothing to push, but IPC has
                 # unsaved changes — that's the ipc_to_swig case.
@@ -439,15 +461,30 @@ def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -
                     "Resume the workflow — the SWIG content is now in KiCad memory.",
                 ],
             }
+        steps_taken = ["ipc_revert"]
+        # External disk edits also make the SWIG in-memory board stale —
+        # reload it so both backends reflect the on-disk content.
+        if disk_changed_externally and board_path:
+            reloaded = iface._safe_load_board(board_path)
+            if reloaded is not None:
+                iface.board = reloaded
+                iface._update_command_handlers()
+                steps_taken.append("swig_reload")
+            iface._record_board_signature(board_path)
         iface._swig_writes_landed = False
         iface._ipc_writes_pending = False
         return {
             "success": True,
             "direction": "swig_to_ipc",
-            "stepsTaken": ["ipc_revert"],
+            "stepsTaken": steps_taken,
+            "externalDiskChange": disk_changed_externally,
             "message": (
-                "Reloaded KiCad's in-memory board from disk via revert; KiCad "
-                "now reflects the SWIG-written content."
+                "Reloaded KiCad's in-memory board from disk via revert"
+                + (
+                    "; the SWIG board was reloaded too (external disk edit)"
+                    if disk_changed_externally
+                    else "; KiCad now reflects the SWIG-written content."
+                )
             ),
         }
 
@@ -460,7 +497,7 @@ def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -
             "message": "Backends are already in sync; nothing to reconcile.",
         }
 
-    steps_taken: list = []
+    steps_taken = []
 
     # Step 1: flush IPC to disk if it has pending writes.
     if iface._ipc_writes_pending:

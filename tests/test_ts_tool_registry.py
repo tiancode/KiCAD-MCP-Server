@@ -61,8 +61,46 @@ class TestTsToolRegistry:
         assert ts_files, "No .ts files found in src/tools/"
 
     def test_backend_state_tool_is_registered(self):
-        """Backend observability must be exposed as a first-class MCP tool."""
+        """Backend observability is exposed via get_backend_info; the old
+        get_backend_state duplicate was removed in the tool-redundancy
+        cleanup (2026-06) and must stay removed."""
         registrations = self._collect_registrations()
         tool_names = {name for name, _, _ in registrations}
 
-        assert "get_backend_state" in tool_names
+        assert "get_backend_info" in tool_names
+        assert "get_backend_state" not in tool_names
+
+    def test_redundant_tools_stay_removed(self):
+        """Tool-redundancy cleanup (2026-06): these duplicated higher-level
+        tools and were removed from the MCP surface. The Python command
+        routes remain for backward compatibility, but the TS layer must not
+        re-register them — each has a canonical replacement:
+
+          export_svg            -> get_board_2d_view(format=svg)
+          export_schematic_svg  -> get_schematic_view(format=svg)
+          get_drc_violations    -> run_drc (returns summary + violations file)
+          get_backend_state     -> get_backend_info
+          ipc_add_track         -> route_trace (auto IPC fast-path)
+          export_dsn/import_ses -> autoroute (runs both internally)
+        """
+        registrations = self._collect_registrations()
+        tool_names = {name for name, _, _ in registrations}
+
+        removed = {
+            "export_svg",
+            "export_schematic_svg",
+            "get_drc_violations",
+            "get_backend_state",
+            "ipc_add_track",
+            "export_dsn",
+            "import_ses",
+            "add_zone",
+            "ipc_add_via",
+            "ipc_add_text",
+            "ipc_list_components",
+            "ipc_get_tracks",
+            "ipc_get_vias",
+            "ipc_save_board",
+        }
+        leaked = removed & tool_names
+        assert not leaked, f"Removed tools re-registered in TS: {sorted(leaked)}"

@@ -8,7 +8,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { formatKicadResult } from "./tool-response.js";
-import { paginationParams } from "./pagination-params.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -243,27 +242,6 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
         item1,
         item2,
       });
-
-      return formatKicadResult(result);
-    },
-  );
-
-  // ------------------------------------------------------
-  // Get DRC Violations Tool
-  // ------------------------------------------------------
-  server.tool(
-    "get_drc_violations",
-    "Return the list of current DRC violations on the PCB, optionally filtered by severity (error, warning).",
-    {
-      severity: z
-        .enum(["error", "warning", "all"])
-        .optional()
-        .describe("Filter violations by severity"),
-      ...paginationParams,
-    },
-    async ({ severity, limit, offset }) => {
-      logger.debug("Getting DRC violations");
-      const result = await callKicadScript("get_drc_violations", { severity, limit, offset });
 
       return formatKicadResult(result);
     },

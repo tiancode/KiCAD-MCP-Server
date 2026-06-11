@@ -11,14 +11,6 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   const passthrough = (command: string) =>
     passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
 
-  // Get MCP/KiCAD backend and loaded file state
-  server.tool(
-    "get_backend_state",
-    "Return the active backend, realtime status, loaded project/board paths, and dirty state.",
-    {},
-    passthrough("get_backend_state"),
-  );
-
   // Backend info (version, capabilities) — complements get_backend_state which
   // focuses on the loaded file.  Was a Python handler with no MCP wrapper
   // until the protocol-level smoke test caught the gap.
@@ -55,35 +47,6 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
       const result = await callKicadScript("launch_kicad_ui", args);
       return formatKicadResult(result);
     },
-  );
-
-  // -----------------------------------------------------------------
-  // IPC-realtime command tools.  These map 1:1 to the `_ipc_*` Python
-  // handlers — they run only when KiCAD is open with the IPC API server
-  // enabled, and the change is reflected in the UI immediately.  Use the
-  // regular tools (route_trace, add_via, …) for the universal path; reach
-  // for these when you specifically need to inspect IPC state or force
-  // the IPC code path for debugging.
-  //
-  // Editor-open requirement: these (and any board op) need KiCAD open with
-  // the board loaded.  The server auto-launches KiCAD and auto-opens the
-  // board when needed (opt out with KICAD_AUTO_LAUNCH=false); only when that
-  // fails does the call return `needs_pcb_editor: true` — then ask the user
-  // to open the board and wait, don't work around it with file-only edits.
-  // -----------------------------------------------------------------
-  server.tool(
-    "ipc_add_track",
-    "Add a track via the IPC backend (real-time).  Most callers should use route_trace instead; this tool exposes the raw IPC path for debugging.",
-    {
-      startX: z.number().describe("Start X (mm)"),
-      startY: z.number().describe("Start Y (mm)"),
-      endX: z.number().describe("End X (mm)"),
-      endY: z.number().describe("End Y (mm)"),
-      width: z.number().optional().describe("Track width in mm (default 0.25)"),
-      layer: z.string().optional().describe("Layer name (default F.Cu)"),
-      net: z.string().optional().describe("Net name to bind the track to"),
-    },
-    passthrough("ipc_add_track"),
   );
 
   // -----------------------------------------------------------------
@@ -136,14 +99,14 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   // Selection / interaction tools (IPC-only).
   //
   // Identification: most tools accept items by `ids` (KIIDs from
-  // list_components / ipc_get_tracks etc.) or `references` (footprint
+  // get_component_list / query_traces etc.) or `references` (footprint
   // reference designators like ["R1","U2"]).  Either is fine; both work.
   // -----------------------------------------------------------------
   const itemRefSchema = {
     ids: z
       .array(z.string())
       .optional()
-      .describe("Board item KIIDs (preferred). Get them from list_components / ipc_get_tracks."),
+      .describe("Board item KIIDs (preferred). Get them from get_component_list / query_traces."),
     references: z
       .array(z.string())
       .optional()
