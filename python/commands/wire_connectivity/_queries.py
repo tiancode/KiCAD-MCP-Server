@@ -8,15 +8,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import sexpdata
-from sexpdata import Symbol
 from commands.pin_locator import PinLocator
+from sexpdata import Symbol
 
 logger = logging.getLogger("kicad_interface")
 
 
 from ._parsing import (
-    PWRFLAG_LABEL_SENTINEL,
     _IU_PER_MM,
+    PWRFLAG_LABEL_SENTINEL,
     _load_sexp,
     _parse_labels_sexp,
     _parse_symbol_instances_sexp,
@@ -27,7 +27,6 @@ from ._parsing import (
     _to_iu,
     is_pwrflag_label,
 )
-
 from ._traversal import (
     _build_adjacency,
     _build_sheet_context,
@@ -163,7 +162,10 @@ def count_pins_on_net(
             if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
                 continue
             ref = symbol.property.Reference.value
-            if ref.startswith("_TEMPLATE"):
+            # Same exclusions as _process_single_sheet: template clones and
+            # virtual symbols (#PWR / #FLG) are not real pins — otherwise the
+            # count disagrees with the connections list, which filters them.
+            if ref.startswith("_TEMPLATE") or ref.startswith("#"):
                 continue
             all_pins = locator.get_all_symbol_pins(Path(schematic_path), ref)
             if not all_pins:

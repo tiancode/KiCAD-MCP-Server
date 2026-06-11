@@ -160,10 +160,42 @@ def _normalize_zone_layer(raw_layer: Any) -> str:
     """Turn a kipy BoardLayer enum (name ``BL_F_Cu`` or raw int) into ``F.Cu``."""
     if raw_layer is None:
         return ""
-    layer_name = getattr(raw_layer, "name", None) or str(raw_layer)
+    layer_name = getattr(raw_layer, "name", None)
+    if layer_name is None and isinstance(raw_layer, int):
+        # zone.layers yields bare protobuf enum ints (3, 34, ...), not enum
+        # objects with .name — resolve through the BoardLayer descriptor so
+        # callers see "F.Cu" instead of "3".
+        try:
+            from kipy.proto.board.board_types_pb2 import BoardLayer  # type: ignore
+
+            layer_name = BoardLayer.Name(raw_layer)
+        except Exception:
+            layer_name = str(raw_layer)
+    if layer_name is None:
+        layer_name = str(raw_layer)
     if layer_name.startswith("BL_"):
         layer_name = layer_name[3:].replace("_", ".")
     return layer_name
+
+
+def _zone_uuid_str(zone: Any) -> str:
+    """Bare uuid string for a kipy zone.
+
+    ``str(zone.id)`` stringifies the KIID *proto message* — that prints the
+    field-repr ``value: "f7557a52-..."\\n`` rather than the uuid itself, which
+    then doesn't round-trip into uuid-keyed tools (edit/delete_copper_pour).
+    Prefer the proto's ``.value`` field and fall back to a cleaned repr.
+    """
+    zid = getattr(zone, "id", None)
+    if zid is None:
+        return ""
+    value = getattr(zid, "value", None)
+    if isinstance(value, str) and value:
+        return value
+    raw = str(zid).strip()
+    if raw.startswith('value: "') and raw.endswith('"'):
+        raw = raw[len('value: "') : -1]
+    return raw
 
 
 def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,7 +267,7 @@ def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
                         continue
 
                 entry: Dict[str, Any] = {
-                    "uuid": str(zone.id) if hasattr(zone, "id") else "",
+                    "uuid": _zone_uuid_str(zone),
                     "net": z_net,
                     "netCode": None,
                     "layers": layer_names,

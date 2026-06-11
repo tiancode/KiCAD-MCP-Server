@@ -8,7 +8,6 @@ import { z } from "zod";
 import { formatKicadResult } from "../tool-response.js";
 
 export function registerSchematicWireTools(server: McpServer, callKicadScript: Function) {
-
   // Draw wire between coordinate waypoints with optional pin snapping
   server.tool(
     "add_schematic_wire",
@@ -54,17 +53,14 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Add net label
   server.tool(
     "add_schematic_net_label",
-    "Add a net label to the schematic.  " +
-      "Electrical connectivity rule: KiCad treats a label as connected to a pin ONLY when the label's coordinates match the pin endpoint within KiCad's IU precision (≈0.1 µm).  A 0.01 mm offset is enough to break the connection — there is no wire stub or proximity heuristic in KiCad itself.  " +
-      "Three placement modes:  " +
-      "(1) PREFERRED — componentRef + pinNumber: snap the label onto the exact pin endpoint via PinLocator.  Guaranteed connection.  " +
-      "(2) Raw position [x, y] WITH default snapTolerance: the handler auto-snaps onto any pin within snapTolerance mm (default 0.05 mm).  Protects against float-imprecision near-misses — the most common silent failure when callers compute pin coords manually.  " +
-      "(3) Raw position WITH snapTolerance: 0: opt out of snapping entirely; for labels that intentionally float between pins.  " +
-      "Response always includes connected_to_pin = {ref, pin} | null, the pin (if any) the final coordinates actually land on at KiCad's IU precision.  Use it to verify the electrical connection without running ERC.  When auto-snap fired, snapped_to_pin carries the {component, pin, snap_distance_mm} delta and requested_position records what was asked for.",
+    "Add a net label. KiCad connects a label to a pin ONLY when its coordinates match the pin endpoint exactly (≈0.1 µm IU precision — 0.01 mm off breaks it). " +
+      "Modes: (1) PREFERRED componentRef + pinNumber — snaps onto the exact pin endpoint; " +
+      "(2) position [x, y] — auto-snaps to any pin within snapTolerance mm (default 0.05) to absorb float near-misses; " +
+      "(3) position with snapTolerance: 0 — no snapping, for labels intentionally between pins. " +
+      "Response always reports connected_to_pin = {ref, pin} | null (verifies connectivity without ERC); when auto-snap fired it adds snapped_to_pin and requested_position.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
@@ -94,7 +90,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
         .number()
         .optional()
         .describe(
-          "When raw position [x, y] is given, auto-snap onto the nearest pin within this many mm.  Default 0.05 mm — tight enough that the snap only fires on float-imprecision near-misses, not on labels intentionally placed between pins.  Pass 0 to disable.",
+          "Auto-snap radius in mm when a raw position is given (default 0.05 — only catches float near-misses). Pass 0 to disable.",
         ),
     },
     async (args: {
@@ -123,7 +119,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
       }
     },
   );
-
 
   // Add no-connect flag
   server.tool(
@@ -171,14 +166,11 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Delete no-connect flag
   server.tool(
     "delete_no_connect",
-    "Remove a no-connect (X marker) flag from a pin — the inverse of add_no_connect. " +
-      "A no-connect flag has no name, so it is matched by position. " +
-      "PREFERRED: supply componentRef + pinNumber to target the exact pin endpoint (the same way add_no_connect placed it). " +
-      "Alternatively supply position [x, y] in mm. Use this when an NC flag was placed on the wrong pin — no need to delete and re-add the whole component.",
+    "Remove a no-connect (X) flag from a pin — the inverse of add_no_connect, matched by position (NC flags have no name). " +
+      "PREFERRED: componentRef + pinNumber; alternatively position [x, y] in mm. Use when an NC flag landed on the wrong pin.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       position: z
@@ -220,7 +212,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Connect pin to net
   server.tool(
     "connect_to_net",
@@ -255,7 +246,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
       }
     },
   );
-
 
   // Get net connections
   server.tool(
@@ -293,16 +283,12 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Get wire connections
   server.tool(
     "get_wire_connections",
-    "Returns the net name and all wires and component pins connected at a given point. " +
-      "Accepts either a component reference + pin number (e.g. reference='U1', pin='3') " +
-      "or a schematic coordinate (x, y in mm). " +
-      "Returns net=null for unnamed (unlabelled) nets. " +
-      "The query point must be at a wire endpoint or junction — midpoints are not matched. " +
-      "Use get_schematic_pin_locations or list_schematic_wires to obtain exact endpoint coordinates.",
+    "Return the net name plus all wires and pins connected at a point, given reference + pin OR x/y in mm. " +
+      "net=null means an unnamed net. The point must be a wire endpoint or junction (midpoints don't match) — " +
+      "get exact coordinates from get_schematic_pin_locations or list_schematic_wires.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       reference: z
@@ -358,7 +344,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Get pin locations for a schematic component
   server.tool(
     "get_schematic_pin_locations",
@@ -398,7 +383,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
       }
     },
   );
-
 
   // Connect all pins of source connector to matching pins of target connector (passthrough)
   server.tool(
@@ -450,7 +434,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Delete wire from schematic
   server.tool(
     "delete_schematic_wire",
@@ -487,7 +470,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   // Delete net label from schematic
   server.tool(
@@ -528,7 +510,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   // Move net label to a new position in the schematic
   server.tool(
@@ -577,13 +558,12 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Change a net label's type and/or text
   server.tool(
     "edit_schematic_net_label",
-    "Change an existing net label's type (local label <-> global_label <-> hierarchical_label) and/or rename its text, in place. " +
-      "Keeps the same uuid and position, so fixing a page-local net mistakenly created as a global label needs no wire/junction rework — this is the inverse of delete + re-add. " +
-      "Pass at least one of newLabelType or newName. Use currentPosition and/or labelType to disambiguate when several labels share the same name.",
+    "Change an existing net label's type (label <-> global_label <-> hierarchical_label) and/or text, in place — " +
+      "keeps uuid and position, so no wire/junction rework. Pass at least one of newLabelType or newName; " +
+      "disambiguate duplicates with currentPosition and/or labelType.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       netName: z.string().describe("Current text of the label to edit"),
@@ -626,7 +606,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   // Add hierarchical label to a sub-sheet
   server.tool(

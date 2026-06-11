@@ -265,3 +265,261 @@ class ZoneMixin:
                 "message": "Failed to add copper pour",
                 "errorDetails": str(e),
             }
+
+    # ------------------------------------------------------------------
+    # Zone selection shared by edit_copper_pour / delete_copper_pour
+    # ------------------------------------------------------------------
+
+    def _zone_brief(self, zone: Any) -> Dict[str, Any]:
+        """Small identifying summary of a zone for disambiguation lists."""
+        try:
+            layer_name = self.board.GetLayerName(zone.GetLayer())
+        except Exception:
+            layer_name = None
+        return {
+            "uuid": zone.m_Uuid.AsString(),
+            "net": zone.GetNetname(),
+            "layer": layer_name,
+            "isFilled": bool(zone.IsFilled()),
+        }
+
+    def _find_zones(
+        self, uuid: Optional[str], net: Optional[str], layer: Optional[str]
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        """Resolve zones by uuid (exact) or net/layer filters.
+
+        Returns (matches, error_response). error_response is None on success.
+        """
+        if not self.board:
+            return [], {
+                "success": False,
+                "message": "No board is loaded",
+                "errorDetails": "Load or create a board first",
+            }
+
+        zones = list(self.board.Zones())
+        if uuid:
+            matches = [z for z in zones if z.m_Uuid.AsString() == uuid]
+            if not matches:
+                return [], {
+                    "success": False,
+                    "message": f"No zone with uuid {uuid}",
+                    "errorDetails": "Call query_zones to list zone uuids",
+                    "zones": [self._zone_brief(z) for z in zones],
+                }
+            return matches, None
+
+        matches = zones
+        if net is not None:
+            matches = [z for z in matches if z.GetNetname() == net]
+        if layer is not None:
+            layer_id = self.board.GetLayerID(layer)
+            matches = [z for z in matches if z.GetLayer() == layer_id]
+        if not matches:
+            return [], {
+                "success": False,
+                "message": "No zone matched the given net/layer filters",
+                "errorDetails": "Call query_zones to list zones",
+                "zones": [self._zone_brief(z) for z in zones],
+            }
+        return matches, None
+
+    _PAD_CONNECTION_ATTRS = {
+        "solid": "ZONE_CONNECTION_FULL",
+        "thermal": "ZONE_CONNECTION_THERMAL",
+        "none": "ZONE_CONNECTION_NONE",
+        "thru_hole_only": "ZONE_CONNECTION_THT_THERMAL",
+    }
+
+    def edit_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit properties of an existing copper pour (zone).
+
+        Select the zone by ``uuid`` (preferred, from query_zones) or by
+        ``net``/``layer`` filters that must match exactly one zone.  Any of
+        the optional property params then overwrite that zone's settings.
+        The fill is marked stale — call refill_zones afterwards.
+        """
+        try:
+            matches, err = self._find_zones(
+                params.get("uuid"), params.get("net"), params.get("layer")
+            )
+            if err:
+                return err
+            if len(matches) > 1:
+                return {
+                    "success": False,
+                    "message": (
+                        f"{len(matches)} zones matched — refine with uuid "
+                        "(from query_zones) or a net+layer pair"
+                    ),
+                    "zones": [self._zone_brief(z) for z in matches],
+                }
+            zone = matches[0]
+            scale = 1000000  # mm -> nm
+            changed: List[str] = []
+
+            new_net = params.get("newNet")
+            if new_net is not None:
+                nets_map = self.board.GetNetInfo().NetsByName()
+                if not nets_map.has_key(new_net):
+                    return {
+                        "success": False,
+                        "message": f"Net '{new_net}' does not exist on the board",
+                    }
+                zone.SetNet(nets_map[new_net])
+                changed.append("net")
+
+            new_layer = params.get("newLayer")
+            if new_layer is not None:
+                layer_id = self.board.GetLayerID(new_layer)
+                if layer_id < 0:
+                    return {
+                        "success": False,
+                        "message": f"Layer '{new_layer}' does not exist",
+                    }
+                zone.SetLayer(layer_id)
+                changed.append("layer")
+
+            if params.get("clearance") is not None:
+                zone.SetLocalClearance(int(params["clearance"] * scale))
+                changed.append("clearance")
+
+            if params.get("minWidth") is not None:
+                zone.SetMinThickness(int(params["minWidth"] * scale))
+                changed.append("minWidth")
+
+            if params.get("priority") is not None:
+                zone.SetAssignedPriority(int(params["priority"]))
+                changed.append("priority")
+
+            fill_type = params.get("fillType")
+            if fill_type is not None:
+                if fill_type == "hatched":
+                    zone.SetFillMode(pcbnew.ZONE_FILL_MODE_HATCH_PATTERN)
+                else:
+                    zone.SetFillMode(pcbnew.ZONE_FILL_MODE_POLYGONS)
+                changed.append("fillType")
+
+            pad_connection = params.get("padConnection")
+            if pad_connection is not None:
+                attr = self._PAD_CONNECTION_ATTRS.get(pad_connection)
+                const = getattr(pcbnew, attr, None) if attr else None
+                if const is None:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Unknown padConnection '{pad_connection}' — use one of "
+                            f"{sorted(self._PAD_CONNECTION_ATTRS)}"
+                        ),
+                    }
+                zone.SetPadConnection(const)
+                changed.append("padConnection")
+
+            if params.get("thermalGap") is not None:
+                zone.SetThermalReliefGap(int(params["thermalGap"] * scale))
+                changed.append("thermalGap")
+
+            if params.get("thermalBridgeWidth") is not None:
+                zone.SetThermalReliefSpokeWidth(int(params["thermalBridgeWidth"] * scale))
+                changed.append("thermalBridgeWidth")
+
+            points = params.get("outline")
+            if points:
+                if len(points) < 3:
+                    return {
+                        "success": False,
+                        "message": "outline needs at least 3 points",
+                    }
+                outline = zone.Outline()
+                outline.RemoveAllContours()
+                outline.NewOutline()
+                for point in points:
+                    unit_scale = (
+                        1000000
+                        if point.get("unit", "mm") == "mm"
+                        else (25400 if point.get("unit") == "mil" else 25400000)
+                    )
+                    outline.Append(
+                        pcbnew.VECTOR2I(int(point["x"] * unit_scale), int(point["y"] * unit_scale))
+                    )
+                changed.append("outline")
+
+            if not changed:
+                return {
+                    "success": False,
+                    "message": (
+                        "No editable property given — pass one of newNet, newLayer, "
+                        "clearance, minWidth, priority, fillType, padConnection, "
+                        "thermalGap, thermalBridgeWidth, outline"
+                    ),
+                    "zone": self._zone_brief(zone),
+                }
+
+            # The stored fill no longer reflects the zone settings.
+            try:
+                zone.UnFill()
+            except Exception:
+                try:
+                    zone.SetIsFilled(False)
+                except Exception:
+                    pass
+
+            return {
+                "success": True,
+                "message": f"Edited copper pour ({', '.join(changed)})",
+                "changed": changed,
+                "zone": self._zone_brief(zone),
+                "refillStatus": (
+                    "fill marked stale — call refill_zones (or let KiCad refill "
+                    "on open) before export_gerber"
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Error editing copper pour: {str(e)}")
+            return {
+                "success": False,
+                "message": "Failed to edit copper pour",
+                "errorDetails": str(e),
+            }
+
+    def delete_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Delete copper pour(s).
+
+        Select by ``uuid`` (single zone) or ``net``/``layer`` filters.  When
+        the filters match several zones, pass ``all=true`` to delete every
+        match — otherwise the call is refused with the candidate list.
+        """
+        try:
+            matches, err = self._find_zones(
+                params.get("uuid"), params.get("net"), params.get("layer")
+            )
+            if err:
+                return err
+            if len(matches) > 1 and not bool(params.get("all", False)):
+                return {
+                    "success": False,
+                    "message": (
+                        f"{len(matches)} zones matched — pass all=true to delete "
+                        "every match, or refine with uuid (from query_zones)"
+                    ),
+                    "zones": [self._zone_brief(z) for z in matches],
+                }
+
+            deleted = [self._zone_brief(z) for z in matches]
+            for zone in matches:
+                self.board.Remove(zone)
+
+            return {
+                "success": True,
+                "message": f"Deleted {len(deleted)} copper pour(s)",
+                "deleted": deleted,
+            }
+
+        except Exception as e:
+            logger.error(f"Error deleting copper pour: {str(e)}")
+            return {
+                "success": False,
+                "message": "Failed to delete copper pour",
+                "errorDetails": str(e),
+            }

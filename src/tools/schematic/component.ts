@@ -28,20 +28,13 @@ export function registerSchematicComponentTools(server: McpServer, callKicadScri
     },
   );
 
-
   // Add component to schematic
   server.tool(
     "add_schematic_component",
-    `Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g., 'Device:R', 'EDA-MCP:ESP32-C3').
-
-KiCad's default schematic grid is 1.27 mm (50 mil); symbol pin offsets are
-multiples of that.  Off-grid placements land every pin off-grid and produce
-'wire/pin not aligned to grid' ERC warnings on each one — so coordinates
-SNAP to the 1.27 mm grid BY DEFAULT.  A request for position (130, 80) is
-written as (130.81, 80.01).  The response carries the actual landing
-position under .position and a .snap field with the requested-vs-snapped
-delta when the coordinates moved.  Pass snapToGrid: false to opt out (only
-useful when reproducing an existing sub-grid placement).`,
+    "Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g. 'Device:R'). " +
+      "Coordinates SNAP to KiCad's 1.27 mm grid BY DEFAULT (off-grid pins trigger ERC alignment warnings); " +
+      "the response reports the landing position under .position plus a .snap delta when coordinates moved. " +
+      "Pass snapToGrid: false only to reproduce an existing sub-grid placement.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       symbol: z
@@ -137,7 +130,6 @@ useful when reproducing an existing sub-grid placement).`,
     },
   );
 
-
   // Delete component from schematic
   server.tool(
     "delete_schematic_component",
@@ -178,30 +170,14 @@ To remove a footprint from a PCB, use delete_component instead.`,
     },
   );
 
-
   // Edit component properties in schematic (footprint, value, reference, custom fields)
   server.tool(
     "edit_schematic_component",
-    `Update properties of a placed symbol in a KiCAD schematic (.kicad_sch) in-place.
-
-Use this tool to:
-  • assign or update the footprint, value, or reference designator,
-  • reposition field labels (Reference / Value text),
-  • add, update, or remove ARBITRARY CUSTOM PROPERTIES used by BOM and sourcing
-    workflows: MPN, Manufacturer, Manufacturer_PN, Distributor, DigiKey, DigiKey_PN,
-    Mouser_PN, LCSC, JLCPCB_PN, Voltage, Tolerance, Power, Dielectric, etc.
-
-Custom properties are first-class — they survive ERC, are exported by export_bom,
-and are picked up by the JLCPCB / Digi-Key BOM tooling. Newly-added properties
-default to hidden so they do not clutter the schematic canvas.
-
-Multiple updates can be batched in a single call: pass any combination of
-\`footprint\`, \`value\`, \`newReference\`, \`fieldPositions\`, \`properties\`,
-and \`removeProperties\` together.
-
-This is more efficient than delete + re-add because it preserves the component's
-position and UUID. Operates on .kicad_sch files only — to modify a PCB footprint
-use edit_component instead.`,
+    "Update a placed schematic symbol in place (preserves position and UUID — better than delete + re-add): " +
+      "footprint, value, reference, field-label positions, and arbitrary custom properties " +
+      "(MPN, Manufacturer, DigiKey_PN, Mouser_PN, LCSC, Voltage, Tolerance, ... — exported by export_bom and the JLCPCB/Digi-Key tooling; new properties default to hidden). " +
+      "Batch any combination of footprint / value / newReference / fieldPositions / properties / removeProperties in one call. " +
+      ".kicad_sch only — for a PCB footprint use edit_component.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Current reference designator of the component (e.g. R1, U3)"),
@@ -323,7 +299,6 @@ use edit_component instead.`,
     },
   );
 
-
   // ------------------------------------------------------------------
   // Single-property convenience tools (delegate to edit_schematic_component)
   // ------------------------------------------------------------------
@@ -331,26 +306,11 @@ use edit_component instead.`,
   // Set a single custom property on a placed symbol
   server.tool(
     "set_schematic_component_property",
-    `Add or update a single custom property on a placed schematic symbol.
-
-This is a focused convenience wrapper around edit_schematic_component for the very
-common case of attaching one BOM / sourcing field at a time. The property is
-created if it does not already exist on the component.
-
-Typical custom properties:
-  • MPN, Manufacturer, Manufacturer_PN — manufacturer part number metadata
-  • DigiKey, DigiKey_PN, Mouser_PN, LCSC, JLCPCB_PN — distributor part numbers
-  • Voltage, Tolerance, Power, Dielectric, Temperature_Coefficient — passive parameters
-  • Description, Notes — free-form documentation
-  • Any custom field your BOM exporter expects.
-
-These properties are written into the .kicad_sch file as standard KiCad property
-records, are exported by export_bom, and are picked up by the JLCPCB and Digi-Key
-sourcing tools. Newly-created properties default to hidden — set hide=false to
-display the value on the schematic canvas.
-
-For batch updates of multiple properties at once, use edit_schematic_component
-with the \`properties\` parameter instead.`,
+    "Add or update ONE custom property on a placed schematic symbol (created if missing) — " +
+      "e.g. MPN, Manufacturer, DigiKey_PN, Mouser_PN, LCSC, Voltage, Tolerance, or any BOM field. " +
+      "Written as a standard KiCad property record: survives ERC, exported by export_bom, used by JLCPCB/Digi-Key tooling. " +
+      "New properties default to hidden (set hide=false to show on canvas). " +
+      "For several properties at once use edit_schematic_component with `properties`.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator of the component (e.g. R1, U3)"),
@@ -406,7 +366,6 @@ with the \`properties\` parameter instead.`,
     },
   );
 
-
   // Remove a single custom property from a placed symbol
   server.tool(
     "remove_schematic_component_property",
@@ -456,16 +415,12 @@ edit_schematic_component and set its value to an empty string.`,
     },
   );
 
-
   // Get component properties and field positions from schematic
   server.tool(
     "get_schematic_component",
-    "Get full component info from a schematic: position, every field's value, and each field's " +
-      "label position (at x/y/angle). Returns ALL properties — both built-in fields " +
-      "(Reference, Value, Footprint, Datasheet) and any custom BOM/sourcing properties present " +
-      "on the symbol (MPN, Manufacturer, DigiKey_PN, LCSC, Voltage, Tolerance, Dielectric, etc.). " +
-      "Use this before edit_schematic_component / set_schematic_component_property to inspect " +
-      "what is currently set, or to plan a label repositioning.",
+    "Get full component info from a schematic: position plus EVERY field's value and label position " +
+      "(built-in Reference/Value/Footprint/Datasheet and all custom BOM/sourcing properties). " +
+      "Use before edit_schematic_component / set_schematic_component_property to inspect current state.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Component reference designator (e.g. R1, U1)"),
@@ -500,7 +455,6 @@ edit_schematic_component and set its value to an empty string.`,
       };
     },
   );
-
 
   // Move a placed symbol, dragging connected wires
   server.tool(
@@ -567,7 +521,6 @@ edit_schematic_component and set its value to an empty string.`,
     },
   );
 
-
   // Rotate schematic component
   server.tool(
     "rotate_schematic_component",
@@ -607,16 +560,11 @@ edit_schematic_component and set its value to an empty string.`,
     },
   );
 
-
   // Annotate schematic
   server.tool(
     "annotate_schematic",
-    "Assign reference designators to UNANNOTATED components (R? → R1, R2, ...). " +
-      "Only useful when add_schematic_component was called with a placeholder ref " +
-      "ending in '?' (e.g. 'R?', 'U?').  If every component was added with a concrete " +
-      "reference (e.g. reference='U1'), this is a no-op — the response carries " +
-      "annotated: [] and noop: true.  Safe to skip in flows that already assign " +
-      "references at creation time; safe to call defensively too.",
+    "Assign reference designators to UNANNOTATED components (placeholder refs ending in '?': R? → R1, R2, ...). " +
+      "No-op when every component already has a concrete reference (response: annotated: [], noop: true) — safe to call defensively.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
     },

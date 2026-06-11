@@ -12,20 +12,9 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Funct
   // ── enrich_datasheets ──────────────────────────────────────────────────────
   server.tool(
     "enrich_datasheets",
-    `Fill in missing Datasheet URLs in a KiCAD schematic using LCSC part numbers.
-
-For every placed symbol that has:
-  • (property "LCSC" "C123456") set
-  • (property "Datasheet" "~") or empty
-
-Sets the Datasheet field to:
-  https://www.lcsc.com/datasheet/C123456.pdf
-
-The URL is then visible in KiCAD's footprint browser, symbol properties dialog,
-and any tool that reads the standard KiCAD Datasheet field.
-No API key or internet lookup required – the URL is constructed directly.
-
-Use dry_run=true to preview changes without writing.`,
+    "Fill in missing Datasheet URLs from LCSC part numbers: every symbol with an LCSC property and an empty/'~' " +
+      "Datasheet field gets https://www.lcsc.com/datasheet/<LCSC>.pdf (constructed directly, no network/API key). " +
+      "dry_run=true previews without writing.",
     {
       schematic_path: z.string().describe("Path to the .kicad_sch file to enrich"),
       dry_run: z

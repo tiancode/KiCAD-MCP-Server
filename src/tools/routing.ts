@@ -136,6 +136,58 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
     },
   );
 
+  // Edit copper pour tool
+  server.tool(
+    "edit_copper_pour",
+    "Edit an existing copper pour (zone): pad connection style, clearance, outline, net, layer, priority, fill type, thermal relief settings. Select the zone by uuid (from query_zones) or by net/layer filters matching exactly one zone. The fill is marked stale — call refill_zones afterwards (or let KiCad refill on open).",
+    {
+      uuid: z.string().optional().describe("Zone uuid from query_zones (preferred selector)"),
+      net: z.string().optional().describe("Selector: match zones on this net"),
+      layer: z.string().optional().describe("Selector: match zones on this layer (e.g. F.Cu)"),
+      newNet: z.string().optional().describe("Reassign the zone to this net"),
+      newLayer: z.string().optional().describe("Move the zone to this layer"),
+      clearance: z.number().optional().describe("New clearance in mm"),
+      minWidth: z.number().optional().describe("New minimum fill width in mm"),
+      priority: z.number().optional().describe("New zone priority (higher fills first)"),
+      fillType: z.enum(["solid", "hatched"]).optional().describe("New fill style"),
+      padConnection: z
+        .enum(["solid", "thermal", "none", "thru_hole_only"])
+        .optional()
+        .describe(
+          "Pad connection style: solid (direct copper), thermal (relief spokes), none, or thru_hole_only (thermal on THT, solid on SMD)",
+        ),
+      thermalGap: z.number().optional().describe("Thermal relief gap in mm"),
+      thermalBridgeWidth: z.number().optional().describe("Thermal relief spoke width in mm"),
+      outline: z
+        .array(z.object({ x: z.number(), y: z.number() }))
+        .optional()
+        .describe("Replace the zone boundary with these {x, y} points (mm, min 3)"),
+    },
+    async (args: any) => {
+      const result = await callKicadScript("edit_copper_pour", args);
+      return formatKicadResult(result);
+    },
+  );
+
+  // Delete copper pour tool
+  server.tool(
+    "delete_copper_pour",
+    "Delete copper pour(s) from the PCB. Select by uuid (from query_zones) or by net/layer filters; when the filters match several zones, pass all=true to delete every match (otherwise the call is refused with the candidate list).",
+    {
+      uuid: z.string().optional().describe("Zone uuid from query_zones (preferred selector)"),
+      net: z.string().optional().describe("Selector: match zones on this net"),
+      layer: z.string().optional().describe("Selector: match zones on this layer (e.g. F.Cu)"),
+      all: z
+        .boolean()
+        .optional()
+        .describe("Delete every zone the selectors match (default false: refuse on multiple)"),
+    },
+    async (args: any) => {
+      const result = await callKicadScript("delete_copper_pour", args);
+      return formatKicadResult(result);
+    },
+  );
+
   // Delete trace tool
   server.tool(
     "delete_trace",
@@ -400,13 +452,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Refill zones tool
   server.tool(
     "refill_zones",
-    "Refill all copper zones. Uses the IPC fast-path when KiCad runs with the IPC API server. Without IPC the SWIG path is refused by default (pcbnew.ZONE_FILLER segfaults / mis-fills outside KiCad); instead let KiCad fill on open (press B) — zones are already on disk and gerber export only needs the fill at export time. Pass force=true to opt into the subprocess-isolated SWIG fill anyway (the response then carries a warning).",
+    "Refill all copper zones via the IPC fast-path when KiCad is running. Without IPC the SWIG path is REFUSED by default " +
+      "(pcbnew.ZONE_FILLER segfaults/mis-fills outside KiCad — let KiCad fill on open with B instead); " +
+      "force=true opts into the subprocess-isolated SWIG fill anyway (response carries a warning).",
     {
       force: z
         .boolean()
         .optional()
         .describe(
-          "Opt into the SWIG subprocess-isolated fill when IPC isn't available.  Default false — refused with success:false, requires_ipc:true and a recovery hint.  Use only when headless flows really need a filled .kicad_pcb on disk and you accept that the fill may be subtly wrong (verify with run_drc / open the gerber).",
+          "Opt into the SWIG fill when IPC isn't available (default false → refused with requires_ipc:true). Only for headless flows that need a filled .kicad_pcb on disk; verify the result with run_drc.",
         ),
     },
     async (args: any) => {
@@ -418,11 +472,11 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Route pad to pad tool
   server.tool(
     "route_pad_to_pad",
-    `Insert ONE STRAIGHT trace segment between two component pads (plus a via if they're on different copper layers). This is NOT an autorouter — there is no obstacle avoidance, no layer switching mid-trace, no rip-up-and-retry. Despite the "route_" prefix, the tool just commits a single straight line.
-
-If the line between the two pads crosses a third pad, the call NOW REFUSES by default (success: false, hasObstacles: true) with the obstacle list. Plan the path yourself as multiple route_trace segments that go around the obstacles, or pass force: true to override and accept the resulting DRC errors.
-
-Looks up pad positions, detects the net from the source pad, and inserts a via if the pads are on different copper layers. Default trace width comes from the source net's netclass (falling back to the board's current track width). Still call run_drc after a batch of these to catch crossings against existing traces / zones / board edge (the gate only catches crossings against OTHER PADS).`,
+    "Insert ONE STRAIGHT trace segment between two pads (auto-detects the net, adds a via when the layers differ). " +
+      "NOT an autorouter — no obstacle avoidance (use autoroute for that). " +
+      "If the line would cross a third pad it REFUSES by default (success: false, hasObstacles: true, obstacle list); " +
+      "route around with multiple route_trace segments, or pass force: true and accept the DRC errors. " +
+      "The gate only checks OTHER PADS — still run_drc afterwards to catch crossings of traces/zones/board edge.",
     {
       fromRef: z.string().describe("Reference of the source component (e.g. 'U2')"),
       fromPad: z

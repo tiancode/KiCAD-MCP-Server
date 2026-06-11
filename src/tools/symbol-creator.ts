@@ -80,16 +80,11 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
   // ── create_symbol ────────────────────────────────────────────────────── //
   server.tool(
     "create_symbol",
-    "Create a new schematic symbol in a .kicad_sym library file (created if missing). " +
-      "After creation, use register_symbol_library so KiCAD finds it. " +
-      "Pin positions are where the wire connects; the symbol body is drawn between them.\n\n" +
-      "Coordinate tips:\n" +
-      "- Body rectangle typically spans ±2.54 to ±5.08 mm\n" +
-      "- Pins on left side: at.x = body_left - length, angle=0 (wire goes right)\n" +
-      "- Pins on right side: at.x = body_right + length, angle=180 (wire goes left)\n" +
-      "- Pins on top: at.y = body_top + length, angle=270 (wire goes down)\n" +
-      "- Pins on bottom: at.y = body_bottom - length, angle=90 (wire goes up)\n" +
-      "- Standard pin length: 2.54 mm, standard grid: 2.54 mm",
+    "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_symbol_library afterwards so KiCAD finds it. " +
+      "Pin positions are the wire endpoints; the body is drawn between them. " +
+      "Tips (grid & pin length 2.54 mm; body spans ±2.54–5.08 mm): " +
+      "left pins at.x=body_left−length angle=0; right at.x=body_right+length angle=180; " +
+      "top at.y=body_top+length angle=270; bottom at.y=body_bottom−length angle=90.",
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file (created if missing)"),
       name: z.string().describe("Symbol name, e.g. 'TMC2209', 'MyOpAmp'"),

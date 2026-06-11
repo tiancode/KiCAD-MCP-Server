@@ -154,7 +154,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
 
   server.tool(
     "manage_selection",
-    "Manage the KiCAD board editor selection (IPC-only). `action`: 'get' returns the currently selected items (each with id, type, and optional reference/value/position/layer); 'clear' deselects everything; 'add' selects items by ids and/or footprint references (forms can be mixed; the resolver de-duplicates); 'remove' deselects items by ids and/or references. `ids`/`references` are used only by 'add' and 'remove'.",
+    "Manage the KiCAD board editor selection (IPC-only). 'get' returns selected items (id, type, optional reference/value/position/layer); 'clear' deselects all; 'add'/'remove' select/deselect by `ids` and/or footprint `references` (mixable, de-duplicated).",
     {
       action: z
         .enum(["get", "clear", "add", "remove"])

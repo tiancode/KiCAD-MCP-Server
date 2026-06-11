@@ -519,6 +519,113 @@ ROUTING_TOOLS = [
         },
     },
     {
+        "name": "edit_copper_pour",
+        "title": "Edit Copper Pour",
+        "description": (
+            "Edits an existing copper pour/zone: pad connection style, clearance, "
+            "outline, net, layer, priority, fill type, thermal relief. Select by "
+            "uuid (from query_zones) or net/layer filters matching exactly one zone. "
+            "Fill is marked stale - call refill_zones afterwards."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uuid": {
+                    "type": "string",
+                    "description": "Zone uuid from query_zones (preferred selector)",
+                },
+                "net": {
+                    "type": "string",
+                    "description": "Selector: match zones on this net",
+                },
+                "layer": {
+                    "type": "string",
+                    "description": "Selector: match zones on this layer (e.g. F.Cu)",
+                },
+                "newNet": {
+                    "type": "string",
+                    "description": "Reassign the zone to this net",
+                },
+                "newLayer": {
+                    "type": "string",
+                    "description": "Move the zone to this layer",
+                },
+                "clearance": {
+                    "type": "number",
+                    "description": "New clearance in millimeters",
+                },
+                "minWidth": {
+                    "type": "number",
+                    "description": "New minimum fill width in millimeters",
+                },
+                "priority": {
+                    "type": "integer",
+                    "description": "New zone priority (higher fills first)",
+                },
+                "fillType": {
+                    "type": "string",
+                    "enum": ["solid", "hatched"],
+                    "description": "New fill style",
+                },
+                "padConnection": {
+                    "type": "string",
+                    "enum": ["solid", "thermal", "none", "thru_hole_only"],
+                    "description": "Pad connection style",
+                },
+                "thermalGap": {
+                    "type": "number",
+                    "description": "Thermal relief gap in millimeters",
+                },
+                "thermalBridgeWidth": {
+                    "type": "number",
+                    "description": "Thermal relief spoke width in millimeters",
+                },
+                "outline": {
+                    "type": "array",
+                    "description": "Replace the zone boundary with these {x, y} points (mm)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                        },
+                        "required": ["x", "y"],
+                    },
+                    "minItems": 3,
+                },
+            },
+        },
+    },
+    {
+        "name": "delete_copper_pour",
+        "title": "Delete Copper Pour",
+        "description": (
+            "Deletes copper pour(s). Select by uuid (from query_zones) or net/layer "
+            "filters; pass all=true to delete multiple matches."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uuid": {
+                    "type": "string",
+                    "description": "Zone uuid from query_zones (preferred selector)",
+                },
+                "net": {
+                    "type": "string",
+                    "description": "Selector: match zones on this net",
+                },
+                "layer": {
+                    "type": "string",
+                    "description": "Selector: match zones on this layer (e.g. F.Cu)",
+                },
+                "all": {
+                    "type": "boolean",
+                    "description": "Delete every matched zone (default false)",
+                },
+            },
+        },
+    },
+    {
         "name": "route_differential_pair",
         "title": "Route Differential Pair",
         "description": "Routes a differential signal pair with matched lengths and spacing.",

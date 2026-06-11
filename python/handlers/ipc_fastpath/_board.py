@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
-from ._common import extract_xy, to_mm
+from ._common import extract_xy, swig_fallback_mutation, to_mm
 
 
 def handle_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,7 +139,9 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
         # rounded_rectangle / circle need arcs the IPC BoardSegment type
         # can't express — delegate to the SWIG path (needs a SWIG board).
         logger.info(f"handle_add_board_outline (IPC): delegating {shape} to SWIG path")
-        return iface.board_commands.add_board_outline(params)
+        return swig_fallback_mutation(
+            iface, "add_board_outline", iface.board_commands.add_board_outline, params
+        )
 
     try:
         from kipy.board_types import BoardSegment

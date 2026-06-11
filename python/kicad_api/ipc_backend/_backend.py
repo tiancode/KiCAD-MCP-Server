@@ -62,61 +62,91 @@ class IPCBackend(KiCADBackend):
             logger.info("Connecting to KiCAD via IPC...")
 
             # Try to connect with provided path or auto-detect
-            socket_paths_to_try = []
+            socket_paths_to_try: List[Optional[str]] = []
             if socket_path:
                 socket_paths_to_try.append(socket_path)
             else:
                 # Common socket locations (Unix-like systems only)
                 # Windows uses named pipes, handled by auto-detect
+                socket_dirs: List[str] = []
                 if platform.system() != "Windows":
-                    socket_paths_to_try.append("ipc:///tmp/kicad/api.sock")  # Linux default
+                    socket_dirs.append("/tmp/kicad")  # Linux default
                     # XDG runtime directory (requires getuid, Unix only)
                     if hasattr(os, "getuid"):
-                        socket_paths_to_try.append(f"ipc:///run/user/{os.getuid()}/kicad/api.sock")
+                        socket_dirs.append(f"/run/user/{os.getuid()}/kicad")
                     # Flatpak sandbox cache dir — KiCAD installed via Flathub
                     # puts the socket under ~/.var/app/org.kicad.KiCad/cache/...
                     # because the sandbox can't write to /tmp/kicad.  Same trick
                     # works for other XDG_CACHE_HOME values too.
-                    flatpak_cache = os.path.expanduser(
-                        "~/.var/app/org.kicad.KiCad/cache/tmp/kicad/api.sock"
+                    socket_dirs.append(
+                        os.path.expanduser("~/.var/app/org.kicad.KiCad/cache/tmp/kicad")
                     )
-                    socket_paths_to_try.append(f"ipc://{flatpak_cache}")
                     # Generic XDG_CACHE_HOME location (Linux convention)
                     xdg_cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-                    socket_paths_to_try.append(f"ipc://{xdg_cache}/kicad/api.sock")
+                    socket_dirs.append(f"{xdg_cache}/kicad")
 
                 # macOS: KiCAD.app cache directory (sandboxed Mac installs put
                 # the socket here, similar to Flatpak on Linux).
                 if platform.system() == "Darwin":
-                    socket_paths_to_try.append(
-                        f"ipc://{os.path.expanduser('~/Library/Caches/kicad/api.sock')}"
-                    )
+                    socket_dirs.append(os.path.expanduser("~/Library/Caches/kicad"))
+
+                # Each dir can hold the primary instance's api.sock AND
+                # PID-suffixed api-<pid>.sock sockets for additional KiCad
+                # instances (e.g. a standalone pcbnew opened next to the
+                # project manager).  Probe all of them — the selection loop
+                # below prefers whichever instance has a board open.
+                import glob as _glob
+
+                for d in socket_dirs:
+                    socket_paths_to_try.append(f"ipc://{os.path.join(d, 'api.sock')}")
+                    for extra in sorted(_glob.glob(os.path.join(d, "api-*.sock"))):
+                        socket_paths_to_try.append(f"ipc://{extra}")
 
                 # Final fall-through: ask kipy to auto-detect (uses
                 # KICAD_API_SOCKET env var, or its own default discovery).
                 socket_paths_to_try.append(None)
 
+            # Selection: prefer the first instance that has a .kicad_pcb
+            # document open (it can serve board ops immediately); otherwise
+            # fall back to the first instance that answers ping at all.
+            # With a single KiCad running this degenerates to the previous
+            # first-connectable behaviour.
             last_error = None
+            fallback: Optional[tuple] = None
+            chosen: Optional[tuple] = None
             for path in socket_paths_to_try:
                 try:
                     if path:
                         logger.debug(f"Trying socket path: {path}")
-                        self._kicad = KiCad(socket_path=path)
+                        candidate = KiCad(socket_path=path)
                     else:
+                        if fallback is not None:
+                            continue  # already have a live connection; skip kipy auto-detect
                         logger.debug("Trying auto-detection")
-                        self._kicad = KiCad()
-
+                        candidate = KiCad()
                     # Verify connection with ping (ping returns None on success)
-                    self._kicad.ping()
-                    logger.info(f"Connected via socket: {path or 'auto-detected'}")
-                    break
+                    candidate.ping()
                 except Exception as e:
                     last_error = e
                     logger.debug(f"Failed to connect via {path}: {e}")
                     continue
-            else:
+                try:
+                    board_open = has_open_pcb_document(candidate)
+                except Exception:
+                    board_open = False
+                if board_open:
+                    chosen = (candidate, path)
+                    break
+                if fallback is None:
+                    fallback = (candidate, path)
+
+            if chosen is None:
+                chosen = fallback
+            if chosen is None:
                 # None of the paths worked
                 raise ConnectionError(f"Could not connect to KiCAD IPC: {last_error}")
+            self._kicad, used_path = chosen
+            logger.info(f"Connected via socket: {used_path or 'auto-detected'}")
 
             # Get version info
             self._version = self._get_kicad_version()

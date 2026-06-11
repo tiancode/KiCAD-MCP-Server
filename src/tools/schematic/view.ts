@@ -7,7 +7,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 export function registerSchematicViewTools(server: McpServer, callKicadScript: Function) {
-
   // Get schematic view (rasterized image)
   server.tool(
     "get_schematic_view",
@@ -60,7 +59,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // ============================================================
   // Schematic Analysis Tools (read-only)
   // ============================================================
@@ -110,7 +108,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   // Find overlapping elements
   server.tool(
@@ -162,7 +159,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   // Get elements in a region
   server.tool(
@@ -216,7 +212,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Find wires crossing symbols
   server.tool(
     "find_wires_crossing_symbols",
@@ -243,7 +238,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   // List floating net labels
   server.tool(
@@ -278,7 +272,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Find orphaned wires
   server.tool(
     "find_orphaned_wires",
@@ -312,7 +305,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Snap schematic elements to grid
   server.tool(
     "snap_to_grid",
@@ -345,7 +337,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
       };
     },
   );
-
 
   server.tool(
     "get_net_at_point",
@@ -387,7 +378,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
       }
     },
   );
-
 
   // Add free-form text annotation to schematic
   server.tool(
@@ -445,7 +435,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Add sheet pin to a sheet block on the parent schematic
   server.tool(
     "add_sheet_pin",
@@ -501,18 +490,13 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     },
   );
 
-
   // Create a hierarchical sheet box on the parent (root) schematic
   server.tool(
     "add_schematic_sheet",
-    "Place a hierarchical sheet box on the parent (root) schematic that references a " +
-      "sub-sheet .kicad_sch file. This is the box that makes a multi-page hierarchical " +
-      "design exist: ERC/netlist traversal and kicad-cli follow the Sheetfile reference. " +
-      "Writes a KiCad-9/10-faithful (sheet ...) block — the page number lives in the block's " +
-      "own (instances), so the root (sheet_instances) is left untouched. By default also " +
-      "creates an empty sub-sheet file from the template if it doesn't exist. " +
-      "Inter-sheet connectivity is by same-named global labels (add_schematic_net_label " +
-      "labelType=global_label) on each page — sheet pins are optional.",
+    "Place a hierarchical sheet box on the parent (root) schematic referencing a sub-sheet .kicad_sch — " +
+      "this is what makes a multi-page design exist (ERC/netlist/kicad-cli follow the Sheetfile reference). " +
+      "Creates an empty sub-sheet file from the template if missing. " +
+      "Inter-sheet connectivity is by same-named global labels on each page (add_schematic_net_label labelType=global_label); sheet pins are optional.",
     {
       schematicPath: z.string().describe("Path to the PARENT (root) .kicad_sch file"),
       sheetName: z.string().describe("Sheet name shown on the box (Sheetname property)"),

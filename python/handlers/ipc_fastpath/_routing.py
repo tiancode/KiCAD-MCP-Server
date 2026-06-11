@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
-from ._common import _TO_MM_SCALE, extract_xy, to_mm
+from ._common import _TO_MM_SCALE, extract_xy, swig_fallback_mutation, to_mm
 
 
 def handle_route_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -156,10 +156,15 @@ def handle_add_net(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
 def handle_delete_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """IPC handler for delete_trace.
 
-    IPC doesn't support direct trace deletion yet, so fall back to SWIG.
+    IPC doesn't support direct trace deletion yet, so fall back to SWIG —
+    via swig_fallback_mutation, which keeps the cross-backend bookkeeping
+    (conflict gate, auto-save, _swig_writes_landed) that the dispatcher
+    only applies on its own SWIG branch.
     """
     logger.info("delete_trace: Falling back to SWIG (IPC doesn't support trace deletion)")
-    return iface.routing_commands.delete_trace(params)
+    return swig_fallback_mutation(
+        iface, "delete_trace", iface.routing_commands.delete_trace, params
+    )
 
 
 def handle_query_traces(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

@@ -37,6 +37,7 @@ import { registerFreeroutingTools } from "./tools/freerouting.js";
 import { registerShapesTools } from "./tools/shapes.js";
 import { registerTransactionTools } from "./tools/transactions.js";
 import { withToolAnnotations } from "./tools/annotations.js";
+import { slimToolsList } from "./tools/schema-slim.js";
 
 // Import resource registration functions
 import { registerProjectResources } from "./resources/project.js";
@@ -202,6 +203,11 @@ export class KiCADMcpServer {
       registerFootprintPrompts,
     ];
     for (const register of promptRegistrars) register(this.server);
+
+    // Strip $schema / additionalProperties boilerplate from the outbound
+    // tools/list payload (~3.8k tokens per client session). Must run after
+    // tool registration — the SDK installs the handler lazily.
+    slimToolsList(this.server);
 
     logger.info("All KiCAD tools, resources, and prompts registered");
   }
@@ -908,6 +914,12 @@ export class KiCADMcpServer {
     this.responseBuffer = "";
     this.currentRequestHandler = null;
     this.processingRequest = false;
+
+    // The top-level numeric id is the TS↔Python correlation id — it has done
+    // its job by now and would otherwise leak into every MCP tool result.
+    if (result != null && typeof result.id === "number") {
+      delete result.id;
+    }
 
     // Resolve the promise with the result
     handler.resolve(result);

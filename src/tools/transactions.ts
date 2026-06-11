@@ -27,7 +27,7 @@ import { formatKicadResult } from "./tool-response.js";
 export function registerTransactionTools(server: McpServer, callKicadScript: Function) {
   server.tool(
     "transaction",
-    "Manage a KiCad transaction / undo group (IPC-only). `action`: 'begin' opens a transaction so subsequent mutating calls collapse into a single Ctrl-Z undo step (refuses to nest — commit or rollback the open one first); 'commit' lands it as one atomic undo step (fails if none open); 'rollback' discards every change since begin (fails if none open); 'status' reports whether one is open and its label. 'begin'/'commit' accept an optional `description` label.",
+    "Manage a KiCad transaction / undo group (IPC-only). 'begin' opens one so subsequent mutating calls collapse into a single undo step (no nesting — commit/rollback the open one first); 'commit' lands it atomically; 'rollback' discards all changes since begin; 'status' reports the open transaction. begin/commit take an optional `description` label.",
     {
       action: z
         .enum(["begin", "commit", "rollback", "status"])

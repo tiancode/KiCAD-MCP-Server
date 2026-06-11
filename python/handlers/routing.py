@@ -91,14 +91,40 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                 "errorDetails": "Load or create a board first",
             }
 
-        # First save the board so the subprocess can load it fresh
+        # First make sure the on-disk file and the in-memory board agree so
+        # the subprocess fills the right data.  If an external actor (text
+        # editor, git, another tool) modified the file since we loaded it,
+        # the disk version wins: reload it instead of clobbering those edits
+        # with the stale in-memory board (the subprocess reads from disk, so
+        # the in-memory copy isn't needed for the fill itself).
         board_path = iface.board.GetFileName()
         if not board_path:
             return {
                 "success": False,
                 "message": "Board has no file path — save first",
             }
-        iface._save_board_and_record(iface.board, board_path)
+        expected = getattr(iface, "_board_disk_signature", None)
+        current = iface._disk_signature(board_path)
+        if expected is not None and current is not None and expected[1] != current[1]:
+            logger.info(
+                "refill_zones: on-disk board changed externally; reloading "
+                "from disk instead of overwriting it"
+            )
+            reloaded = iface._safe_load_board(board_path)
+            if reloaded is None:
+                return {
+                    "success": False,
+                    "message": (
+                        "The on-disk board changed externally and could not "
+                        "be reloaded into pcbnew — refusing to overwrite it. "
+                        "Check the file or restart the MCP server."
+                    ),
+                }
+            iface.board = reloaded
+            iface._update_command_handlers()
+            iface._record_board_signature(board_path)
+        else:
+            iface._save_board_and_record(iface.board, board_path)
 
         zone_count = iface.board.GetAreaCount() if hasattr(iface.board, "GetAreaCount") else 0
 

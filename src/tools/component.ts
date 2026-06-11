@@ -29,9 +29,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
       .describe("Footprint library ID, e.g. 'Package_DIP:DIP-8_W7.62mm' or 'R_0603_10k'."),
     position: z
       .object({
-        x: z.number().describe("X coordinate"),
-        y: z.number().describe("Y coordinate"),
-        unit: z.enum(["mm", "inch", "mil"]).describe("Unit of measurement"),
+        x: z.number(),
+        y: z.number(),
+        unit: z.enum(["mm", "inch", "mil"]),
       })
       .describe("Position coordinates and unit"),
     reference: z.string().optional().describe("Optional desired reference (e.g., 'R5')"),
@@ -83,9 +83,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
       reference: z.string().describe("Reference designator of the component (e.g., 'R5')"),
       position: z
         .object({
-          x: z.number().describe("X coordinate"),
-          y: z.number().describe("Y coordinate"),
-          unit: z.enum(["mm", "inch", "mil"]).describe("Unit of measurement"),
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "inch", "mil"]),
         })
         .describe("New position coordinates and unit"),
       rotation: z.number().optional().describe("Optional new rotation in degrees"),

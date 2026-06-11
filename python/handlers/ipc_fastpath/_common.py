@@ -60,3 +60,51 @@ def extract_xy(
             nested.get("unit", default_unit),
         )
     return params.get(flat_x, 0), params.get(flat_y, 0), default_unit
+
+
+def swig_fallback_mutation(
+    iface: "KiCADInterface",
+    command_label: str,
+    swig_callable: Any,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Run a SWIG board mutation from inside an IPC fast-path handler with
+    the dispatcher's cross-backend bookkeeping.
+
+    The dispatcher only auto-saves and sets ``_swig_writes_landed`` for
+    commands dispatched on its SWIG branch; a handler reached via the IPC
+    branch that internally falls back to SWIG bypasses all of that.  The
+    observed failure mode: delete_trace fell back to SWIG, mutated the SWIG
+    in-memory board, nothing was saved, no divergence was flagged — and the
+    next ``ipc_save_board`` resurrected the "deleted" traces from KiCad's
+    untouched memory.
+
+    This helper restores the dispatcher's contract:
+      1. refuse when IPC has unsaved changes (conflict gate, attempting=swig),
+      2. run the SWIG mutation,
+      3. on success auto-save and set ``_swig_writes_landed`` so the next IPC
+         write is gated until KiCad reloads the file.
+    """
+    conflict = iface._cross_backend_conflict(attempting="swig")
+    if conflict is not None:
+        return conflict
+
+    result = swig_callable(params)
+
+    if isinstance(result, dict) and result.get("success"):
+        save_status = iface._auto_save_board()
+        iface._last_auto_save_status = save_status
+        if save_status.get("saved"):
+            iface._swig_writes_landed = True
+            result.setdefault("warnings", []).append(
+                f"{command_label} ran on the SWIG path (no IPC support for this "
+                "operation) and wrote the .kicad_pcb on disk; KiCad's in-memory "
+                "board is now stale. The next IPC write is gated — call "
+                "reconcile_backends (direction=swig_to_ipc) to reload KiCad "
+                "from disk."
+            )
+        else:
+            if save_status.get("warning"):
+                result.setdefault("warnings", []).append(save_status["warning"])
+            result["autoSave"] = save_status
+    return result

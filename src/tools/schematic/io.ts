@@ -8,7 +8,6 @@ import { z } from "zod";
 import { formatKicadResult } from "../tool-response.js";
 
 export function registerSchematicIoTools(server: McpServer, callKicadScript: Function) {
-
   // Export schematic to SVG
   server.tool(
     "export_schematic_svg",
@@ -41,7 +40,6 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
       };
     },
   );
-
 
   // Export schematic to PDF
   server.tool(
@@ -76,11 +74,13 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
     },
   );
 
-
   // Run Electrical Rules Check (ERC)
   server.tool(
     "run_erc",
-    "Run ERC on a schematic and return all violations. Gotcha: KiCad's ERC requires every power-input pin (e.g. GND/VCC/VDD) to be driven by an Output Power pin or a PWR_FLAG symbol — power labels alone aren't enough. summary.recommendations[] surfaces actionable 'add PWR_FLAG' entries (with the net names) for those false positives; summary.real_errors counts only non-PWR_FLAG issues. By default lib_symbols are re-extracted from the on-disk .kicad_sym first (silences 'symbol doesn't match library' warnings); result under response.lib_symbols_refresh.",
+    "Run ERC on a schematic and return all violations. Gotcha: KiCad requires every power-input pin to be driven by a " +
+      "power-output pin or PWR_FLAG — labels alone aren't enough; summary.recommendations[] lists the 'add PWR_FLAG' fixes " +
+      "and summary.real_errors counts only non-PWR_FLAG issues. lib_symbols are auto-refreshed from disk first " +
+      "(silences 'symbol doesn't match library'; opt out with autoRefreshLibSymbols=false).",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       autoRefreshLibSymbols: z
@@ -151,7 +151,6 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
     },
   );
 
-
   // Generate netlist
   server.tool(
     "generate_netlist",
@@ -200,7 +199,6 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
       }
     },
   );
-
 
   // Sync schematic to PCB board (equivalent to KiCAD F8 / "Update PCB from Schematic")
   server.tool(

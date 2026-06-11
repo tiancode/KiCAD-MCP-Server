@@ -248,6 +248,52 @@ class KiCADProcessManager:
         return None
 
     @staticmethod
+    def ensure_ipc_api_enabled() -> bool:
+        """Flip ``api.enable_server`` to true in every kicad_common.json found.
+
+        KiCad reads this setting once at startup, and a *running* KiCad
+        rewrites the file on exit — so the only safe window to set it is
+        right before we launch the process ourselves.  Doing it here means
+        the IPC backend can attach on first launch instead of telling the
+        user to click Preferences → Plugins → Enable IPC API Server.
+
+        Returns True when at least one config file now has the server
+        enabled (already-enabled counts), False when none could be updated.
+        """
+        import json
+
+        system = platform.system()
+        if system == "Darwin":
+            config_root = Path.home() / "Library" / "Preferences" / "kicad"
+        elif system == "Windows":
+            config_root = Path.home() / "AppData" / "Roaming" / "kicad"
+        else:
+            config_root = Path.home() / ".config" / "kicad"
+
+        if not config_root.is_dir():
+            logger.debug(f"No KiCad config dir at {config_root}; skipping IPC enable")
+            return False
+
+        any_enabled = False
+        for version_dir in sorted(config_root.iterdir()):
+            common = version_dir / "kicad_common.json"
+            if not common.is_file():
+                continue
+            try:
+                data = json.loads(common.read_text(encoding="utf-8"))
+                api = data.setdefault("api", {})
+                if api.get("enable_server") is True:
+                    any_enabled = True
+                    continue
+                api["enable_server"] = True
+                common.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+                logger.info(f"Enabled KiCad IPC API server in {common}")
+                any_enabled = True
+            except (OSError, ValueError) as e:
+                logger.warning(f"Could not enable IPC API in {common}: {e}")
+        return any_enabled
+
+    @staticmethod
     def launch(project_path: Optional[Path] = None, wait_for_start: bool = True) -> bool:
         """
         Launch KiCAD PCB Editor
@@ -264,6 +310,11 @@ class KiCADProcessManager:
             if KiCADProcessManager.is_running():
                 logger.info("KiCAD is already running")
                 return True
+
+            # KiCad reads api.enable_server at startup; flip it now (KiCad
+            # isn't running, so the file won't be rewritten under us) so the
+            # IPC backend can attach without manual Preferences clicks.
+            KiCADProcessManager.ensure_ipc_api_enabled()
 
             # Find executable
             exe_path = KiCADProcessManager.get_executable_path()
@@ -393,9 +444,13 @@ def check_and_launch_kicad(project_path: Optional[Path] = None, auto_launch: boo
 
     if is_running:
         processes = manager.get_process_info()
+        # alreadyRunning is load-bearing: handlers.ui.handle_launch_kicad_ui
+        # only forwards a file-open to the running instance when it sees
+        # alreadyRunning=True and launched=False.
         return {
             "running": True,
             "launched": False,
+            "alreadyRunning": True,
             "processes": processes,
             "message": "KiCAD is already running",
         }
@@ -404,6 +459,7 @@ def check_and_launch_kicad(project_path: Optional[Path] = None, auto_launch: boo
         return {
             "running": False,
             "launched": False,
+            "alreadyRunning": False,
             "processes": [],
             "message": "KiCAD is not running (auto-launch disabled)",
         }
@@ -415,6 +471,7 @@ def check_and_launch_kicad(project_path: Optional[Path] = None, auto_launch: boo
     return {
         "running": success,
         "launched": success,
+        "alreadyRunning": False,
         "processes": manager.get_process_info() if success else [],
         "message": "KiCAD launched successfully" if success else "Failed to launch KiCAD",
         "project": str(project_path) if project_path else None,

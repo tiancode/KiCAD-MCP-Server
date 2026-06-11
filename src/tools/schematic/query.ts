@@ -9,7 +9,6 @@ import { paginationParams, truncationNote } from "../pagination-params.js";
 import { formatKicadResult } from "../tool-response.js";
 
 export function registerSchematicQueryTools(server: McpServer, callKicadScript: Function) {
-
   // One-shot schematic snapshot — components + wires + labels + nets in a
   // single response. Cuts 3 MCP round-trips out of basic schematic inspection.
   server.tool(
@@ -23,7 +22,6 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
       return formatKicadResult(result);
     },
   );
-
 
   // List all components in schematic
   server.tool(
@@ -82,7 +80,6 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
     },
   );
 
-
   // List all nets in schematic
   server.tool(
     "list_schematic_nets",
@@ -124,7 +121,6 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
     },
   );
 
-
   // List all wires in schematic
   server.tool(
     "list_schematic_wires",
@@ -162,7 +158,6 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
       };
     },
   );
-
 
   // List all labels in schematic
   server.tool(
@@ -220,7 +215,6 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
       };
     },
   );
-
 
   // List free-form text annotations in schematic
   server.tool(

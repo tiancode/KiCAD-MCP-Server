@@ -30,7 +30,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     {
       width: z.number().describe("Board width"),
       height: z.number().describe("Board height"),
-      unit: z.enum(["mm", "mil", "inch"]).describe("Unit of measurement"),
+      unit: z.enum(["mm", "mil", "inch"]),
       clearExisting: z
         .boolean()
         .optional()
@@ -145,8 +145,8 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
           points: z
             .array(
               z.object({
-                x: z.number().describe("X coordinate"),
-                y: z.number().describe("Y coordinate"),
+                x: z.number(),
+                y: z.number(),
               }),
             )
             .optional()
@@ -154,7 +154,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
           // Position: top-left corner for rectangles/rounded_rectangle, center for circle
           x: z.number().describe("X coordinate of top-left corner for rectangles (default: 0)"),
           y: z.number().describe("Y coordinate of top-left corner for rectangles (default: 0)"),
-          unit: z.enum(["mm", "mil", "inch"]).describe("Unit of measurement"),
+          unit: z.enum(["mm", "mil", "inch"]),
         })
         .describe("Parameters for the outline shape"),
     },
@@ -180,9 +180,9 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     {
       position: z
         .object({
-          x: z.number().describe("X coordinate"),
-          y: z.number().describe("Y coordinate"),
-          unit: z.enum(["mm", "mil", "inch"]).describe("Unit of measurement"),
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "mil", "inch"]),
         })
         .describe("Position of the mounting hole"),
       diameter: z.number().describe("Diameter of the hole"),
@@ -210,9 +210,9 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       text: z.string().describe("Text content"),
       position: z
         .object({
-          x: z.number().describe("X coordinate"),
-          y: z.number().describe("Y coordinate"),
-          unit: z.enum(["mm", "mil", "inch"]).describe("Unit of measurement"),
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "mil", "inch"]),
         })
         .describe("Position of the text"),
       layer: z.string().describe("Layer to place the text on"),
@@ -300,6 +300,33 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         cropMarginPx,
       });
 
+      // Inline images must go out as MCP image content, not as base64 inside
+      // a JSON text block — clients can't render the latter and the model
+      // pays for every base64 character as tokens.
+      const r = result as {
+        success?: boolean;
+        imageData?: string;
+        format?: string;
+        message?: string;
+      };
+      if (r?.success && typeof r.imageData === "string" && r.imageData.length > 0) {
+        if (r.format === "svg") {
+          return {
+            content: [
+              { type: "text" as const, text: Buffer.from(r.imageData, "base64").toString("utf8") },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "image" as const,
+              data: r.imageData,
+              mimeType: r.format === "jpg" ? "image/jpeg" : "image/png",
+            },
+          ],
+        };
+      }
       return formatKicadResult(result);
     },
   );
