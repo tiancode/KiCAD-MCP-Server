@@ -5,11 +5,11 @@ Split out of the former monolithic commands/wire_connectivity.py.
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import sexpdata
-from sexpdata import Symbol
 from commands.pin_locator import PinLocator
+from sexpdata import Symbol
 
 logger = logging.getLogger("kicad_interface")
 

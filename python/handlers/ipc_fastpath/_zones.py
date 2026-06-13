@@ -7,14 +7,14 @@ See python/handlers/__init__.py for the calling convention.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
-from ._common import extract_xy, to_mm
+from ._common import _TO_MM_SCALE
 
 
 def _ipc_board_edge_rect(ipc_board_api: Any) -> Optional[List[Dict[str, float]]]:
@@ -113,11 +113,10 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         # ``add_zone``'s schema makes ``unit`` required and accepts mil/inch,
         # so honour either a top-level ``unit`` field (whole-call) or a
         # per-point ``unit`` (matches the SWIG path) before forwarding.
-        _to_mm = {"mm": 1.0, "inch": 25.4, "mil": 0.0254}
         top_unit = str(params.get("unit", "mm")).lower()
 
         def _pt_scale(p: Dict[str, Any]) -> float:
-            return _to_mm.get(str(p.get("unit", top_unit)).lower(), 1.0)
+            return _TO_MM_SCALE.get(str(p.get("unit", top_unit)).lower(), 1.0)
 
         formatted_points = [
             {"x": p.get("x", 0) * _pt_scale(p), "y": p.get("y", 0) * _pt_scale(p)} for p in points
@@ -186,7 +185,7 @@ def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
 
         bbox_box = None
         if bbox:
-            unit_scale = {"mm": 1.0, "inch": 25.4, "mil": 0.0254}.get(bbox.get("unit", "mm"), 1.0)
+            unit_scale = _TO_MM_SCALE.get(bbox.get("unit", "mm"), 1.0)
             xs = sorted((bbox.get("x1", 0) * unit_scale, bbox.get("x2", 0) * unit_scale))
             ys = sorted((bbox.get("y1", 0) * unit_scale, bbox.get("y2", 0) * unit_scale))
             bbox_box = (xs[0], ys[0], xs[1], ys[1])

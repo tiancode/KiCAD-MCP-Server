@@ -19,7 +19,6 @@ from typing import Any, Dict, Optional, Tuple
 
 
 def classify_failure(
-    command: str,
     message: str = "",
     details: str = "",
     exc: "Optional[BaseException]" = None,
@@ -120,7 +119,7 @@ def enrich_failure(command: str, result: "Dict[str, Any]") -> "Dict[str, Any]":
         )
         return result
 
-    code, hint = classify_failure(command, message, details)
+    code, hint = classify_failure(message, details)
     result["errorCode"] = code
     if hint and not result.get("hint"):
         result["hint"] = hint

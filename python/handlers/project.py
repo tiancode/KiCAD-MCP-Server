@@ -269,12 +269,7 @@ def _autolaunch_for_project(
         base["pcbEditorAutoOpenAttempted"] = True
         ipc_backend = getattr(iface, "ipc_backend", None)
         if ipc_backend is not None and getattr(ipc_backend, "is_connected", lambda: False)():
-            _action_candidates = (
-                "kicadManager.Control.editPCB",
-                "kicadManager.Control.editPcbnew",
-                "common.Control.openPcbnew",
-                "pcbnew.EditorControl.openBoardEditor",
-            )
+            _action_candidates = iface._PCB_EDITOR_OPEN_ACTIONS
             for action in _action_candidates:
                 try:
                     result = ipc_backend.run_action(action)

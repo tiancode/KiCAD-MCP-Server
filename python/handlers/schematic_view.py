@@ -203,7 +203,6 @@ def handle_get_schematic_view_region(
     """Export a cropped region of the schematic as an image"""
     logger.info("Exporting schematic view region")
     import base64
-    import os
     import subprocess
     import tempfile
 

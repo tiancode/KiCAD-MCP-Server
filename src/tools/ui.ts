@@ -5,11 +5,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { formatKicadResult, passthroughCall } from "./tool-response.js";
+import { formatKicadResult, makePassthrough } from "./tool-response.js";
 
 export function registerUITools(server: McpServer, callKicadScript: Function) {
-  const passthrough = (command: string) =>
-    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
+  const passthrough = makePassthrough(callKicadScript);
 
   // Backend info (version, capabilities) — complements get_backend_state which
   // focuses on the loaded file.  Was a Python handler with no MCP wrapper

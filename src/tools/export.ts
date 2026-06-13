@@ -214,31 +214,5 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     },
   );
 
-  // ------------------------------------------------------
-  // Export VRML Tool
-  // ------------------------------------------------------
-  server.tool(
-    "export_vrml",
-    "Export the PCB as a VRML 3D model for use in web viewers or simulation tools.",
-    {
-      outputPath: z.string().describe("Path to save the VRML file"),
-      includeComponents: z.boolean().optional().describe("Whether to include 3D component models"),
-      useRelativePaths: z
-        .boolean()
-        .optional()
-        .describe("Whether to use relative paths for 3D models"),
-    },
-    async ({ outputPath, includeComponents, useRelativePaths }) => {
-      logger.debug(`Exporting VRML to: ${outputPath}`);
-      const result = await callKicadScript("export_vrml", {
-        outputPath,
-        includeComponents,
-        useRelativePaths,
-      });
-
-      return formatKicadResult(result);
-    },
-  );
-
   logger.info("Export tools registered");
 }

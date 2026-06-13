@@ -289,8 +289,6 @@ class CourtyardMixin:
     def _rotate_aabb(x1, y1, x2, y2, angle_deg):
         """Rotate the four AABB corners around origin and return the new
         axis-aligned bounding box. KiCad uses Y-down screen coords."""
-        import math
-
         rad = math.radians(angle_deg)
         c, s = math.cos(rad), math.sin(rad)
         # Note: screen Y-down means rotation CCW visually requires the

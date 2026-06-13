@@ -9,8 +9,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import sexpdata
-from sexpdata import Symbol
 from commands.pin_locator import PinLocator
 from commands.wire_connectivity import _parse_virtual_connections, _to_iu
 from skip import Schematic
@@ -25,14 +23,11 @@ from ._geometry import (
     _distance,
     _line_segment_intersects_aabb,
     _point_in_rect,
-    _transform_local_point,
-    compute_symbol_bbox,
 )
 from ._parsing import (
     _extract_lib_symbols,
     _load_sexp,
     _parse_labels,
-    _parse_lib_symbol_graphics,
     _parse_symbols,
     _parse_wires,
 )

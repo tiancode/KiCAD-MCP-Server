@@ -8,24 +8,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import sexpdata
-from sexpdata import Symbol
 from commands.pin_locator import PinLocator
+from sexpdata import Symbol
 
 logger = logging.getLogger("kicad_interface")
 
 
 from ._parsing import (
-    PWRFLAG_LABEL_SENTINEL,
     _IU_PER_MM,
     _load_sexp,
-    _parse_labels_sexp,
     _parse_symbol_instances_sexp,
     _parse_virtual_connections,
-    _parse_wires,
     _parse_wires_sexp,
     _point_on_segment,
     _to_iu,
-    is_pwrflag_label,
 )
 
 

@@ -69,7 +69,6 @@ const IDEMPOTENT_EXACT = new Set<string>([
   "set_origin",
   "set_title_block_info",
   "set_design_rules",
-  "set_layer_constraints",
   "set_schematic_component_property",
   // Edits that assign fixed values
   "edit_component",

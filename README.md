@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 164 tools with JSON Schema validation, each registered directly as an MCP tool
+- 160 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 27 tools and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -26,7 +26,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ### Leaner tool surface + graphic-shape editing
 
-The MCP tool list was trimmed to 164 tools: duplicates were removed in
+The MCP tool list was trimmed to 160 tools: duplicates were removed in
 favor of one canonical tool each (`export_svg` →
 `get_board_2d_view(format=svg)`, `export_schematic_svg` →
 `get_schematic_view(format=svg)`, `get_drc_violations` → `run_drc`,
@@ -426,14 +426,13 @@ Complete schematic workflow with dynamic symbol loading (~10,000 symbols) and in
 
 See [Schematic Tools Reference](docs/SCHEMATIC_TOOLS_REFERENCE.md) for details and examples.
 
-### Design Rules / DRC (7 tools)
+### Design Rules / DRC (4 tools)
 
 - `set_design_rules` / `get_design_rules` - Configure and inspect rules
 - `run_drc` - Execute design rule check (returns summary + violations)
-- `add_net_class` / `assign_net_to_class` - Net class management
-- `set_layer_constraints` / `check_clearance` - Layer and clearance rules
+- `assign_net_to_class` - Assign nets to a class (create classes with `create_netclass`)
 
-### Export (7 tools)
+### Export (6 tools)
 
 - `export_gerber` - Gerber fabrication files
 - `export_pdf` - Documentation output (SVG via `get_board_2d_view`)
@@ -441,7 +440,6 @@ See [Schematic Tools Reference](docs/SCHEMATIC_TOOLS_REFERENCE.md) for details a
 - `export_bom` - Bill of materials (CSV, XML, HTML, JSON)
 - `export_netlist` - Netlist (KiCad, Spice, Cadstar, OrcadPCB2)
 - `export_position_file` - Component positions for pick and place
-- `export_vrml` - VRML 3D model
 
 ### Footprint Libraries (4 tools) and Symbol Libraries (4 tools)
 

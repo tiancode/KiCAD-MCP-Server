@@ -292,19 +292,13 @@ def _parse_path_tokens(tokens: List[str]) -> List[Polygon]:
 def _parse_transform(transform_str: str) -> List[List[float]]:
     """Parse SVG transform attribute, return list of 3×3 matrix rows [a,b,c; d,e,f; 0,0,1]."""
 
-    def identity() -> List[List[float]]:
-        return [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-
-    def mat_mul(A: List[List[float]], B: List[List[float]]) -> List[List[float]]:
-        return [[sum(A[r][k] * B[k][c] for k in range(3)) for c in range(3)] for r in range(3)]
-
-    result = identity()
+    result = _identity()
     for m in re.finditer(
         r"(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)", transform_str
     ):
         func = m.group(1)
         args = [float(v) for v in re.split(r"[\s,]+", m.group(2).strip()) if v]
-        mat = identity()
+        mat = _identity()
         if func == "matrix" and len(args) == 6:
             a, b, c, d, e, f = args
             mat = [[a, c, e], [b, d, f], [0, 0, 1]]
@@ -324,14 +318,14 @@ def _parse_transform(transform_str: str) -> List[List[float]]:
                 t1 = [[1, 0, cx_], [0, 1, cy_], [0, 0, 1]]
                 r = [[cos, -sin, 0], [sin, cos, 0], [0, 0, 1]]
                 t2 = [[1, 0, -cx_], [0, 1, -cy_], [0, 0, 1]]
-                mat = mat_mul(mat_mul(t1, r), t2)
+                mat = _mat_mul(_mat_mul(t1, r), t2)
             else:
                 mat = [[cos, -sin, 0], [sin, cos, 0], [0, 0, 1]]
         elif func == "skewX":
             mat = [[1, math.tan(math.radians(args[0])), 0], [0, 1, 0], [0, 0, 1]]
         elif func == "skewY":
             mat = [[1, 0, 0], [math.tan(math.radians(args[0])), 1, 0], [0, 0, 1]]
-        result = mat_mul(result, mat)
+        result = _mat_mul(result, mat)
     return result
 
 

@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict
 
 from commands.connection_schematic import ConnectionManager
-from commands.schematic import SchematicManager
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface

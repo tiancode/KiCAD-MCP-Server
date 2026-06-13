@@ -89,3 +89,15 @@ export function passthroughCall(
     return formatKicadResult(result);
   };
 }
+
+/**
+ * Bind a `callKicadScript` once and return a `(command) => handler` factory.
+ * Tool files declare `callKicadScript` with varying local types (`Function`,
+ * a per-file `CommandFunction`), so this accepts the loose form and applies
+ * the same cast `passthroughCall` expects — the single place the identical
+ * `const passthrough = ...` alias used to be copy-pasted.
+ */
+export function makePassthrough(callKicadScript: unknown) {
+  return (command: string) =>
+    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
+}

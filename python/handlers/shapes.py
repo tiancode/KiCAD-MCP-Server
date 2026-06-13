@@ -135,19 +135,23 @@ def handle_add_polygon(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
     )
 
 
+def _normalize_bbox(bbox):
+    if bbox is None:
+        return None
+    return {
+        "x1": min(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
+        "y1": min(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
+        "x2": max(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
+        "y2": max(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
+    }
+
+
 def handle_list_shapes(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """List graphic shapes with optional layer / kind / boundingBox filters."""
     gate = _require_ipc(iface)
     if gate:
         return gate
-    bbox = params.get("boundingBox")
-    if bbox is not None:
-        bbox = {
-            "x1": min(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
-            "y1": min(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
-            "x2": max(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
-            "y2": max(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
-        }
+    bbox = _normalize_bbox(params.get("boundingBox"))
     return iface.ipc_board_api.list_shapes(
         layer=params.get("layer"),
         kind=params.get("kind"),
@@ -164,14 +168,7 @@ def handle_delete_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
     single = params.get("id")
     if single and not ids:
         ids = [single]
-    bbox = params.get("boundingBox")
-    if bbox is not None:
-        bbox = {
-            "x1": min(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
-            "y1": min(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
-            "x2": max(float(bbox.get("x1", 0)), float(bbox.get("x2", 0))),
-            "y2": max(float(bbox.get("y1", 0)), float(bbox.get("y2", 0))),
-        }
+    bbox = _normalize_bbox(params.get("boundingBox"))
     if not ids and not params.get("layer") and not params.get("kind") and bbox is None:
         return {
             "success": False,

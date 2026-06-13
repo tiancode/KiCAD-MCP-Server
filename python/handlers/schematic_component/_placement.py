@@ -370,23 +370,9 @@ def handle_delete_schematic_component(
         with open(sch_file, "r", encoding="utf-8") as f:
             content = f.read()
 
-        def find_matching_paren(s: str, start: int) -> int:
-            """Find the closing paren matching the opening paren at start."""
-            depth = 0
-            i = start
-            while i < len(s):
-                if s[i] == "(":
-                    depth += 1
-                elif s[i] == ")":
-                    depth -= 1
-                    if depth == 0:
-                        return i
-                i += 1
-            return -1
-
         # Skip lib_symbols section
         lib_sym_pos = content.find("(lib_symbols")
-        lib_sym_end = find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
+        lib_sym_end = iface._find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
 
         # Find ALL placed symbol blocks matching the reference (handles duplicates).
         # Use content-string search so multi-line KiCAD format is handled correctly:
@@ -412,7 +398,7 @@ def handle_delete_schematic_component(
             if lib_sym_pos >= 0 and lib_sym_pos <= pos <= lib_sym_end:
                 search_start = lib_sym_end + 1
                 continue
-            end = find_matching_paren(content, pos)
+            end = iface._find_matching_paren(content, pos)
             if end < 0:
                 search_start = pos + 1
                 continue

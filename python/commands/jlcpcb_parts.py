@@ -22,6 +22,11 @@ logger = logging.getLogger("kicad_interface")
 # Word-ish runs for description tokenisation (Unicode: keeps "510kΩ", "X7R").
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
+_OUT_OF_STOCK_WARNING = (
+    "No in-stock matches; showing parts that exist but are out of stock "
+    "(pass in_stock=false to include these directly)."
+)
+
 
 class JLCPCBPartsManager:
     """
@@ -530,10 +535,7 @@ class JLCPCBPartsManager:
         if not fts_terms:
             parts = _run(None)
             if out_of_stock_only:
-                warnings.append(
-                    "No in-stock matches; showing parts that exist but are out of stock "
-                    "(pass in_stock=false to include these directly)."
-                )
+                warnings.append(_OUT_OF_STOCK_WARNING)
             return {
                 "parts": parts,
                 "count": len(parts),
@@ -578,10 +580,7 @@ class JLCPCBPartsManager:
                 )
 
         if out_of_stock_only:
-            warnings.append(
-                "No in-stock matches; showing parts that exist but are out of stock "
-                "(pass in_stock=false to include these directly)."
-            )
+            warnings.append(_OUT_OF_STOCK_WARNING)
 
         return {
             "parts": parts,

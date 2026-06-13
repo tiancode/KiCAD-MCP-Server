@@ -7,7 +7,7 @@ jlcsearch service at https://jlcsearch.tscircuit.com/
 
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import requests
 
@@ -63,37 +63,6 @@ class JLCSearchClient:
             logger.error(f"Failed to search JLCSearch: {e}")
             raise Exception(f"JLCSearch API request failed: {e}")
 
-    def search_resistors(
-        self, resistance: Optional[int] = None, package: Optional[str] = None, limit: int = 100
-    ) -> List[Dict]:
-        """
-        Search for resistors
-
-        Args:
-            resistance: Resistance value in ohms
-            package: Package type (e.g., "0603", "0805")
-            limit: Maximum results
-
-        Returns:
-            List of resistor dicts with fields:
-            - lcsc: LCSC number (integer)
-            - mfr: Manufacturer part number
-            - package: Package size
-            - is_basic: True if basic library part
-            - resistance: Resistance in ohms
-            - tolerance_fraction: Tolerance (0.01 = 1%)
-            - power_watts: Power rating in mW
-            - stock: Available stock
-            - price1: Price per unit
-        """
-        filters: Dict[str, Any] = {}
-        if resistance is not None:
-            filters["resistance"] = resistance
-        if package:
-            filters["package"] = package
-
-        return self.search_components("resistors", limit=limit, **filters)
-
     def download_all_components(
         self, callback: Optional[Callable[[int, str], None]] = None, batch_size: int = 100
     ) -> List[Dict]:
@@ -147,51 +116,3 @@ class JLCSearchClient:
 
         logger.info(f"Download complete: {len(all_parts)} parts retrieved")
         return all_parts
-
-
-def test_jlcsearch_connection() -> bool:
-    """
-    Test JLCSearch API connection
-
-    Returns:
-        True if connection successful, False otherwise
-    """
-    try:
-        client = JLCSearchClient()
-        # Test by searching for 1k resistors
-        results = client.search_resistors(resistance=1000, limit=5)
-        logger.info(f"JLCSearch API connection test successful - found {len(results)} resistors")
-        return True
-    except Exception as e:
-        logger.error(f"JLCSearch API connection test failed: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    # Test the JLCSearch client
-    logging.basicConfig(level=logging.INFO)
-
-    print("Testing JLCSearch API connection...")
-    if test_jlcsearch_connection():
-        print("✓ Connection successful!")
-
-        client = JLCSearchClient()
-
-        print("\nSearching for 1k 0603 resistors...")
-        resistors = client.search_resistors(resistance=1000, package="0603", limit=5)
-        print(f"✓ Found {len(resistors)} resistors")
-
-        if resistors:
-            print(f"\nExample resistor:")
-            r = resistors[0]
-            print(f"  LCSC: C{r.get('lcsc')}")
-            print(f"  MFR: {r.get('mfr')}")
-            print(f"  Package: {r.get('package')}")
-            print(f"  Resistance: {r.get('resistance')}Ω")
-            print(f"  Tolerance: {r.get('tolerance_fraction', 0) * 100}%")
-            print(f"  Power: {r.get('power_watts')}mW")
-            print(f"  Stock: {r.get('stock')}")
-            print(f"  Price: ${r.get('price1')}")
-            print(f"  Basic Library: {'Yes' if r.get('is_basic') else 'No'}")
-    else:
-        print("✗ Connection failed")

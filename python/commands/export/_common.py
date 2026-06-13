@@ -6,7 +6,7 @@ Split out of the former monolithic commands/export.py.
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional
 
 import pcbnew
 

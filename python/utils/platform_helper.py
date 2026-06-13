@@ -146,17 +146,6 @@ class PlatformHelper:
         return paths
 
     @staticmethod
-    def get_kicad_python_path() -> Optional[Path]:
-        """
-        Get the first valid KiCAD Python path
-
-        Returns:
-            Path to KiCAD Python dist-packages, or None if not found
-        """
-        paths = PlatformHelper.get_kicad_python_paths()
-        return paths[0] if paths else None
-
-    @staticmethod
     def get_kicad_library_search_paths() -> List[str]:
         """
         Get platform-appropriate KiCAD symbol library search paths

@@ -341,8 +341,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
   server.tool(
     "get_net_at_point",
     "Returns the net name at a given (x, y) coordinate in a schematic, or null if no net label " +
-      "or wire endpoint is present at that position. Faster than get_pin_net when you only need " +
-      "the net name at a known coordinate and don't need pin traversal.",
+      "or wire endpoint is present at that position.",
     {
       schematicPath: z.string().describe("Path to the schematic file (.kicad_sch)"),
       x: z.number().describe("X coordinate in mm"),

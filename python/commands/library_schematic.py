@@ -1,7 +1,7 @@
 import glob
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,71 +42,8 @@ class LibraryManager:
         # Return both full paths and library names
         return {"paths": libraries, "names": library_names}
 
-    @staticmethod
-    def search_symbols(query: str, search_paths: Optional[List[str]] = None) -> List[Any]:
-        """Search for symbols matching criteria"""
-        try:
-            # This would typically involve:
-            # 1. Getting a list of all libraries using list_available_libraries
-            # 2. For each library, getting a list of all symbols
-            # 3. Filtering symbols based on the query
-
-            # For now, this is a placeholder implementation
-            results = []
-            logger.warning(
-                f"Searched for symbols matching '{query}'. This requires advanced implementation."
-            )
-            return results
-        except (OSError, ValueError) as e:
-            logger.exception(f"Error searching for symbols matching '{query}': {e}")
-            return []
-
-    @staticmethod
-    def get_default_symbol_for_component_type(
-        component_type: str, search_paths: Optional[List[str]] = None
-    ) -> Dict[str, str]:
-        """Get a recommended default symbol for a given component type"""
-        # This method provides a simplified way to get a symbol for common component types
-        # It's useful when the user doesn't specify a particular library/symbol
-
-        # Define common mappings from component type to library/symbol
-        common_mappings = {
-            "resistor": {"library": "Device", "symbol": "R"},
-            "capacitor": {"library": "Device", "symbol": "C"},
-            "inductor": {"library": "Device", "symbol": "L"},
-            "diode": {"library": "Device", "symbol": "D"},
-            "led": {"library": "Device", "symbol": "LED"},
-            "transistor_npn": {"library": "Device", "symbol": "Q_NPN_BCE"},
-            "transistor_pnp": {"library": "Device", "symbol": "Q_PNP_BCE"},
-            "opamp": {"library": "Amplifier_Operational", "symbol": "OpAmp_Dual_Generic"},
-            "microcontroller": {"library": "MCU_Module", "symbol": "Arduino_UNO_R3"},
-            # Add more common components as needed
-        }
-
-        # Normalize input to lowercase
-        component_type_lower = component_type.lower()
-
-        # Try direct match first
-        if component_type_lower in common_mappings:
-            return common_mappings[component_type_lower]
-
-        # Try partial matches
-        for key, value in common_mappings.items():
-            if component_type_lower in key or key in component_type_lower:
-                return value
-
-        # Default fallback
-        return {"library": "Device", "symbol": "R"}
-
 
 if __name__ == "__main__":
     # Example Usage (for testing)
     # List available libraries
     libraries = LibraryManager.list_available_libraries()
-    # Get default symbol for a component type
-    resistor_sym = LibraryManager.get_default_symbol_for_component_type("resistor")
-    print(f"Default symbol for resistor: {resistor_sym['library']}/{resistor_sym['symbol']}")
-
-    # Try a partial match
-    cap_sym = LibraryManager.get_default_symbol_for_component_type("cap")
-    print(f"Default symbol for 'cap': {cap_sym['library']}/{cap_sym['symbol']}")

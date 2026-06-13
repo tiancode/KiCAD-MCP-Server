@@ -6,16 +6,9 @@ See python/handlers/__init__.py for the calling convention.
 
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
 import os
-import re
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
-
-import pcbnew  # type: ignore[import-not-found]
-import sexpdata
-from commands.schematic import SchematicManager
+from typing import TYPE_CHECKING, Any, Dict
 
 from ._project_libs import _merged_project_lib_env, _project_dir_for
 

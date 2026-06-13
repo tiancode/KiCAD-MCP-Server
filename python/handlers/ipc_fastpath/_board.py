@@ -7,14 +7,14 @@ See python/handlers/__init__.py for the calling convention.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
-from ._common import extract_xy, swig_fallback_mutation, to_mm
+from ._common import extract_xy, swig_fallback_mutation
 
 
 def handle_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

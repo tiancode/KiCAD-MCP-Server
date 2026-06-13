@@ -3,14 +3,10 @@
 Split out of the former monolithic commands/routing.py."""
 
 import logging
-import math
 import os
-from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict
 
 import pcbnew
-
-from ._helpers import _point_to_segment_distance_nm, _refuse_with_obstacles
 
 logger = logging.getLogger("kicad_interface")
 

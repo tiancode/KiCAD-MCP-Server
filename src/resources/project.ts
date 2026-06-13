@@ -7,6 +7,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
+import { countComponentTypes } from "./component-utils.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -250,18 +251,4 @@ export function registerProjectResources(
   });
 
   logger.info("Project resources registered");
-}
-
-/**
- * Helper function to count component types
- */
-function countComponentTypes(components: any[]): Record<string, number> {
-  const typeCounts: Record<string, number> = {};
-
-  for (const component of components) {
-    const type = component.value?.split(" ")[0] || "Unknown";
-    typeCounts[type] = (typeCounts[type] || 0) + 1;
-  }
-
-  return typeCounts;
 }

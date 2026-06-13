@@ -5,15 +5,10 @@ Split out of the former monolithic commands/schematic_analysis.py.
 
 import logging
 import math
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import sexpdata
-from sexpdata import Symbol
 from commands.pin_locator import PinLocator
-from commands.wire_connectivity import _parse_virtual_connections, _to_iu
-from skip import Schematic
 
 logger = logging.getLogger("kicad_interface")
 

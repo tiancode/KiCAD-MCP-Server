@@ -7,12 +7,7 @@ See python/handlers/__init__.py for the calling convention.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Tuple
-
-import sexpdata
-from commands.schematic import SchematicManager
-from commands.schematic_locks import atomic_write_text, serialize_on_param
-from commands.wire_manager import WireManager
+from typing import TYPE_CHECKING, Any, Dict
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface

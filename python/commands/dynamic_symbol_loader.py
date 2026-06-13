@@ -397,8 +397,9 @@ class DynamicSymbolLoader:
         # so that the result is a fully self-contained definition.
         # (extends ...) is only valid in .kicad_sym files; KiCad 9 refuses to
         # load a schematic whose lib_symbols section contains it.
-        if re.search(r'\(extends "([^"]+)"\)', block):
-            parent_name = re.search(r'\(extends "([^"]+)"\)', block).group(1)
+        extends_match = re.search(r'\(extends "([^"]+)"\)', block)
+        if extends_match:
+            parent_name = extends_match.group(1)
             logger.info(f"Symbol {symbol_name} extends {parent_name}, inlining parent content")
             block = self._inline_extends_symbol(lib_content, symbol_name, block)
 

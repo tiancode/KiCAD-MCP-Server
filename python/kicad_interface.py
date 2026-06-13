@@ -1476,7 +1476,7 @@ class KiCADInterface(BoardPersistenceMixin):
             # Get the full traceback
             traceback_str = traceback.format_exc()
             logger.error(f"Error handling command {command}: {str(e)}\n{traceback_str}")
-            code, hint = classify_failure(command, str(e), traceback_str, exc=e)
+            code, hint = classify_failure(str(e), traceback_str, exc=e)
             error_result: Dict[str, Any] = {
                 "success": False,
                 "message": f"Error handling command: {command}",
@@ -2083,7 +2083,6 @@ class KiCADInterface(BoardPersistenceMixin):
         Returns: (pad_net_map, net_names_set)
         """
         from collections import defaultdict
-        from pathlib import Path
 
         from commands.pin_locator import PinLocator
         from skip import Schematic
@@ -2398,7 +2397,6 @@ class KiCADInterface(BoardPersistenceMixin):
         to the user.
         """
         import math
-        from pathlib import Path
 
         from commands.library import get_library_manager
 
@@ -2539,8 +2537,6 @@ class KiCADInterface(BoardPersistenceMixin):
         (with a 120 s timeout) so the cost is paid before any user
         tools are registered with the MCP client.
         """
-        import time
-
         start = time.monotonic()
         try:
             # pcbnew.BOARD() triggers wxApp creation on macOS.

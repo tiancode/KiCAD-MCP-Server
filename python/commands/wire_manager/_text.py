@@ -4,45 +4,19 @@ Pure helpers split out of the former monolithic commands/wire_manager.py.
 """
 
 import logging
-import math
-import re
-import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List
 
 import sexpdata
-from sexpdata import Symbol
-
 from commands.schematic_locks import (
     atomic_write_text,
     schematic_path_lock,
-    serialize_on_path,
 )
 
 from ._constants import (
-    _SYM_WIRE,
-    _SYM_PTS,
-    _SYM_XY,
-    _SYM_AT,
-    _SYM_LABEL,
-    _SYM_GLOBAL_LABEL,
-    _SYM_HIERARCHICAL_LABEL,
-    _SYM_STROKE,
-    _SYM_WIDTH,
-    _SYM_TYPE,
-    _SYM_UUID,
-    _SYM_SHEET_INSTANCES,
-    _SYM_JUNCTION,
-    _SYM_LIB_SYMBOLS,
-    _SYM_LIB_ID,
-    _SYM_MIRROR,
-    _SYM_PIN,
-    _SYM_SYMBOL,
-    _SYM_UNIT,
-    _SYM_KICAD_SCH,
-    _IU_PER_MM,
     _LABEL_TYPE_ALIASES,
+    _SYM_KICAD_SCH,
 )
 
 logger = logging.getLogger("kicad_interface")

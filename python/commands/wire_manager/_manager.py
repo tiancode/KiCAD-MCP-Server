@@ -13,47 +13,43 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import sexpdata
-from sexpdata import Symbol
-
 from commands.schematic_locks import (
     atomic_write_text,
-    schematic_path_lock,
     serialize_on_path,
 )
+from sexpdata import Symbol
 
 from ._constants import (
-    _SYM_WIRE,
-    _SYM_PTS,
-    _SYM_XY,
+    _IU_PER_MM,
     _SYM_AT,
-    _SYM_LABEL,
     _SYM_GLOBAL_LABEL,
     _SYM_HIERARCHICAL_LABEL,
-    _SYM_STROKE,
-    _SYM_WIDTH,
-    _SYM_TYPE,
-    _SYM_UUID,
-    _SYM_SHEET_INSTANCES,
     _SYM_JUNCTION,
-    _SYM_LIB_SYMBOLS,
+    _SYM_KICAD_SCH,
+    _SYM_LABEL,
     _SYM_LIB_ID,
+    _SYM_LIB_SYMBOLS,
     _SYM_MIRROR,
     _SYM_PIN,
+    _SYM_PTS,
+    _SYM_SHEET_INSTANCES,
+    _SYM_STROKE,
     _SYM_SYMBOL,
+    _SYM_TYPE,
     _SYM_UNIT,
-    _SYM_KICAD_SCH,
-    _IU_PER_MM,
-    _LABEL_TYPE_ALIASES,
+    _SYM_UUID,
+    _SYM_WIDTH,
+    _SYM_WIRE,
+    _SYM_XY,
 )
 from ._text import (
-    _normalize_label_type,
-    _validate_schematic_sexpr,
-    _serialize_validated,
-    _find_insertion_point,
-    _text_insert,
     _make_hierarchical_label_text,
     _make_sheet_pin_text,
     _make_sheet_text,
+    _normalize_label_type,
+    _serialize_validated,
+    _text_insert,
+    _validate_schematic_sexpr,
 )
 
 logger = logging.getLogger("kicad_interface")

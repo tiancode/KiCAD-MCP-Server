@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { formatKicadResult, passthroughCall } from "./tool-response.js";
+import { formatKicadResult, makePassthrough } from "./tool-response.js";
 
 // Command function type for KiCAD script calls
 type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
@@ -399,8 +399,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // Title block is what shows up on the printed PDF: company / rev /
   // date / nine free-form comment slots.
   // ------------------------------------------------------
-  const passthrough = (command: string) =>
-    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
+  const passthrough = makePassthrough(callKicadScript);
 
   // get_pcb_overview: aggregator that fans out to multiple list_ queries
   // server-side and returns a single response — saves 3-4 MCP round-trips.
