@@ -218,7 +218,7 @@ class ZoneMixin:
 
             # Create outline
             outline = zone.Outline()
-            outline.NewOutline()  # Create a new outline contour first
+            outline.NewOutline()
 
             # Add points to outline
             for point in points:
@@ -229,16 +229,12 @@ class ZoneMixin:
                 )
                 x_nm = int(point["x"] * scale)
                 y_nm = int(point["y"] * scale)
-                outline.Append(pcbnew.VECTOR2I(x_nm, y_nm))  # Add point to outline
+                outline.Append(pcbnew.VECTOR2I(x_nm, y_nm))
 
-            # Add zone to board
             self.board.Add(zone)
 
-            # Fill zone
-            # Note: Zone filling can cause issues with SWIG API
-            # Comment out for now - zones will be filled when board is saved/opened in KiCAD
-            # filler = pcbnew.ZONE_FILLER(self.board)
-            # filler.Fill(self.board.Zones())
+            # Zones are left unfilled here: the SWIG ZONE_FILLER is unreliable,
+            # so filling is deferred until the board is opened/saved in KiCad.
 
             return {
                 "success": True,
