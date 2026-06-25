@@ -26,9 +26,11 @@ const DEFAULT_CONFIG_PATH = join(dirname(__dirname), "config", "default-config.j
  * those fields will continue to parse without error.
  */
 const ConfigSchema = z.object({
+  // Overrides the Python interpreter via the KICAD_PYTHON path (see src/index.ts).
   pythonPath: z.string().optional(),
-  kicadPath: z.string().optional(),
   logLevel: z.enum(["error", "warn", "info", "debug"]).default("info"),
+  // Redirects the on-disk log directory (see src/index.ts; logger defaults to a
+  // platform-appropriate dir otherwise).
   logDir: z.string().optional(),
 });
 

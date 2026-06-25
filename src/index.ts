@@ -25,6 +25,19 @@ async function main() {
     // Load configuration
     const config = await loadConfig(options.configPath);
 
+    // Apply optional config overrides that the rest of the system reads via the
+    // logger singleton / environment. Without this the schema fields below are
+    // accepted but silently ignored.
+    //   - logDir:     redirect the on-disk log (logger defaults to a platform dir)
+    //   - pythonPath: feed python-discovery's KICAD_PYTHON override; an explicit
+    //                 KICAD_PYTHON env still wins so per-invocation overrides hold
+    if (config.logDir) {
+      logger.setLogDir(config.logDir);
+    }
+    if (config.pythonPath && !process.env.KICAD_PYTHON) {
+      process.env.KICAD_PYTHON = config.pythonPath;
+    }
+
     // Path to the Python script that interfaces with KiCAD
     const kicadScriptPath = join(dirname(__dirname), "python", "kicad_interface.py");
 
