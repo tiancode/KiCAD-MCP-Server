@@ -2039,36 +2039,13 @@ class KiCADInterface(BoardPersistenceMixin):
 
     @staticmethod
     def _find_kicad_cli_static() -> Optional[str]:
-        """Return path to kicad-cli executable, or None."""
-        import platform
-        import shutil
+        """Return path to kicad-cli executable, or None.
 
-        cli = shutil.which("kicad-cli")
-        if cli:
-            return cli
+        Delegates to utils.kicad_cli.find_kicad_cli (single source of truth).
+        """
+        from utils.kicad_cli import find_kicad_cli
 
-        system = platform.system()
-        if system == "Windows":
-            candidates = [
-                r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
-                r"C:\Program Files\KiCad\8.0\bin\kicad-cli.exe",
-                r"C:\Program Files (x86)\KiCad\9.0\bin\kicad-cli.exe",
-                r"C:\Program Files (x86)\KiCad\8.0\bin\kicad-cli.exe",
-            ]
-        elif system == "Darwin":
-            candidates = [
-                "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
-                "/usr/local/bin/kicad-cli",
-            ]
-        else:
-            candidates = [
-                "/usr/bin/kicad-cli",
-                "/usr/local/bin/kicad-cli",
-            ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return None
+        return find_kicad_cli()
 
     # ------------------------------------------------------------------
 
