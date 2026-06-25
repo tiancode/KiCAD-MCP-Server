@@ -6,9 +6,10 @@ See python/handlers/__init__.py for the calling convention.
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from commands.schematic import SchematicManager
 
@@ -16,6 +17,24 @@ if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger(__name__)
+
+
+def _pick_root_svg(out_dir: str, schematic_path: str) -> Optional[str]:
+    """Pick the root-sheet SVG that ``kicad-cli sch export svg`` wrote.
+
+    For a hierarchical schematic kicad-cli emits one SVG per sheet; the root
+    sheet is named after the input file (``Foo.kicad_sch`` -> ``Foo.svg``).
+    Prefer that exact match so callers get the top sheet instead of an
+    arbitrary sub-sheet, falling back to the lexicographically-first SVG
+    (deterministic, unlike raw glob/listdir order) when the named file is
+    absent.  Returns an absolute path, or ``None`` if no SVG was produced.
+    """
+    svgs = sorted(glob.glob(os.path.join(out_dir, "*.svg")))
+    if not svgs:
+        return None
+    stem = os.path.splitext(os.path.basename(schematic_path))[0]
+    preferred = os.path.join(out_dir, f"{stem}.svg")
+    return preferred if preferred in svgs else svgs[0]
 
 
 def handle_snap_to_grid(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -246,14 +265,14 @@ def handle_get_schematic_view_region(
                     "message": f"SVG export failed: {result.stderr}",
                 }
 
-            # kicad-cli names the file after the schematic
-            svg_files = [f for f in os.listdir(tmp_dir) if f.endswith(".svg")]
-            if not svg_files:
+            # kicad-cli names the file after the schematic; for a multi-sheet
+            # schematic it writes one SVG per sheet, so select the root sheet.
+            svg_output = _pick_root_svg(tmp_dir, schematic_path)
+            if not svg_output:
                 return {
                     "success": False,
                     "message": "kicad-cli produced no SVG output",
                 }
-            svg_output = os.path.join(tmp_dir, svg_files[0])
 
             import xml.etree.ElementTree as ET
 
@@ -328,20 +347,25 @@ def handle_get_schematic_view(iface: "KiCADInterface", params: Dict[str, Any]) -
             }
 
         fmt = params.get("format", "png")
-        width = params.get("width", 1200)
-        height = params.get("height", 900)
+        width = int(params.get("width", 1200))
+        height = int(params.get("height", 900))
+
+        # Resolve kicad-cli the same way the region exporter does: PATH first,
+        # then platform bundle locations (e.g. KiCad.app/Contents/MacOS on
+        # macOS, where kicad-cli is not on PATH).
+        kicad_cli = iface.design_rule_commands._find_kicad_cli()
+        if not kicad_cli:
+            return {"success": False, "message": "kicad-cli not found"}
 
         # Step 1: Export schematic to SVG via kicad-cli
         with tempfile.TemporaryDirectory() as tmpdir:
-            svg_path = os.path.join(tmpdir, "schematic.svg")
             cmd = [
-                "kicad-cli",
+                kicad_cli,
                 "sch",
                 "export",
                 "svg",
                 "--output",
                 tmpdir,
-                "--no-background-color",
                 schematic_path,
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -352,16 +376,14 @@ def handle_get_schematic_view(iface: "KiCADInterface", params: Dict[str, Any]) -
                     "message": f"kicad-cli SVG export failed: {result.stderr}",
                 }
 
-            # kicad-cli may name the file after the schematic, find it
-            import glob
-
-            svg_files = glob.glob(os.path.join(tmpdir, "*.svg"))
-            if not svg_files:
+            # kicad-cli names the file after the schematic; for a multi-sheet
+            # schematic it writes one SVG per sheet, so select the root sheet.
+            svg_path = _pick_root_svg(tmpdir, schematic_path)
+            if not svg_path:
                 return {
                     "success": False,
                     "message": "No SVG file produced by kicad-cli",
                 }
-            svg_path = svg_files[0]
 
             if fmt == "svg":
                 with open(svg_path, "r", encoding="utf-8") as f:
@@ -392,8 +414,6 @@ def handle_get_schematic_view(iface: "KiCADInterface", params: Dict[str, Any]) -
                 "height": height,
             }
 
-    except FileNotFoundError:
-        return {"success": False, "message": "kicad-cli not found in PATH"}
     except Exception as e:
         logger.error(f"Error getting schematic view: {e}")
         import traceback

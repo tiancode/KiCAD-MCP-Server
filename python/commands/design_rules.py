@@ -442,48 +442,10 @@ class DesignRuleCommands:
             }
 
     def _find_kicad_cli(self) -> Optional[str]:
-        """Find kicad-cli executable"""
-        import platform
-        import shutil
+        """Find kicad-cli executable (see utils.kicad_cli.find_kicad_cli)."""
+        from utils.kicad_cli import find_kicad_cli
 
-        # Try system PATH first
-        cli_name = "kicad-cli.exe" if platform.system() == "Windows" else "kicad-cli"
-        cli_path = shutil.which(cli_name)
-        if cli_path:
-            return cli_path
-
-        # Try common installation paths (version-specific)
-        if platform.system() == "Windows":
-            common_paths = [
-                r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
-                r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
-                r"C:\Program Files\KiCad\8.0\bin\kicad-cli.exe",
-                r"C:\Program Files (x86)\KiCad\10.0\bin\kicad-cli.exe",
-                r"C:\Program Files (x86)\KiCad\9.0\bin\kicad-cli.exe",
-                r"C:\Program Files (x86)\KiCad\8.0\bin\kicad-cli.exe",
-                r"C:\Program Files\KiCad\bin\kicad-cli.exe",
-            ]
-            for path in common_paths:
-                if os.path.exists(path):
-                    return path
-        elif platform.system() == "Darwin":  # macOS
-            common_paths = [
-                "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
-                "/usr/local/bin/kicad-cli",
-            ]
-            for path in common_paths:
-                if os.path.exists(path):
-                    return path
-        else:  # Linux
-            common_paths = [
-                "/usr/bin/kicad-cli",
-                "/usr/local/bin/kicad-cli",
-            ]
-            for path in common_paths:
-                if os.path.exists(path):
-                    return path
-
-        return None
+        return find_kicad_cli()
 
     def get_drc_violations(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
