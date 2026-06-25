@@ -15,6 +15,27 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_global_sym_lib_table(monkeypatch):
+    """Keep these tests hermetic regardless of the host's KiCad install.
+
+    ``DynamicSymbolLoader.find_library_file`` consults the user-global
+    sym-lib-table (``~/.config/kicad`` / ``~/Library/Preferences/kicad`` /
+    ``%APPDATA%/kicad``) *before* the bundled-library lookup that each test
+    monkeypatches via ``find_kicad_symbol_libraries``.  On any machine with
+    KiCad installed (developer laptop or CI runner) that global table
+    resolves ``Device:R`` from the real system libraries — so a test that
+    points the loader at an empty dir still "finds" the symbol and the
+    assertions about ``missing`` / ``refreshed`` flip.  Stub the global-table
+    candidate list to empty so resolution only ever uses each test's
+    controlled ``find_kicad_symbol_libraries``.
+    """
+    monkeypatch.setattr(
+        "commands.dynamic_symbol_loader.DynamicSymbolLoader._global_sym_lib_table_paths",
+        lambda self: [],
+    )
+
+
 # A minimal .kicad_sym containing one symbol with one easily-identifiable
 # property (Description) — the test mutates this to simulate a library upgrade.
 _LIB_FRESH = """\

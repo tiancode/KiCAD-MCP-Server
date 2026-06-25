@@ -51,7 +51,8 @@ def _dump(data: list) -> str:
 
 def _make_sch(sym_extra: str = "", wires: str = "") -> list:
     """Build a minimal schematic sexpdata with one Q1 symbol."""
-    text = textwrap.dedent(f"""\
+    text = textwrap.dedent(
+        f"""\
         (kicad_sch (version 20250114) (generator "test")
           (lib_symbols
             (symbol "Transistor_BJT:MMBT3904"
@@ -73,7 +74,8 @@ def _make_sch(sym_extra: str = "", wires: str = "") -> list:
           )
           {wires}
         )
-    """)
+    """
+    )
     return _parse(text)
 
 
@@ -194,15 +196,12 @@ def test_rotate_handler_no_crash(tmp_path):
 
     # Stub heavy imports before loading kicad_interface. Save and restore
     # sys.modules state so we don't pollute already-imported real modules
-    # (notably schemas.tool_schemas, whose TOOL_SCHEMAS dict is shared across
-    # the test session).
+    # shared across the test session.
     _stub_modnames = (
         "pcbnew",
         "skip",
         "resources",
-        "schemas",
         "resources.resource_definitions",
-        "schemas.tool_schemas",
         "annotations",
     )
     _saved_modules = {n: sys.modules.get(n) for n in _stub_modnames}
@@ -211,7 +210,6 @@ def test_rotate_handler_no_crash(tmp_path):
             sys.modules[modname] = MagicMock()
         sys.modules["resources.resource_definitions"].RESOURCE_DEFINITIONS = {}
         sys.modules["resources.resource_definitions"].handle_resource_read = MagicMock()
-        sys.modules["schemas.tool_schemas"].TOOL_SCHEMAS = []
 
         _pcbnew = sys.modules["pcbnew"]
         _pcbnew.__file__ = "/fake/pcbnew.so"
@@ -233,7 +231,8 @@ def test_rotate_handler_no_crash(tmp_path):
 
     # Write a minimal schematic file
     sch_path = str(tmp_path / "test.kicad_sch")
-    sch_content = textwrap.dedent("""\
+    sch_content = textwrap.dedent(
+        """\
         (kicad_sch (version 20250114) (generator "test")
           (lib_symbols
             (symbol "Device:R"
@@ -252,7 +251,8 @@ def test_rotate_handler_no_crash(tmp_path):
             (property "Value" "10k" (at 100 100 0))
           )
         )
-    """)
+    """
+    )
     with open(sch_path, "w") as f:
         f.write(sch_content)
 

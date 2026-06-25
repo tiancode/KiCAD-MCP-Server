@@ -64,47 +64,6 @@ def _make_schematic(*wires: Any) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-class TestSchema:
-    """Verify the get_wire_connections tool schema is present and well-formed."""
-
-    def test_schema_registered(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        assert "get_wire_connections" in TOOL_SCHEMAS
-
-    def test_schema_required_fields(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        schema = TOOL_SCHEMAS["get_wire_connections"]
-        required = schema["inputSchema"]["required"]
-        assert "schematicPath" in required
-        # x, y and reference, pin are all optional (dual-mode input)
-        assert "x" not in required
-        assert "y" not in required
-
-    def test_schema_optional_fields(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        props = TOOL_SCHEMAS["get_wire_connections"]["inputSchema"]["properties"]
-        assert "reference" in props
-        assert "pin" in props
-        assert "x" in props
-        assert "y" in props
-
-    def test_get_pin_net_not_registered(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        assert "get_pin_net" not in TOOL_SCHEMAS
-
-    def test_schema_has_title_and_description(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        schema = TOOL_SCHEMAS["get_wire_connections"]
-        assert schema.get("title")
-        assert schema.get("description")
-
-
 # ---------------------------------------------------------------------------
 # TestHandlerDispatch
 # ---------------------------------------------------------------------------

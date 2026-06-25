@@ -13,6 +13,8 @@ with the geometric expectation are marked xfail with a "PR #88 regression
 candidate" annotation.
 """
 
+from __future__ import annotations
+
 import importlib.util
 import math
 import os
@@ -72,7 +74,8 @@ def _make_sch_text(rotation: float, mirror: str | None) -> str:
     elif mirror == "y":
         mirror_line = "(mirror y)"
 
-    return textwrap.dedent(f"""\
+    return textwrap.dedent(
+        f"""\
         (kicad_sch (version 20250114) (generator "test")
           (lib_symbols
             (symbol "Device:R" (pin_numbers hide) (pin_names (offset 0))
@@ -94,7 +97,8 @@ def _make_sch_text(rotation: float, mirror: str | None) -> str:
             (property "Value" "10k" (at {SYMBOL_X} {SYMBOL_Y} 0))
           )
         )
-    """)
+    """
+    )
 
 
 def _write_sch(tmp_path: Path, rotation: float, mirror: str | None) -> Path:

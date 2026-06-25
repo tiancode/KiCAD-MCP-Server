@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 #   pin "2"  at ( 1.27,  0)   → wire connects on the right
 # ---------------------------------------------------------------------------
 
-_LIB_SYMBOLS_BLOCK = textwrap.dedent("""\
+_LIB_SYMBOLS_BLOCK = textwrap.dedent(
+    """\
       (lib_symbols
         (symbol "TestLib:R"
           (symbol "TestLib:R_1_1"
@@ -51,7 +52,8 @@ _LIB_SYMBOLS_BLOCK = textwrap.dedent("""\
           )
         )
       )
-""")
+"""
+)
 
 _SCH_WITH_TESTLIB_R = "(kicad_sch (version 20231120)\n" + _LIB_SYMBOLS_BLOCK + ")\n"
 

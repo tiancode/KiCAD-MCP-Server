@@ -36,9 +36,8 @@ from annotations import AnnotationLoader
 from board_persistence import BoardPersistenceMixin
 from resources.resource_definitions import RESOURCE_DEFINITIONS, handle_resource_read
 
-# Import tool schemas, resource definitions, and IPC API annotations
-from schemas.tool_schemas import TOOL_SCHEMAS
-
+# The TypeScript layer (src/) is the single source of truth for the MCP tool
+# surface; the Python standalone tools/list builds entries from IPC annotations.
 _annotation_loader = AnnotationLoader()
 
 # Configure logging.
@@ -2612,33 +2611,25 @@ def main() -> None:
                         # Return list of available tools with proper schemas
                         tools = []
                         for cmd_name in interface.command_routes.keys():
-                            if cmd_name in TOOL_SCHEMAS:
-                                # Enrich the existing schema with IPC annotation data
-                                # (adds description/blocking hints where the schema lacks them)
-                                tool_def = _annotation_loader.enrich_schema(
-                                    cmd_name, TOOL_SCHEMAS[cmd_name]
-                                )
-                                tools.append(tool_def)
-                            else:
-                                # Build a best-effort schema from IPC annotations
-                                ann_desc = _annotation_loader.description(cmd_name)
-                                if ann_desc:
-                                    logger.debug(f"Using IPC annotation for tool: {cmd_name}")
-                                else:
-                                    logger.warning(f"No schema or annotation for tool: {cmd_name}")
-                                tools.append(
-                                    _annotation_loader.enrich_schema(
-                                        cmd_name,
-                                        {
-                                            "name": cmd_name,
-                                            "description": ann_desc or f"KiCAD command: {cmd_name}",
-                                            "inputSchema": {
-                                                "type": "object",
-                                                "properties": {},
-                                            },
+                            # The TypeScript MCP server owns the authoritative tool
+                            # schemas; this standalone path builds a best-effort
+                            # entry (name + description) from the IPC annotations.
+                            ann_desc = _annotation_loader.description(cmd_name)
+                            if not ann_desc:
+                                logger.warning(f"No annotation for tool: {cmd_name}")
+                            tools.append(
+                                _annotation_loader.enrich_schema(
+                                    cmd_name,
+                                    {
+                                        "name": cmd_name,
+                                        "description": ann_desc or f"KiCAD command: {cmd_name}",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {},
                                         },
-                                    )
+                                    },
                                 )
+                            )
 
                         logger.info(f"Returning {len(tools)} tools")
                         response = {

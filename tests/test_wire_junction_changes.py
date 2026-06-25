@@ -53,50 +53,6 @@ def _find_elements(sch_data: Any, tag: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-class TestSchemas:
-    """Verify tool_schemas.py reflects the new API."""
-
-    @pytest.fixture(autouse=True)
-    def load_schemas(self) -> Any:
-        from schemas.tool_schemas import SCHEMATIC_TOOLS
-
-        self.tools = {t["name"]: t for t in SCHEMATIC_TOOLS}
-
-    def test_add_schematic_wire_has_waypoints(self) -> None:
-        schema = self.tools["add_schematic_wire"]["inputSchema"]
-        assert "waypoints" in schema["properties"], "waypoints must be a property"
-        assert "waypoints" in schema["required"]
-
-    def test_add_schematic_wire_has_schematic_path(self) -> None:
-        schema = self.tools["add_schematic_wire"]["inputSchema"]
-        assert "schematicPath" in schema["properties"]
-        assert "schematicPath" in schema["required"]
-
-    def test_add_schematic_wire_has_snap_params(self) -> None:
-        schema = self.tools["add_schematic_wire"]["inputSchema"]
-        props = schema["properties"]
-        assert "snapToPins" in props
-        assert props["snapToPins"]["type"] == "boolean"
-        assert "snapTolerance" in props
-        assert props["snapTolerance"]["type"] == "number"
-
-    def test_add_schematic_wire_no_old_point_params(self) -> None:
-        schema = self.tools["add_schematic_wire"]["inputSchema"]
-        props = schema["properties"]
-        assert "startPoint" not in props, "startPoint should be removed"
-        assert "endPoint" not in props, "endPoint should be removed"
-
-    def test_add_schematic_connection_removed(self) -> None:
-        assert (
-            "add_schematic_connection" not in self.tools
-        ), "add_schematic_connection must not appear in SCHEMATIC_TOOLS"
-
-    def test_add_schematic_junction_removed(self) -> None:
-        assert (
-            "add_schematic_junction" not in self.tools
-        ), "add_schematic_junction was removed; junctions are now managed automatically"
-
-
 # ---------------------------------------------------------------------------
 # 2. Handler dispatch tests
 # ---------------------------------------------------------------------------
