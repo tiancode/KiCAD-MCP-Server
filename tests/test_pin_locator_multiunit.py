@@ -297,7 +297,11 @@ class TestSingleUnitUnchanged:
     (pin "1" (uuid "%s"))
     (pin "2" (uuid "%s"))
     (instances (project "t" (path "/" (reference "R1") (unit 1))))
-  )""" % (uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+  )""" % (
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+        )
         idx = content.rfind(")")
         content = content[:idx] + "\n" + r + "\n)"
         path = Path(tempfile.mkdtemp()) / "single.kicad_sch"

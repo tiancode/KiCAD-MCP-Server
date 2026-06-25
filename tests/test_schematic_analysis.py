@@ -180,11 +180,13 @@ class TestSexpParsers:
     """Test S-expression parsing functions with synthetic data."""
 
     def test_parse_wires_basic(self) -> None:
-        sexp = sexpdata.loads("""(kicad_sch
+        sexp = sexpdata.loads(
+            """(kicad_sch
             (wire (pts (xy 10 20) (xy 30 40))
                 (stroke (width 0) (type default))
                 (uuid "abc"))
-        )""")
+        )"""
+        )
         wires = _parse_wires(sexp)
         assert len(wires) == 1
         assert wires[0]["start"] == (10.0, 20.0)
@@ -195,10 +197,12 @@ class TestSexpParsers:
         assert _parse_wires(sexp) == []
 
     def test_parse_labels_both_types(self) -> None:
-        sexp = sexpdata.loads("""(kicad_sch
+        sexp = sexpdata.loads(
+            """(kicad_sch
             (label "VCC" (at 10 20 0))
             (global_label "GND" (at 30 40 0))
-        )""")
+        )"""
+        )
         labels = _parse_labels(sexp)
         assert len(labels) == 2
         assert labels[0]["name"] == "VCC"
@@ -207,12 +211,14 @@ class TestSexpParsers:
         assert labels[1]["type"] == "global_label"
 
     def test_parse_symbols(self) -> None:
-        sexp = sexpdata.loads("""(kicad_sch
+        sexp = sexpdata.loads(
+            """(kicad_sch
             (symbol (lib_id "Device:R") (at 100 100 0)
                 (property "Reference" "R1" (at 0 0 0)))
             (symbol (lib_id "power:VCC") (at 50 50 0)
                 (property "Reference" "#PWR01" (at 0 0 0)))
-        )""")
+        )"""
+        )
         symbols = _parse_symbols(sexp)
         assert len(symbols) == 2
         assert symbols[0]["reference"] == "R1"
@@ -378,11 +384,14 @@ class TestIntegrationFindWiresCrossingSymbols:
         # LED D1 at (100,100) → pin 1 at (96.19, 100), pin 2 at (103.81, 100)
         # Vertical wire from (100, 95) to (100, 105) crosses through the body
         # without touching either horizontal pin
-        extra = _make_led_sexp("D1", 100, 100) + """
+        extra = (
+            _make_led_sexp("D1", 100, 100)
+            + """
         (wire (pts (xy 100 95) (xy 100 105))
             (stroke (width 0) (type default))
             (uuid "w1"))
         """
+        )
         tmp = _make_temp_schematic(extra)
         result = find_wires_crossing_symbols(tmp)
         d1_collisions = [c for c in result if c["component"]["reference"] == "D1"]
@@ -424,11 +433,14 @@ class TestIntegrationFindWiresCrossingSymbols:
         treated any wire touching a pin as a valid connection."""
         # LED D1 at (100,100) → pin 1 at (96.19, 100), pin 2 at (103.81, 100)
         # Wire starts exactly at pin 1 and extends through the body to the right
-        extra = _make_led_sexp("D1", 100, 100) + """
+        extra = (
+            _make_led_sexp("D1", 100, 100)
+            + """
         (wire (pts (xy 96.19 100) (xy 110 100))
             (stroke (width 0) (type default))
             (uuid "w-through"))
         """
+        )
         tmp = _make_temp_schematic(extra)
         result = find_wires_crossing_symbols(tmp)
         d1_crossings = [c for c in result if c["component"]["reference"] == "D1"]
@@ -441,11 +453,14 @@ class TestIntegrationFindWiresCrossingSymbols:
         is a valid connection and must NOT be flagged."""
         # LED D1 at (100,100) → pin 1 at (96.19, 100)
         # Wire comes from the left and terminates at pin 1
-        extra = _make_led_sexp("D1", 100, 100) + """
+        extra = (
+            _make_led_sexp("D1", 100, 100)
+            + """
         (wire (pts (xy 80 100) (xy 96.19 100))
             (stroke (width 0) (type default))
             (uuid "w-valid"))
         """
+        )
         tmp = _make_temp_schematic(extra)
         result = find_wires_crossing_symbols(tmp)
         d1_crossings = [c for c in result if c["component"]["reference"] == "D1"]
@@ -618,7 +633,8 @@ class TestExtractLibSymbols:
     """Test _extract_lib_symbols helper."""
 
     def test_extracts_pins_from_lib_symbols(self) -> None:
-        sexp = sexpdata.loads("""(kicad_sch
+        sexp = sexpdata.loads(
+            """(kicad_sch
             (lib_symbols
                 (symbol "Device:R"
                     (symbol "Device:R_0_1"
@@ -629,7 +645,8 @@ class TestExtractLibSymbols:
                             (name "~" (effects (font (size 1.27 1.27))))
                             (number "2" (effects (font (size 1.27 1.27)))))))
             )
-        )""")
+        )"""
+        )
         result = _extract_lib_symbols(sexp)
         assert "Device:R" in result
         pins = result["Device:R"]["pins"]
@@ -643,15 +660,18 @@ class TestExtractLibSymbols:
         assert result == {}
 
     def test_no_lib_symbols_section(self) -> None:
-        sexp = sexpdata.loads("""(kicad_sch
+        sexp = sexpdata.loads(
+            """(kicad_sch
             (wire (pts (xy 0 0) (xy 10 10)))
-        )""")
+        )"""
+        )
         result = _extract_lib_symbols(sexp)
         assert result == {}
 
     def test_extract_includes_graphics_points(self) -> None:
         """_extract_lib_symbols should return graphics_points from body shapes."""
-        sexp = sexpdata.loads("""(kicad_sch
+        sexp = sexpdata.loads(
+            """(kicad_sch
             (lib_symbols
                 (symbol "Device:R"
                     (symbol "Device:R_0_1"
@@ -666,7 +686,8 @@ class TestExtractLibSymbols:
                             (name "~" (effects (font (size 1.27 1.27))))
                             (number "2" (effects (font (size 1.27 1.27)))))))
             )
-        )""")
+        )"""
+        )
         result = _extract_lib_symbols(sexp)
         lib_data = result["Device:R"]
         assert "graphics_points" in lib_data
@@ -690,55 +711,65 @@ class TestParseLibSymbolGraphics:
     """Test graphics extraction from lib_symbol definitions."""
 
     def test_rectangle(self) -> None:
-        sexp = sexpdata.loads("""(symbol "Device:R"
+        sexp = sexpdata.loads(
+            """(symbol "Device:R"
             (symbol "Device:R_0_1"
                 (rectangle (start -1.016 -2.54) (end 1.016 2.54)
                     (stroke (width 0.254) (type default))
-                    (fill (type none)))))""")
+                    (fill (type none)))))"""
+        )
         pts = _parse_lib_symbol_graphics(sexp)
         assert len(pts) == 2
         assert (-1.016, -2.54) in pts
         assert (1.016, 2.54) in pts
 
     def test_polyline(self) -> None:
-        sexp = sexpdata.loads("""(symbol "Device:C"
+        sexp = sexpdata.loads(
+            """(symbol "Device:C"
             (symbol "Device:C_0_1"
                 (polyline
                     (pts (xy -2.032 -0.762) (xy 2.032 -0.762))
                     (stroke (width 0.508) (type default))
-                    (fill (type none)))))""")
+                    (fill (type none)))))"""
+        )
         pts = _parse_lib_symbol_graphics(sexp)
         assert (-2.032, -0.762) in pts
         assert (2.032, -0.762) in pts
 
     def test_circle(self) -> None:
-        sexp = sexpdata.loads("""(symbol "Test:Circle"
+        sexp = sexpdata.loads(
+            """(symbol "Test:Circle"
             (symbol "Test:Circle_0_1"
                 (circle (center 0 0) (radius 5)
                     (stroke (width 0.254) (type default))
-                    (fill (type none)))))""")
+                    (fill (type none)))))"""
+        )
         pts = _parse_lib_symbol_graphics(sexp)
         assert len(pts) == 2
         assert (-5.0, -5.0) in pts
         assert (5.0, 5.0) in pts
 
     def test_arc(self) -> None:
-        sexp = sexpdata.loads("""(symbol "Test:Arc"
+        sexp = sexpdata.loads(
+            """(symbol "Test:Arc"
             (symbol "Test:Arc_0_1"
                 (arc (start 1 0) (mid 0 1) (end -1 0)
                     (stroke (width 0.254) (type default))
-                    (fill (type none)))))""")
+                    (fill (type none)))))"""
+        )
         pts = _parse_lib_symbol_graphics(sexp)
         assert (1.0, 0.0) in pts
         assert (0.0, 1.0) in pts
         assert (-1.0, 0.0) in pts
 
     def test_no_graphics(self) -> None:
-        sexp = sexpdata.loads("""(symbol "Test:Empty"
+        sexp = sexpdata.loads(
+            """(symbol "Test:Empty"
             (symbol "Test:Empty_1_1"
                 (pin passive line (at 0 0 0) (length 1.27)
                     (name "~" (effects (font (size 1.27 1.27))))
-                    (number "1" (effects (font (size 1.27 1.27)))))))""")
+                    (number "1" (effects (font (size 1.27 1.27)))))))"""
+        )
         pts = _parse_lib_symbol_graphics(sexp)
         assert pts == []
 
