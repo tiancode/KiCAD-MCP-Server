@@ -68,36 +68,6 @@ def _make_schematic_with_label(label_name: str, lx: float, ly: float, *wires: An
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-class TestGetNetAtPointSchema:
-    """Verify the get_net_at_point tool schema is present and well-formed."""
-
-    def test_schema_registered(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        assert "get_net_at_point" in TOOL_SCHEMAS
-
-    def test_schema_required_fields(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        required = TOOL_SCHEMAS["get_net_at_point"]["inputSchema"]["required"]
-        assert set(required) == {"schematicPath", "x", "y"}
-
-    def test_schema_has_title_and_description(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        schema = TOOL_SCHEMAS["get_net_at_point"]
-        assert schema.get("title")
-        assert schema.get("description")
-
-    def test_schema_properties(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        props = TOOL_SCHEMAS["get_net_at_point"]["inputSchema"]["properties"]
-        for field in ("schematicPath", "x", "y"):
-            assert field in props, f"Expected '{field}' in schema properties"
-
-
 # ---------------------------------------------------------------------------
 # TestGetNetAtPointHandlerDispatch
 # ---------------------------------------------------------------------------

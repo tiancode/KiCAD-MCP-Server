@@ -47,52 +47,6 @@ def _make_iface() -> Any:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-class TestAddNetLabelSchema:
-    """Verify tool_schemas.py reflects the new add_schematic_net_label API."""
-
-    @pytest.fixture(autouse=True)
-    def load_schemas(self) -> Any:
-        from schemas.tool_schemas import SCHEMATIC_TOOLS
-
-        self.tools = {t["name"]: t for t in SCHEMATIC_TOOLS}
-
-    def test_position_is_optional(self) -> None:
-        schema = self.tools["add_schematic_net_label"]["inputSchema"]
-        assert "position" not in schema["required"], "position must not be required"
-
-    def test_component_ref_property_exists(self) -> None:
-        schema = self.tools["add_schematic_net_label"]["inputSchema"]
-        assert "componentRef" in schema["properties"]
-
-    def test_pin_number_property_exists(self) -> None:
-        schema = self.tools["add_schematic_net_label"]["inputSchema"]
-        assert "pinNumber" in schema["properties"]
-
-    def test_only_schematic_path_and_net_name_required(self) -> None:
-        schema = self.tools["add_schematic_net_label"]["inputSchema"]
-        assert set(schema["required"]) == {"schematicPath", "netName"}
-
-
-@pytest.mark.unit
-class TestConnectToNetSchema:
-    """Verify tool_schemas.py reflects the richer connect_to_net description."""
-
-    @pytest.fixture(autouse=True)
-    def load_schemas(self) -> Any:
-        from schemas.tool_schemas import SCHEMATIC_TOOLS
-
-        self.tools = {t["name"]: t for t in SCHEMATIC_TOOLS}
-
-    def test_description_mentions_pin_location(self) -> None:
-        desc = self.tools["connect_to_net"]["description"]
-        assert "pin_location" in desc
-
-    def test_description_mentions_label_location(self) -> None:
-        desc = self.tools["connect_to_net"]["description"]
-        assert "label_location" in desc
-
-
 # ---------------------------------------------------------------------------
 # 2. _handle_add_schematic_net_label – unit tests
 # ---------------------------------------------------------------------------

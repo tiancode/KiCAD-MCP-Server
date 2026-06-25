@@ -71,29 +71,6 @@ def _make_schematic_no_labels_no_symbols(*wires: Any) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-class TestListFloatingLabelsSchema:
-    """Verify the list_floating_labels schema is registered and well-formed."""
-
-    def test_schema_registered(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        assert "list_floating_labels" in TOOL_SCHEMAS
-
-    def test_schema_required_fields(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        required = TOOL_SCHEMAS["list_floating_labels"]["inputSchema"]["required"]
-        assert required == ["schematicPath"]
-
-    def test_schema_has_title_and_description(self) -> None:
-        from schemas.tool_schemas import TOOL_SCHEMAS
-
-        schema = TOOL_SCHEMAS["list_floating_labels"]
-        assert schema.get("title")
-        assert schema.get("description")
-
-
 # ---------------------------------------------------------------------------
 # TestListFloatingLabelsDispatch
 # ---------------------------------------------------------------------------

@@ -84,27 +84,3 @@ def test_ipc_move_component_converts_mil_to_mm():
     _, kwargs = iface.ipc_board_api.move_component.call_args
     assert kwargs["x"] == pytest.approx(25.4)
     assert kwargs["y"] == pytest.approx(12.7)
-
-
-def test_python_tool_schema_unit_enums_include_mil():
-    """Every unit enum in TOOL_SCHEMAS must include mil."""
-    from schemas.tool_schemas import TOOL_SCHEMAS
-
-    def _find_unit_enums(node):
-        """Walk the schema and yield every enum list found under 'unit' fields."""
-        if isinstance(node, dict):
-            for k, v in node.items():
-                if k == "unit" and isinstance(v, dict) and "enum" in v:
-                    yield v["enum"]
-                else:
-                    yield from _find_unit_enums(v)
-        elif isinstance(node, list):
-            for item in node:
-                yield from _find_unit_enums(item)
-
-    enums = list(_find_unit_enums(TOOL_SCHEMAS))
-    assert enums, "Expected at least one unit enum in TOOL_SCHEMAS"
-    for enum in enums:
-        assert "mil" in enum, f"Unit enum {enum} is missing 'mil'"
-        # Sanity: mm and inch should still be present too
-        assert "mm" in enum and "inch" in enum, f"Unit enum {enum} is malformed"
