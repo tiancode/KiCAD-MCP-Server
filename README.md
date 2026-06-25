@@ -353,9 +353,6 @@ The server provides 174 tools, each registered directly as an MCP tool -- just a
 - `edit_component` - Modify component properties
 - `find_component` - Search by reference or value
 - `get_component_properties` - Query component details
-- `add_component_annotation` - Add annotation/comment
-- `group_components` - Group multiple components
-- `replace_component` - Replace with different footprint
 - `get_component_pads` - Get all pad information
 - `get_component_list` - List all placed components
 - `get_pad_position` - Get precise pad position

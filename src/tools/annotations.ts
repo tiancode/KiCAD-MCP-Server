@@ -39,7 +39,6 @@ const READ_ONLY_EXACT = new Set<string>(["run_drc", "run_erc", "hit_test"]);
 /**
  * Tools that delete or overwrite existing data.  `delete_*` / `remove_*` are
  * caught by prefix; these are the destructive ops that aren't:
- *   - replace_component swaps a footprint in place.
  *   - create_project / create_schematic write their target .kicad_pcb /
  *     .kicad_sch with NO existence guard (commands/project.py SaveBoard +
  *     commands/schematic.py shutil.copy), so a name collision silently
@@ -48,7 +47,6 @@ const READ_ONLY_EXACT = new Set<string>(["run_drc", "run_erc", "hit_test"]);
  *   - autoroute imports the SES and overwrites all existing routing.
  */
 const DESTRUCTIVE_EXACT = new Set<string>([
-  "replace_component",
   "create_project",
   "create_schematic",
   "autoroute",
