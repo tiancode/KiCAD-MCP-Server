@@ -40,11 +40,10 @@ class ViaMixin:
             # Create via
             via = pcbnew.PCB_VIA(self.board)
 
-            # Set position
+            # Set position — the MCP schema marks unit optional, so default mm
+            unit = position.get("unit", "mm")
             scale = (
-                1000000
-                if position["unit"] == "mm"
-                else (25400 if position["unit"] == "mil" else 25400000)
+                1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
             )  # mm, mil, or inch to nm
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
@@ -84,7 +83,7 @@ class ViaMixin:
                     "position": {
                         "x": position["x"],
                         "y": position["y"],
-                        "unit": position["unit"],
+                        "unit": unit,
                     },
                     "size": via.GetWidth(pcbnew.F_Cu) / 1000000,
                     "drill": via.GetDrill() / 1000000,

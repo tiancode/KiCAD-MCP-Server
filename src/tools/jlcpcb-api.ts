@@ -50,6 +50,7 @@ An existing non-empty DB is kept; pass force=true to re-download.`,
               `The JLCSearch path needs no credentials but is slow/flaky; for a reliable, fuller catalog run scripts/download_jlcpcb.py instead.`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -176,6 +177,7 @@ COST — JLCPCB assembly economics, apply unless the user says otherwise:
               `Make sure you've downloaded the database first using download_jlcpcb_database.`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -232,6 +234,7 @@ COST — JLCPCB assembly economics, apply unless the user says otherwise:
               `Make sure you've downloaded the JLCPCB database first.`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -325,6 +328,7 @@ Saves to <output_dir>/<lcsc>.pdf (default: the kicad-mcp data dir's datasheets/ 
               `Run download_jlcpcb_database first to populate the database.`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -384,6 +388,7 @@ Useful for cost optimization and finding alternatives when parts are out of stoc
             text: `Failed to find alternatives: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );

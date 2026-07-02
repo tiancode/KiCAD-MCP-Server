@@ -82,9 +82,9 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     "create_symbol",
     "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_symbol_library afterwards so KiCAD finds it. " +
       "Pin positions are the wire endpoints; the body is drawn between them. " +
-      "Tips (grid & pin length 2.54 mm; body spans ±2.54–5.08 mm): " +
-      "left pins at.x=body_left−length angle=0; right at.x=body_right+length angle=180; " +
-      "top at.y=body_top+length angle=270; bottom at.y=body_bottom−length angle=90.",
+      "Grid & pin length 2.54 mm; body ±2.54–5.08 mm: " +
+      "left pins x=body_left−length angle=0; right x=body_right+length angle=180; " +
+      "top y=body_top+length angle=270; bottom y=body_bottom−length angle=90.",
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file (created if missing)"),
       name: z.string().describe("Symbol name, e.g. 'TMC2209', 'MyOpAmp'"),

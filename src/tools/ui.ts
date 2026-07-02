@@ -23,7 +23,7 @@ export function registerUITools(server: McpServer, callKicadScript: Function) {
   // Check if KiCAD UI is running
   server.tool(
     "check_kicad_ui",
-    "Check if KiCAD UI is currently running. Board/IPC operations require the editor to be open, and the server does not auto-launch it for those operations: when a board op needs the editor and it's closed, ask the user to open it and wait for confirmation rather than launching it or falling back to file-only edits. (Opening or creating a project is a separate, explicit action that may launch KiCAD by default.)",
+    "Check if KiCAD UI is currently running. Board/IPC operations need the PCB editor open with the board loaded; the server first tries to heal that itself (auto-launch KiCAD / auto-open the board — opt out with KICAD_AUTO_LAUNCH=false). If a call still returns needs_pcb_editor, ask the user to open the board and wait — do not fall back to file-only edits.",
     {},
     passthrough("check_kicad_ui"),
   );

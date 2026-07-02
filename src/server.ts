@@ -43,7 +43,6 @@ import { slimToolsList } from "./tools/schema-slim.js";
 import { registerProjectResources } from "./resources/project.js";
 import { registerBoardResources } from "./resources/board.js";
 import { registerComponentResources } from "./resources/component.js";
-import { registerLibraryResources } from "./resources/library.js";
 
 // Import prompt registration functions
 import { registerComponentPrompts } from "./prompts/component.js";
@@ -187,11 +186,13 @@ export class KiCADMcpServer {
     const annotatedServer = withToolAnnotations(this.server);
     for (const register of toolRegistrars) register(annotatedServer, cb);
 
+    // Library resources were removed: every one dispatched a Python command
+    // that never existed. Footprint/symbol library data is served by the
+    // list_libraries / search_symbols / get_footprint_info tool family.
     const resourceRegistrars = [
       registerProjectResources,
       registerBoardResources,
       registerComponentResources,
-      registerLibraryResources,
     ];
     for (const register of resourceRegistrars) register(this.server, cb);
 
@@ -413,8 +414,12 @@ export class KiCADMcpServer {
    * scripting is not running" forever.
    */
   private async ensurePythonProcess(): Promise<void> {
-    if (this.pythonProcess) return;
+    // Check spawnInFlight BEFORE pythonProcess: spawnPythonProcess assigns
+    // this.pythonProcess long before READY/warm-up complete, so a caller that
+    // returned on the pythonProcess check alone would dispatch into a stdin
+    // loop that isn't live yet (and its response would race the warm-up).
     if (this.spawnInFlight) return this.spawnInFlight;
+    if (this.pythonProcess) return;
     this.spawnInFlight = this.spawnPythonProcess().finally(() => {
       this.spawnInFlight = null;
     });
@@ -698,7 +703,7 @@ export class KiCADMcpServer {
     // back up before queuing.  Awaited outside the queue Promise so a
     // respawn failure surfaces as a clean rejection instead of a hung
     // promise inside the queue handler.
-    if (!this.pythonProcess) {
+    if (!this.pythonProcess || this.spawnInFlight) {
       logger.info(`Python process is not running — respawning before dispatching '${command}'`);
       try {
         await this.ensurePythonProcess();
@@ -721,6 +726,9 @@ export class KiCADMcpServer {
       let commandTimeout = 30000; // Default 30 seconds
       const longRunningCommands = [
         "run_drc",
+        // run_erc spawns kicad-cli sch erc and pre-refreshes lib_symbols —
+        // like run_drc, unbounded by design size, so it gets the long bucket.
+        "run_erc",
         "export_gerber",
         "export_pdf",
         "export_3d",
@@ -738,7 +746,7 @@ export class KiCADMcpServer {
         // on Flatpak/NFS the very first time, then is fast forever after.
         "search_symbols",
         "list_symbol_libraries",
-        "list_symbols",
+        "list_library_symbols",
         // Downloads the JLCPCB catalog / fetches a part from EasyEDA over the
         // network — can exceed 30s.
         "download_jlcpcb_database",
@@ -943,6 +951,12 @@ export class KiCADMcpServer {
     // Get the next request
     const { request, resolve, reject } = this.requestQueue.shift()!;
 
+    // Declared outside the try so the catch can disarm it: once the timeout
+    // is armed, a synchronous throw (e.g. stdin.write on a just-died process)
+    // must not leave it ticking — it would fire later, kill the respawned
+    // worker, and clobber whatever unrelated request is in flight by then.
+    let timeoutHandle: NodeJS.Timeout | undefined;
+
     try {
       logger.debug(`Processing KiCAD command: ${request.command}`);
 
@@ -959,7 +973,7 @@ export class KiCADMcpServer {
 
       // Set a timeout (use command-specific timeout or default)
       const timeoutDuration = request.timeout || 30000;
-      const timeoutHandle = setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         logger.error(`Command timeout after ${timeoutDuration / 1000}s: ${request.command}`);
         logger.error(`Buffer contents: ${this.responseBuffer.substring(0, 200)}...`);
 
@@ -996,6 +1010,12 @@ export class KiCADMcpServer {
       this.pythonProcess?.stdin?.write(requestStr + "\n");
     } catch (error) {
       logger.error(`Error processing request: ${error}`);
+
+      // Disarm the timeout armed above — this request is being rejected
+      // right here, so its timer must not fire against a future request.
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
 
       // Reset processing flag
       this.processingRequest = false;

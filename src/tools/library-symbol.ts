@@ -39,6 +39,7 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: F
             text: `Failed to list symbol libraries: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -126,6 +127,7 @@ Returns symbol references that can be used directly in schematics.`,
             text: `Failed to search symbols: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -171,6 +173,7 @@ Returns symbol references that can be used directly in schematics.`,
             text: `Failed to list symbols in library ${args.library}: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -241,6 +244,7 @@ Returns symbol references that can be used directly in schematics.`,
             text: `Failed to get symbol info: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -282,6 +286,7 @@ Returns symbol references that can be used directly in schematics.`,
             text: `Failed to refresh symbol libraries: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -322,6 +327,7 @@ Returns symbol references that can be used directly in schematics.`,
             text: `Failed to refresh schematic lib_symbols: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
           },
         ],
+        isError: true,
       };
     },
   );

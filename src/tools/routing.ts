@@ -472,11 +472,11 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
   // Route pad to pad tool
   server.tool(
     "route_pad_to_pad",
-    "Insert ONE STRAIGHT trace segment between two pads (auto-detects the net, adds a via when the layers differ). " +
+    "Insert ONE STRAIGHT trace segment between two pads (auto-detects net; adds a via when layers differ). " +
       "NOT an autorouter — no obstacle avoidance (use autoroute for that). " +
-      "If the line would cross a third pad it REFUSES by default (success: false, hasObstacles: true, obstacle list); " +
-      "route around with multiple route_trace segments, or pass force: true and accept the DRC errors. " +
-      "The gate only checks OTHER PADS — still run_drc afterwards to catch crossings of traces/zones/board edge.",
+      "REFUSES if the line would cross a third pad (hasObstacles: true + obstacle list); " +
+      "route around with route_trace segments, or pass force: true. " +
+      "The gate only checks other pads — still run_drc to catch trace/zone/edge crossings.",
     {
       fromRef: z.string().describe("Reference of the source component (e.g. 'U2')"),
       fromPad: z

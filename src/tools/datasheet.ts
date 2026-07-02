@@ -59,6 +59,7 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Funct
             text: `Failed to enrich datasheets: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -95,6 +96,7 @@ Example: get_datasheet_url("C179739")
             text: `Invalid LCSC number: ${args.lcsc}`,
           },
         ],
+        isError: true,
       };
     },
   );

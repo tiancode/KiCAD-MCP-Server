@@ -385,6 +385,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
           content: [
             { type: "text", text: `SVG import failed: ${result.message || "Unknown error"}` },
           ],
+          isError: true,
         };
       }
     },

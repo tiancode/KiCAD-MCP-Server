@@ -48,6 +48,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
               text: `Failed to add wire: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -56,11 +57,11 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
   // Add net label
   server.tool(
     "add_schematic_net_label",
-    "Add a net label. KiCad connects a label to a pin ONLY when its coordinates match the pin endpoint exactly (≈0.1 µm IU precision — 0.01 mm off breaks it). " +
-      "Modes: (1) PREFERRED componentRef + pinNumber — snaps onto the exact pin endpoint; " +
-      "(2) position [x, y] — auto-snaps to any pin within snapTolerance mm (default 0.05) to absorb float near-misses; " +
-      "(3) position with snapTolerance: 0 — no snapping, for labels intentionally between pins. " +
-      "Response always reports connected_to_pin = {ref, pin} | null (verifies connectivity without ERC); when auto-snap fired it adds snapped_to_pin and requested_position.",
+    "Add a net label. KiCad connects a label to a pin ONLY at the exact pin endpoint (0.01 mm off breaks it). " +
+      "Modes: (1) PREFERRED componentRef + pinNumber — snaps to the pin; " +
+      "(2) position [x, y] — auto-snaps to any pin within snapTolerance mm (default 0.05); " +
+      "(3) snapTolerance: 0 — no snapping (labels between pins). " +
+      "Response reports connected_to_pin = {ref, pin} | null; auto-snap adds snapped_to_pin.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
@@ -651,6 +652,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: F
             text: `Failed to add hierarchical label: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );

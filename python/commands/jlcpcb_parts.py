@@ -65,8 +65,7 @@ class JLCPCBPartsManager:
         cursor = self.conn.cursor()
 
         # Create components table
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS components (
                 lcsc TEXT PRIMARY KEY,
                 category TEXT,
@@ -82,8 +81,7 @@ class JLCPCBPartsManager:
                 price_json TEXT,
                 last_updated INTEGER
             )
-        """
-        )
+        """)
 
         # Create indexes for fast searching
         cursor.execute(
@@ -95,8 +93,7 @@ class JLCPCBPartsManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_mfr_part ON components(mfr_part)")
 
         # Full-text search index for descriptions
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS components_fts USING fts5(
                 lcsc,
                 description,
@@ -104,8 +101,7 @@ class JLCPCBPartsManager:
                 manufacturer,
                 content=components
             )
-        """
-        )
+        """)
 
         self.conn.commit()
         logger.info(f"Initialized JLCPCB parts database at {self.db_path}")
@@ -274,12 +270,10 @@ class JLCPCBPartsManager:
                 skipped += 1
 
         # Update FTS index
-        cursor.execute(
-            """
+        cursor.execute("""
             INSERT INTO components_fts(components_fts)
             VALUES('rebuild')
-        """
-        )
+        """)
 
         self.conn.commit()
         logger.info(f"Import complete: {imported} parts imported, {skipped} skipped")

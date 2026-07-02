@@ -2539,14 +2539,38 @@ class KiCADInterface(BoardPersistenceMixin):
     # handlers/datasheet.py.
 
 
+def _package_version() -> str:
+    """Release version for the standalone JSON-RPC path.
+
+    package.json is the single source of truth (the TS layer reads it too);
+    a hardcoded string here drifted to "2.1.0-alpha" while the real release
+    was 2.2.x.  Falls back to "unknown" rather than a stale number.
+    """
+    try:
+        pkg = Path(__file__).resolve().parent.parent / "package.json"
+        with open(pkg, encoding="utf-8") as f:
+            return str(json.load(f).get("version", "unknown"))
+    except Exception:
+        return "unknown"
+
+
 def _write_response(response_fd: Any, response: Any) -> None:
     """Write a JSON response to the original stdout fd.
 
     All response output goes through this function so that stray C-level
     writes from pcbnew (warnings, diagnostics) never corrupt the JSON
     framing seen by the TypeScript host.
+
+    A handler that leaks a non-JSON-serializable value (a set, bytes, Path,
+    or a stray SWIG/kipy object) must not kill the stdin loop: retry with
+    ``default=str`` so the response still reaches the host, and log the
+    offender so the handler bug stays visible.
     """
-    payload = json.dumps(response) + "\n"
+    try:
+        payload = json.dumps(response) + "\n"
+    except (TypeError, ValueError) as e:
+        logger.error(f"Response not JSON-serializable ({e}); coercing with default=str")
+        payload = json.dumps(response, default=str) + "\n"
     os.write(response_fd, payload.encode("utf-8"))
 
 
@@ -2601,7 +2625,7 @@ def main() -> None:
                                 "serverInfo": {
                                     "name": "kicad-mcp-server",
                                     "title": "KiCAD PCB Design Assistant",
-                                    "version": "2.1.0-alpha",
+                                    "version": _package_version(),
                                 },
                                 "instructions": "AI-assisted PCB design with KiCAD. Use tools to create projects, design boards, place components, route traces, and export manufacturing files.",
                             },
@@ -2648,7 +2672,11 @@ def main() -> None:
                         response = {
                             "jsonrpc": "2.0",
                             "id": request_id,
-                            "result": {"content": [{"type": "text", "text": json.dumps(result)}]},
+                            "result": {
+                                "content": [
+                                    {"type": "text", "text": json.dumps(result, default=str)}
+                                ]
+                            },
                         }
                     elif method == "resources/list":
                         logger.info("Handling MCP resources/list")
@@ -2727,6 +2755,31 @@ def main() -> None:
                     "errorDetails": str(e),
                 }
                 _write_response(_response_fd, response)
+
+            except Exception as e:
+                # One failed command must not take down the whole worker —
+                # the TS host would otherwise see every subsequent call fail
+                # until it respawns the process.  Report the failure for THIS
+                # command and keep the stdin loop alive.  If even the error
+                # envelope can't be written the pipe itself is broken, so
+                # re-raise and let the outer handler exit the process.
+                logger.error(f"Unhandled error in command loop: {e}\n{traceback.format_exc()}")
+                error_envelope: Dict[str, Any] = {
+                    "success": False,
+                    "message": f"Internal error while processing command: {e}",
+                    "errorDetails": traceback.format_exc(),
+                }
+                # Re-derive the correlation id from the raw line — loop-body
+                # locals may still hold the PREVIOUS iteration's values if the
+                # exception fired early, and echoing a stale id would make the
+                # TS bridge misattribute this error to an older request.
+                try:
+                    stale_safe_id = json.loads(line).get("id")
+                except Exception:
+                    stale_safe_id = None
+                if stale_safe_id is not None:
+                    error_envelope["id"] = stale_safe_id
+                _write_response(_response_fd, error_envelope)
 
     except KeyboardInterrupt:
         logger.info("KiCAD interface stopped")

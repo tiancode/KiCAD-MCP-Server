@@ -44,10 +44,10 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
   // Run Electrical Rules Check (ERC)
   server.tool(
     "run_erc",
-    "Run ERC on a schematic and return all violations. Gotcha: KiCad requires every power-input pin to be driven by a " +
-      "power-output pin or PWR_FLAG — labels alone aren't enough; summary.recommendations[] lists the 'add PWR_FLAG' fixes " +
-      "and summary.real_errors counts only non-PWR_FLAG issues. lib_symbols are auto-refreshed from disk first " +
-      "(silences 'symbol doesn't match library'; opt out with autoRefreshLibSymbols=false).",
+    "Run ERC on a schematic and return all violations. Gotcha: every power-input pin must be driven by a power-output " +
+      "pin or PWR_FLAG — labels alone aren't enough; summary.recommendations[] lists the 'add PWR_FLAG' fixes and " +
+      "summary.real_errors counts only non-PWR_FLAG issues. lib_symbols auto-refresh from disk first " +
+      "(opt out with autoRefreshLibSymbols=false).",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       autoRefreshLibSymbols: z

@@ -429,6 +429,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
               text: `Failed to add text annotation: ${result.message || "Unknown error"}`,
             },
           ],
+          isError: true,
         };
       }
     },
@@ -485,6 +486,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
             text: `Failed to add sheet pin: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -494,8 +496,8 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
     "add_schematic_sheet",
     "Place a hierarchical sheet box on the parent (root) schematic referencing a sub-sheet .kicad_sch — " +
       "this is what makes a multi-page design exist (ERC/netlist/kicad-cli follow the Sheetfile reference). " +
-      "Creates an empty sub-sheet file from the template if missing. " +
-      "Inter-sheet connectivity is by same-named global labels on each page (add_schematic_net_label labelType=global_label); sheet pins are optional.",
+      "Creates an empty sub-sheet file if missing. " +
+      "Inter-sheet connectivity is by same-named global labels on each page (labelType=global_label); sheet pins are optional.",
     {
       schematicPath: z.string().describe("Path to the PARENT (root) .kicad_sch file"),
       sheetName: z.string().describe("Sheet name shown on the box (Sheetname property)"),
@@ -549,6 +551,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
             text: `Failed to add sheet: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );

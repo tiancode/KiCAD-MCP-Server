@@ -46,11 +46,7 @@ const READ_ONLY_EXACT = new Set<string>(["run_drc", "run_erc", "hit_test"]);
  *     are NOT here — they default overwrite=False and refuse if present.)
  *   - autoroute imports the SES and overwrites all existing routing.
  */
-const DESTRUCTIVE_EXACT = new Set<string>([
-  "create_project",
-  "create_schematic",
-  "autoroute",
-]);
+const DESTRUCTIVE_EXACT = new Set<string>(["create_project", "create_schematic", "autoroute"]);
 
 /**
  * Mutating tools that converge to a fixed end state — calling twice with the

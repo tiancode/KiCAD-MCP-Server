@@ -50,6 +50,12 @@ def handle_import_svg_logo(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             if reloaded is not None:
                 iface.board = reloaded
                 iface._update_command_handlers()
+                # The SVG import wrote the .kicad_pcb out-of-band; without
+                # re-recording the disk signature every subsequent auto-save
+                # compares against the pre-import hash and refuses with a
+                # false 'changed externally' — silently dropping all later
+                # mutations for the rest of the session.
+                iface._record_board_signature(pcb_path)
                 logger.info("Reloaded board into pcbnew after SVG logo import")
             else:
                 logger.warning(
@@ -93,6 +99,11 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
                 }
             iface.board = reloaded
             iface._update_command_handlers()
+            # Fresh load of a (possibly different) board file: align the disk
+            # signature, or the dispatcher's auto-save right after this
+            # placement compares the old board's hash against the new file,
+            # refuses, and the placement never lands on disk.
+            iface._record_board_signature(board_path)
             logger.info("Board reloaded from boardPath")
 
         project_path = Path(board_path).parent

@@ -173,10 +173,10 @@ To remove a footprint from a PCB, use delete_component instead.`,
   // Edit component properties in schematic (footprint, value, reference, custom fields)
   server.tool(
     "edit_schematic_component",
-    "Update a placed schematic symbol in place (preserves position and UUID — better than delete + re-add): " +
-      "footprint, value, reference, field-label positions, and arbitrary custom properties " +
-      "(MPN, Manufacturer, DigiKey_PN, Mouser_PN, LCSC, Voltage, Tolerance, ... — exported by export_bom and the JLCPCB/Digi-Key tooling; new properties default to hidden). " +
-      "Batch any combination of footprint / value / newReference / fieldPositions / properties / removeProperties in one call. " +
+    "Update a placed schematic symbol in place (keeps position and UUID — better than delete + re-add): " +
+      "footprint, value, reference, field-label positions, and custom properties " +
+      "(MPN, LCSC, ... — exported by export_bom; new properties default to hidden). " +
+      "Batch footprint/value/newReference/fieldPositions/properties/removeProperties in one call. " +
       ".kicad_sch only — for a PCB footprint use edit_component.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
@@ -295,6 +295,7 @@ To remove a footprint from a PCB, use delete_component instead.`,
             text: `Failed to edit component: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -307,8 +308,8 @@ To remove a footprint from a PCB, use delete_component instead.`,
   server.tool(
     "set_schematic_component_property",
     "Add or update ONE custom property on a placed schematic symbol (created if missing) — " +
-      "e.g. MPN, Manufacturer, DigiKey_PN, Mouser_PN, LCSC, Voltage, Tolerance, or any BOM field. " +
-      "Written as a standard KiCad property record: survives ERC, exported by export_bom, used by JLCPCB/Digi-Key tooling. " +
+      "e.g. MPN, Manufacturer, LCSC, Voltage, or any BOM field. " +
+      "Written as a standard KiCad property record: survives ERC, exported by export_bom. " +
       "New properties default to hidden (set hide=false to show on canvas). " +
       "For several properties at once use edit_schematic_component with `properties`.",
     {
@@ -362,6 +363,7 @@ To remove a footprint from a PCB, use delete_component instead.`,
             text: `Failed to set property '${args.name}' on ${args.reference}: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );
@@ -411,6 +413,7 @@ edit_schematic_component and set its value to an empty string.`,
             text: `Failed to remove property '${args.name}' from ${args.reference}: ${result.message || "Unknown error"}`,
           },
         ],
+        isError: true,
       };
     },
   );

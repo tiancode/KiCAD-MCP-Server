@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
-from ._common import _TO_MM_SCALE, extract_xy, swig_fallback_mutation
+from ._common import _TO_MM_SCALE, extract_xy, swig_fallback_mutation, to_mm
 
 
 def handle_route_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -22,8 +22,14 @@ def handle_route_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
     try:
         # Extract parameters matching the existing route_trace interface.
         # Accept both nested {"start": {"x":..,"y":..}} and flat startX/startY shapes.
-        start_x, start_y, _ = extract_xy(params, key="start", flat_x="startX", flat_y="startY")
-        end_x, end_y, _ = extract_xy(params, key="end", flat_x="endX", flat_y="endY")
+        # The IPC API speaks mm — honour the optional per-point unit like the
+        # SWIG path does, or mil/inch coordinates land 25.4x/1000x off.
+        start_x, start_y, start_unit = extract_xy(
+            params, key="start", flat_x="startX", flat_y="startY"
+        )
+        end_x, end_y, end_unit = extract_xy(params, key="end", flat_x="endX", flat_y="endY")
+        start_x, start_y = to_mm(start_x, start_unit), to_mm(start_y, start_unit)
+        end_x, end_y = to_mm(end_x, end_unit), to_mm(end_y, end_unit)
         layer = params.get("layer", "F.Cu")
         width = params.get("width", 0.25)
         net = params.get("net")
@@ -64,12 +70,16 @@ def handle_route_arc_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         width = params.get("width", 0.25)
         net = params.get("net")
 
-        start_x = start.get("x", 0)
-        start_y = start.get("y", 0)
-        mid_x = mid.get("x", 0)
-        mid_y = mid.get("y", 0)
-        end_x = end.get("x", 0)
-        end_y = end.get("y", 0)
+        # Honour the optional per-point unit — the IPC API expects mm.
+        start_unit = start.get("unit", "mm")
+        mid_unit = mid.get("unit", "mm")
+        end_unit = end.get("unit", "mm")
+        start_x = to_mm(start.get("x", 0), start_unit)
+        start_y = to_mm(start.get("y", 0), start_unit)
+        mid_x = to_mm(mid.get("x", 0), mid_unit)
+        mid_y = to_mm(mid.get("y", 0), mid_unit)
+        end_x = to_mm(end.get("x", 0), end_unit)
+        end_y = to_mm(end.get("y", 0), end_unit)
 
         if not hasattr(iface.ipc_board_api, "add_arc_track"):
             return {
@@ -111,7 +121,9 @@ def handle_route_arc_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> D
 def handle_add_via(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """IPC handler for add_via — adds via with real-time UI update."""
     try:
-        x, y, _ = extract_xy(params)
+        x, y, unit = extract_xy(params)
+        # The IPC API expects mm; convert mil/inch like the SWIG path does.
+        x, y = to_mm(x, unit), to_mm(y, unit)
 
         size = params.get("size", 0.8)
         drill = params.get("drill", 0.4)
