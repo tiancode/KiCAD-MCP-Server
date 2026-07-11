@@ -5,9 +5,12 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "../tool-response.js";
+import { CommandFunction, makePassthrough } from "../tool-response.js";
 
-export function registerSchematicComponentTools(server: McpServer, callKicadScript: Function) {
+export function registerSchematicComponentTools(
+  server: McpServer,
+  callKicadScript: CommandFunction,
+) {
   const passthrough = makePassthrough(callKicadScript);
   // Create schematic tool
   server.tool(

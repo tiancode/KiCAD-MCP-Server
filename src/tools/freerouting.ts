@@ -6,9 +6,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough } from "./tool-response.js";
 
-export function registerFreeroutingTools(server: McpServer, callKicadScript: Function) {
+export function registerFreeroutingTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // Full autoroute: export DSN -> run Freerouting -> import SES
   //

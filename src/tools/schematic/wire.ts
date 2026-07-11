@@ -5,9 +5,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "../tool-response.js";
+import { CommandFunction, formatKicadResult } from "../tool-response.js";
 
-export function registerSchematicWireTools(server: McpServer, callKicadScript: Function) {
+export function registerSchematicWireTools(server: McpServer, callKicadScript: CommandFunction) {
   // Draw wire between coordinate waypoints with optional pin snapping
   server.tool(
     "add_schematic_wire",

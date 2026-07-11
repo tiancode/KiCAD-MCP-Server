@@ -22,9 +22,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { formatKicadResult } from "./tool-response.js";
+import { CommandFunction, formatKicadResult } from "./tool-response.js";
 
-export function registerTransactionTools(server: McpServer, callKicadScript: Function) {
+export function registerTransactionTools(server: McpServer, callKicadScript: CommandFunction) {
   server.tool(
     "transaction",
     "Manage a KiCad transaction / undo group (IPC-only). 'begin' opens one so subsequent mutating calls collapse into a single undo step (no nesting — commit/rollback the open one first); 'commit' lands it atomically; 'rollback' discards all changes since begin; 'status' reports the open transaction. begin/commit take an optional `description` label.",

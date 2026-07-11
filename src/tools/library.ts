@@ -6,8 +6,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { offsetParam, truncationNote } from "./pagination-params.js";
+import { CommandFunction } from "./tool-response.js";
 
-export function registerLibraryTools(server: McpServer, callKicadScript: Function) {
+export function registerLibraryTools(server: McpServer, callKicadScript: CommandFunction) {
   // List available footprint libraries
   server.tool(
     "list_libraries",

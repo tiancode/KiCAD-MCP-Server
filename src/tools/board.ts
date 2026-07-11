@@ -265,6 +265,12 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     ].join(" "),
     {
       layers: z.array(z.string()).optional().describe("Optional array of layer names to include"),
+      region: z
+        .object({ x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number() })
+        .optional()
+        .describe(
+          "Zoom to this board-space rectangle (mm) instead of the whole board — for inspecting a detail without a full-board render",
+        ),
       width: z.number().optional().describe("Optional width of the image in pixels"),
       height: z.number().optional().describe("Optional height of the image in pixels"),
       format: z.enum(["png", "jpg", "svg"]).optional().describe("Image format"),
@@ -285,10 +291,11 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         .optional()
         .describe("Margin in pixels around the cropped board content (default 20)."),
     },
-    async ({ layers, width, height, format, responseMode, cropToBoard, cropMarginPx }) => {
+    async ({ layers, region, width, height, format, responseMode, cropToBoard, cropMarginPx }) => {
       logger.debug("Getting 2D board view");
       const result = await callKicadScript("get_board_2d_view", {
         layers,
+        region,
         width,
         height,
         format,

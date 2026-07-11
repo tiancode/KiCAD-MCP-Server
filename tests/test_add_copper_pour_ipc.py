@@ -238,45 +238,16 @@ def test_top_level_unit_mil_is_converted_to_mm(iface):
 
 
 # ---------------------------------------------------------------------------
-# add_zone is wired as an alias for add_copper_pour
+# add_zone alias (removed 2026-07)
 # ---------------------------------------------------------------------------
-def test_add_zone_is_a_registered_command():
-    """``add_zone`` is exposed in the TS schema; the dispatcher used to
-    return 'Unknown command: add_zone' because nothing wired it to a
-    handler. Now it MUST be in command_routes (SWIG path) and
-    IPC_CAPABLE_COMMANDS (IPC fast-path)."""
+
+
+def test_add_zone_alias_stays_removed():
+    """Command-redundancy cleanup (2026-07): the ``add_zone`` alias for
+    ``add_copper_pour`` was unreachable from the MCP surface (the TS layer
+    stopped registering it in the 2026-06 tool cleanup) and has been removed
+    from every python registry. It must not silently come back."""
     from kicad_interface import KiCADInterface
 
-    assert "add_zone" in KiCADInterface.IPC_CAPABLE_COMMANDS
-    assert (
-        KiCADInterface.IPC_CAPABLE_COMMANDS["add_zone"]
-        == KiCADInterface.IPC_CAPABLE_COMMANDS["add_copper_pour"]
-    )
-    assert "add_zone" in KiCADInterface._BOARD_MUTATING_COMMANDS
-
-
-def test_add_zone_dispatches_through_ipc_when_available(iface, monkeypatch):
-    """``add_zone`` should reach the same IPC handler as ``add_copper_pour``."""
-    from kicad_interface import KiCADInterface
-    from utils.kicad_process import KiCADProcessManager
-
-    monkeypatch.setattr(KiCADProcessManager, "is_pcb_editor_running", lambda: True)
-    # Pretend KiCAD is up and IPC is attached so the fast-path takes.
-    iface.command_routes = {}
-    out = KiCADInterface.handle_command(
-        iface,
-        "add_zone",
-        {
-            "layer": "B.Cu",
-            "net": "GND",
-            "unit": "mm",
-            "points": _square(40),
-        },
-    )
-
-    assert out.get("success") is True, out
-    iface.ipc_board_api.add_zone.assert_called_once()
-    call = iface.ipc_board_api.add_zone.call_args
-    assert call.kwargs["layer"] == "B.Cu"
-    assert call.kwargs["net_name"] == "GND"
-    assert len(call.kwargs["points"]) == 4
+    assert "add_zone" not in KiCADInterface.IPC_CAPABLE_COMMANDS
+    assert "add_zone" not in KiCADInterface._BOARD_MUTATING_COMMANDS

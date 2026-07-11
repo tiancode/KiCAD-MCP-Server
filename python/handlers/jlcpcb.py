@@ -252,3 +252,74 @@ def handle_import_jlcpcb_symbols(iface: "KiCADInterface", params: Dict[str, Any]
             "message": f"Failed to import symbols: {str(e)}",
             "errorDetails": traceback.format_exc(),
         }
+
+
+def handle_check_bom_availability(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Check every BOM line of the loaded board against the local JLCPCB catalog.
+
+    Groups footprints by (value, footprint), resolves each line by its LCSC
+    field when present (exact) or by value+package search otherwise, and
+    reports stock, unit price at the required quantity, and per-board cost.
+    Requires the local parts database (run download_jlcpcb_database first).
+    """
+    logger.info("Checking BOM availability against JLCPCB catalog")
+    try:
+        from commands.bom_check import evaluate_bom_lines, group_bom
+
+        if not iface.board:
+            return {
+                "success": False,
+                "message": "No board is loaded",
+                "errorDetails": "Load or create a board first",
+            }
+
+        stats = iface.jlcpcb_parts.get_database_stats()
+        if not stats or not stats.get("total_components"):
+            return {
+                "success": False,
+                "message": "Local JLCPCB parts database is empty",
+                "hint": "Run download_jlcpcb_database first, then retry.",
+            }
+
+        board_qty = int(params.get("boardQty", 1))
+        components = []
+        for module in iface.board.GetFootprints():
+            comp: Dict[str, Any] = {
+                "reference": module.GetReference(),
+                "value": module.GetValue(),
+                "footprint": module.GetFPID().GetUniStringLibId(),
+            }
+            # LCSC part number lives in a footprint field (KiCad 8+) or a
+            # legacy property, under a few common names.
+            for field_name in ("LCSC", "LCSC Part", "LCSC Part #", "JLCPCB Part"):
+                value = None
+                if hasattr(module, "GetFieldByName"):
+                    field = module.GetFieldByName(field_name)
+                    if field is not None and hasattr(field, "GetText"):
+                        value = field.GetText()
+                if not value and hasattr(module, "GetPropertyNative"):
+                    value = module.GetPropertyNative(field_name)
+                if isinstance(value, str) and value.strip():
+                    comp["lcsc"] = value.strip()
+                    break
+            components.append(comp)
+
+        if not components:
+            return {"success": False, "message": "Board has no footprints to check"}
+
+        lines = group_bom(components)
+        report = evaluate_bom_lines(
+            lines,
+            lookup_lcsc=iface.jlcpcb_parts.get_part_info,
+            search=lambda **kw: iface.jlcpcb_parts.search_parts_meta(**kw),
+            board_qty=board_qty,
+        )
+        return {"success": True, **report}
+    except Exception as e:  # API boundary; bucket: catch + return
+        logger.error(f"Error checking BOM availability: {e}", exc_info=True)
+        return {
+            "success": False,
+            "message": f"Failed to check BOM availability: {str(e)}",
+        }

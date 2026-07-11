@@ -4,9 +4,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult, makePassthrough } from "./tool-response.js";
+import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
-export function registerProjectTools(server: McpServer, callKicadScript: Function) {
+export function registerProjectTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // Create project tool
   server.tool(

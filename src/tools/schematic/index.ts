@@ -13,8 +13,9 @@ import { registerSchematicWireTools } from "./wire.js";
 import { registerSchematicQueryTools } from "./query.js";
 import { registerSchematicIoTools } from "./io.js";
 import { registerSchematicViewTools } from "./view.js";
+import { CommandFunction } from "../tool-response.js";
 
-export function registerSchematicTools(server: McpServer, callKicadScript: Function) {
+export function registerSchematicTools(server: McpServer, callKicadScript: CommandFunction) {
   registerSchematicComponentTools(server, callKicadScript);
   registerSchematicWireTools(server, callKicadScript);
   registerSchematicQueryTools(server, callKicadScript);

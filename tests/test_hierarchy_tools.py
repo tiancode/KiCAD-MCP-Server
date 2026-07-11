@@ -42,8 +42,7 @@ def iface():
 # Minimal schematic templates
 # ---------------------------------------------------------------------------
 
-_MINIMAL_SUBSHEET = textwrap.dedent(
-    """\
+_MINIMAL_SUBSHEET = textwrap.dedent("""\
     (kicad_sch
     \t(version 20231120)
     \t(generator "eeschema")
@@ -54,11 +53,9 @@ _MINIMAL_SUBSHEET = textwrap.dedent(
     \t\t)
     \t)
     )
-"""
-)
+""")
 
-_MINIMAL_PARENT = textwrap.dedent(
-    """\
+_MINIMAL_PARENT = textwrap.dedent("""\
     (kicad_sch
     \t(version 20231120)
     \t(generator "eeschema")
@@ -88,11 +85,9 @@ _MINIMAL_PARENT = textwrap.dedent(
     \t\t)
     \t)
     )
-"""
-)
+""")
 
-_ROOT_WITH_UUID = textwrap.dedent(
-    """\
+_ROOT_WITH_UUID = textwrap.dedent("""\
     (kicad_sch
     \t(version 20250114)
     \t(generator "eeschema")
@@ -106,12 +101,10 @@ _ROOT_WITH_UUID = textwrap.dedent(
     \t\t)
     \t)
     )
-"""
-)
+""")
 
 
-_PARENT_TWO_SHEETS = textwrap.dedent(
-    """\
+_PARENT_TWO_SHEETS = textwrap.dedent("""\
     (kicad_sch
     \t(version 20231120)
     \t(sheet
@@ -142,8 +135,7 @@ _PARENT_TWO_SHEETS = textwrap.dedent(
     \t\t(path "/" (page "1"))
     \t)
     )
-"""
-)
+""")
 
 
 # ===========================================================================

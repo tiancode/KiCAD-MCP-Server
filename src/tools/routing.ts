@@ -5,9 +5,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams } from "./pagination-params.js";
-import { makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough } from "./tool-response.js";
 
-export function registerRoutingTools(server: McpServer, callKicadScript: Function) {
+export function registerRoutingTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // Add net tool
   server.tool(
@@ -452,6 +452,80 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         ),
     },
     passthrough("route_pad_to_pad"),
+  );
+
+  // Smart obstacle-avoiding router
+  server.tool(
+    "route_smart",
+    "Route between two pads (or two points) with grid A* OBSTACLE AVOIDANCE — routes around other pads/traces/vias and " +
+      "can change layers through a via when two copper layers are given. Slower than route_pad_to_pad but succeeds where " +
+      "a straight segment is blocked. Still run_drc afterwards; on dense boards increase gridMm if no path is found.",
+    {
+      fromRef: z.string().optional().describe("Source component reference (e.g. 'U1')"),
+      fromPad: z.union([z.string(), z.number()]).optional().describe("Source pad number"),
+      toRef: z.string().optional().describe("Target component reference"),
+      toPad: z.union([z.string(), z.number()]).optional().describe("Target pad number"),
+      start: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("Alternative to fromRef/fromPad: start point in mm"),
+      end: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("Alternative to toRef/toPad: end point in mm"),
+      layers: z
+        .array(z.string())
+        .min(1)
+        .max(2)
+        .optional()
+        .describe(
+          "1 or 2 copper layers to route on (default ['F.Cu']); 2 layers enable via layer changes",
+        ),
+      width: z.number().optional().describe("Trace width in mm (default: netclass width)"),
+      net: z
+        .string()
+        .optional()
+        .describe("Net name override (default: auto-detected from the source pad)"),
+      gridMm: z
+        .number()
+        .optional()
+        .describe("Routing grid pitch in mm (default 0.25); coarser = faster"),
+      clearance: z
+        .number()
+        .optional()
+        .describe("Keep-out clearance around obstacles in mm (default 0.2)"),
+      viaCost: z
+        .number()
+        .optional()
+        .describe("Extra cost per layer change, in grid steps (default 20)"),
+      maxNodes: z
+        .number()
+        .int()
+        .optional()
+        .describe("Search budget before giving up (default 200000)"),
+    },
+    passthrough("route_smart"),
+  );
+
+  // Net length report tool
+  server.tool(
+    "report_net_lengths",
+    "Report total routed copper length per net (mm), segment/via counts and layers, plus max skew across the selected " +
+      "group — the read-only basis for length matching. Via barrel length is excluded (viaCount is returned so you can " +
+      "budget it). Select nets explicitly, by wildcard pattern, or omit both for all routed nets.",
+    {
+      nets: z
+        .array(z.string())
+        .optional()
+        .describe("Exact net names to report (skew is computed across them)"),
+      pattern: z
+        .string()
+        .optional()
+        .describe(
+          "Wildcard net-name pattern, e.g. 'DDR_DQ*' ('*' any, '?' one char); unioned with nets",
+        ),
+    },
+    passthrough("report_net_lengths"),
   );
 
   // Copy routing pattern tool

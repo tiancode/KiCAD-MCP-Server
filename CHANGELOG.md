@@ -4,6 +4,67 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Command-Redundancy Cleanup + Type Consolidation (2026-07-11)
+
+- **Removed unreachable python command routes** left as "compat" after the
+  2026-06 TS tool cleanup — none of these command names could arrive from
+  the MCP surface: `add_zone` / `add_text` aliases, `export_svg`,
+  `export_schematic_svg`, `get_drc_violations` (method kept — the
+  drc_violations resource consumes it), `export_dsn` / `import_ses` routes
+  (methods kept — unit-tested building blocks). The `ipc_*` handler
+  routes stay (scripts/ipc_smoke_test.py drives them).
+- **Finished the `CommandFunction` type migration**: all 18 registrars
+  previously typed `callKicadScript: Function` now use the shared
+  `CommandFunction`; `makePassthrough` is fully typed (the `unknown`
+  cast and the single-caller `passthroughCall` indirection are gone).
+- `_update_command_handlers` iterates handler objects directly instead of
+  attribute-name strings (rename-safe, grep-able).
+- `src/resources/component-utils.ts` → `resource-utils.ts` — the shared
+  `jsonResource` / `resourceError` helpers now live in a file named for
+  their actual scope.
+- `tests/test_mcp_error_wrapping_static.py` asserts the tool-response
+  import token-wise instead of byte-exactly, so import formatting can't
+  break an unrelated test; design-rules.ts imports merged accordingly.
+
+### Functional Expansion: Routing, Hierarchy, Simulation, Placement, DFM (2026-07-11)
+
+Six new MCP tools plus one enhancement, targeting KiCad 10:
+
+- **`route_smart` — built-in obstacle-avoiding router.** Grid A* (default
+  0.25 mm pitch) between two pads or points: routes around other-net
+  pads/tracks/vias with clearance inflation, supports 1-2 copper layers
+  with automatic via insertion, honors netclass width, and commits real
+  board tracks/vias. Fills the gap between route_pad_to_pad (straight
+  line, refuses on obstacles) and autoroute (external Freerouting).
+- **`report_net_lengths` — length-matching groundwork.** Per-net routed
+  copper length (arc-aware), segment/via counts, layers, and max skew
+  across an explicit net list or wildcard pattern (e.g. `DDR_DQ*`).
+- **`create_hierarchical_sheet` — multi-sheet designs.** Inserts a
+  KiCad 9/10-format sheet block (Sheetname/Sheetfile properties, page
+  instances) into a parent schematic, creates the child file, and can
+  author auto-stacked sheet pins with matching hierarchical labels in
+  the child in the same call. The existing `add_sheet_pin` tool is
+  unchanged (explicit-position pins).
+- **`run_simulation` — SPICE closed loop.** Exports the netlist via
+  kicad-cli, runs ngspice in batch mode (op/tran/dc/ac), and returns
+  structured data (node voltages for op; downsampled x/signal arrays
+  otherwise) with install hints when ngspice is missing.
+- **`auto_place_components` — connectivity-driven placement.** Greedy
+  affinity clustering (power nets excluded so they don't collapse the
+  layout), decoupling caps hug their IC, courtyard spacing + grid snap,
+  HPWL wirelength stats, dryRun preview.
+- **`check_bom_availability` — BOM × JLCPCB.** Groups footprints into
+  BOM lines, resolves each by LCSC field (exact) or value+package
+  search against the local catalog, reports stock vs required quantity,
+  price breaks, and estimated cost per board.
+- **`get_board_2d_view` gains `region`** — zoom the render to a
+  board-space rectangle (SVG viewBox crop applied before rasterization,
+  so it works for svg/png/jpg alike).
+
+Out of scope (documented decisions): teardrop generation (KiCad-native,
+headless reimplementation too risky), KiKit panelization (heavy external
+dependency), Altium/Eagle import (no kicad-cli conversion path).
+
 ### Maintainability Refactor + Dead-Code Cleanup (2026-07-11)
 
 No behavior change — tool surface, command routing, and response

@@ -10,13 +10,17 @@ from typing import Optional
 import pcbnew
 
 from ._geometry import GeometryMixin
+from ._lengths import LengthMixin
 from ._nets import NetMixin
+from ._smart import SmartRouteMixin
 from ._traces import TraceMixin
 from ._vias import ViaMixin
 from ._zones import ZoneMixin
 
 
-class RoutingCommands(TraceMixin, ViaMixin, ZoneMixin, NetMixin, GeometryMixin):
+class RoutingCommands(
+    TraceMixin, ViaMixin, ZoneMixin, NetMixin, GeometryMixin, LengthMixin, SmartRouteMixin
+):
     """Handles routing-related KiCAD operations"""
 
     def __init__(self, board: Optional[pcbnew.BOARD] = None):

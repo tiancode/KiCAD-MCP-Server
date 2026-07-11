@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { paginationParams } from "./pagination-params.js";
-import { CommandFunction, formatKicadResult } from "./tool-response.js";
+import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
 /**
  * Register component management tools with the MCP server
@@ -15,6 +15,7 @@ import { CommandFunction, formatKicadResult } from "./tool-response.js";
  * @param callKicadScript Function to call KiCAD script commands
  */
 export function registerComponentTools(server: McpServer, callKicadScript: CommandFunction): void {
+  const passthrough = makePassthrough(callKicadScript);
   logger.info("Registering component management tools");
 
   // ------------------------------------------------------
@@ -460,4 +461,39 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   );
 
   logger.info("Component management tools registered");
+  // Auto-place components by connectivity
+  server.tool(
+    "auto_place_components",
+    "Auto-place components with a connectivity-driven greedy heuristic: strongly-connected parts cluster together, " +
+      "decoupling capacitors hug their IC, courtyards keep the given spacing, and positions snap to the grid. " +
+      "Power nets (GND/VCC/...) are ignored for affinity so they don't collapse the layout. Returns HPWL wirelength " +
+      "stats; use dryRun to preview placements without moving anything. A starting point for placement, not a finished " +
+      "layout — review with get_board_2d_view and refine with move_component.",
+    {
+      components: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "References to place (default: every unlocked footprint); others stay fixed and attract",
+        ),
+      fixedRefs: z
+        .array(z.string())
+        .optional()
+        .describe("References to hold in place (they still exert affinity)"),
+      spacing: z
+        .number()
+        .optional()
+        .describe("Minimum courtyard-to-courtyard gap in mm (default 1.0)"),
+      grid: z.number().optional().describe("Placement grid in mm (default 0.5)"),
+      area: z
+        .object({ x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number() })
+        .optional()
+        .describe("Placement area in mm (default: the board outline)"),
+      dryRun: z
+        .boolean()
+        .optional()
+        .describe("Compute placements without moving footprints (default false)"),
+    },
+    passthrough("auto_place_components"),
+  );
 }

@@ -9,7 +9,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough } from "./tool-response.js";
 
 const PinSchema = z.object({
   name: z.string().describe("Pin name, e.g. 'VCC', 'GND', 'IN+', '~' for unnamed"),
@@ -76,7 +76,7 @@ const PolylineSchema = z.object({
   fill: z.enum(["none", "outline", "background"]).optional(),
 });
 
-export function registerSymbolCreatorTools(server: McpServer, callKicadScript: Function) {
+export function registerSymbolCreatorTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // ── create_symbol ────────────────────────────────────────────────────── //
   server.tool(

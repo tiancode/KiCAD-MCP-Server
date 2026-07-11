@@ -71,10 +71,13 @@ class TestTsToolRegistry:
         assert "get_backend_state" not in tool_names
 
     def test_redundant_tools_stay_removed(self):
-        """Tool-redundancy cleanup (2026-06): these duplicated higher-level
-        tools and were removed from the MCP surface. The Python command
-        routes remain for backward compatibility, but the TS layer must not
-        re-register them — each has a canonical replacement:
+        """Tool-redundancy cleanup (2026-06; python routes removed 2026-07):
+        these duplicated higher-level tools and were removed from the MCP
+        surface, and the unreachable python routes/implementations were
+        removed in the 2026-07 follow-up (except the ipc_* handlers, which
+        scripts/ipc_smoke_test.py still drives, and get_drc_violations'
+        method, which the drc_violations resource consumes). The TS layer
+        must not re-register any of them — each has a canonical replacement:
 
           export_svg            -> get_board_2d_view(format=svg)
           export_schematic_svg  -> get_schematic_view(format=svg)

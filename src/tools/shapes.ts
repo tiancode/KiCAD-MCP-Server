@@ -14,9 +14,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough } from "./tool-response.js";
 
-export function registerShapesTools(server: McpServer, callKicadScript: Function) {
+export function registerShapesTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
 
   const xySchema = z.object({ x: z.number(), y: z.number() });

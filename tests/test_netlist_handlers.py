@@ -41,8 +41,7 @@ def iface():
 # Sample KiCad XML netlist (minimal but structurally valid)
 # ---------------------------------------------------------------------------
 
-_KICAD_NETLIST_XML = textwrap.dedent(
-    """\
+_KICAD_NETLIST_XML = textwrap.dedent("""\
     <?xml version="1.0" encoding="UTF-8"?>
     <export version="E">
       <components>
@@ -66,8 +65,7 @@ _KICAD_NETLIST_XML = textwrap.dedent(
         </net>
       </nets>
     </export>
-"""
-)
+""")
 
 
 # ===========================================================================
@@ -364,15 +362,13 @@ class TestGenerateNetlistXmlParsing:
         assert "timed out" in result["message"].lower()
 
     def test_empty_schematic(self, iface, tmp_path):
-        empty_xml = textwrap.dedent(
-            """\
+        empty_xml = textwrap.dedent("""\
             <?xml version="1.0" encoding="UTF-8"?>
             <export version="E">
               <components/>
               <nets/>
             </export>
-        """
-        )
+        """)
         result = self._call_with_xml(iface, tmp_path, empty_xml)
         assert result["success"] is True
         assert result["netlist"]["components"] == []

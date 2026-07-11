@@ -5,9 +5,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "../tool-response.js";
+import { CommandFunction, makePassthrough } from "../tool-response.js";
 
-export function registerSchematicIoTools(server: McpServer, callKicadScript: Function) {
+export function registerSchematicIoTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // Export schematic to PDF
   server.tool(
@@ -169,6 +169,57 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
   );
 
   // Sync schematic to PCB board (equivalent to KiCAD F8 / "Update PCB from Schematic")
+  // SPICE simulation (ngspice batch mode)
+  server.tool(
+    "run_simulation",
+    "Run a SPICE analysis on the schematic via ngspice batch mode: exports the netlist with kicad-cli, runs op / tran / " +
+      "dc / ac, and returns structured data (node voltages for op; x + per-signal arrays otherwise, downsampled to " +
+      "maxPoints). Requires ngspice on PATH and simulation-ready symbols (SPICE model fields assigned). Use to verify " +
+      "circuit behaviour before layout.",
+    {
+      schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      analysis: z.enum(["op", "tran", "dc", "ac"]).describe("Analysis type"),
+      analysisParams: z
+        .object({
+          tstep: z.string().optional().describe("tran: time step, e.g. '1u'"),
+          tstop: z.string().optional().describe("tran: stop time, e.g. '10m'"),
+          tstart: z.string().optional().describe("tran: optional start time"),
+          source: z.string().optional().describe("dc: swept source name, e.g. 'V1'"),
+          start: z.union([z.number(), z.string()]).optional().describe("dc: sweep start"),
+          stop: z.union([z.number(), z.string()]).optional().describe("dc: sweep stop"),
+          step: z.union([z.number(), z.string()]).optional().describe("dc: sweep step"),
+          variation: z
+            .enum(["dec", "oct", "lin"])
+            .optional()
+            .describe("ac: sweep type (default dec)"),
+          points: z
+            .union([z.number(), z.string()])
+            .optional()
+            .describe("ac: points per decade/octave or total"),
+          fstart: z.union([z.number(), z.string()]).optional().describe("ac: start frequency"),
+          fstop: z
+            .union([z.number(), z.string()])
+            .optional()
+            .describe("ac: stop frequency, e.g. '1Meg'"),
+        })
+        .optional()
+        .describe(
+          "Analysis parameters (tran: tstep+tstop; dc: source/start/stop/step; ac: points/fstart/fstop)",
+        ),
+      signals: z
+        .array(z.string())
+        .optional()
+        .describe("Signals to record, e.g. ['v(out)', 'i(V1)'] — required for tran/dc/ac"),
+      maxPoints: z
+        .number()
+        .int()
+        .optional()
+        .describe("Downsample returned data to at most this many rows (default 2000)"),
+      timeout: z.number().optional().describe("ngspice timeout in seconds (default 120)"),
+    },
+    passthrough("run_simulation"),
+  );
+
   server.tool(
     "sync_schematic_to_board",
     "Import the schematic netlist into the PCB (= F8 / Tools → Update PCB from Schematic). Call after the schematic is complete and before placing/routing — without it the board has no footprints or net assignments and place_component/route_pad_to_pad produce an empty, unroutable board.",

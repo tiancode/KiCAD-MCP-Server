@@ -8,7 +8,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough } from "./tool-response.js";
 
 // ---- shared sub-schemas ------------------------------------------------- //
 
@@ -63,7 +63,7 @@ const RectSchema = z.object({
 
 // ---- tool registration --------------------------------------------------- //
 
-export function registerFootprintTools(server: McpServer, callKicadScript: Function) {
+export function registerFootprintTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // ── create_footprint ──────────────────────────────────────────────────── //
   server.tool(

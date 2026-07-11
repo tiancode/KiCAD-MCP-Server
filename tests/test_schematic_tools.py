@@ -461,17 +461,3 @@ class TestHandlerParamValidation:
             else {}
         )
         assert result["success"] is False
-
-    # --- export_schematic_svg ---
-
-    def test_export_svg_missing_output_path(self) -> None:
-        params = {"schematicPath": "/some/file.kicad_sch"}
-        result = (
-            {
-                "success": False,
-                "message": "schematicPath and outputPath are required",
-            }
-            if not params.get("outputPath")
-            else {}
-        )
-        assert result["success"] is False
