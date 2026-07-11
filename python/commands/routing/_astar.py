@@ -107,6 +107,8 @@ def route_grid_astar(
     trace_width_mm: float = 0.25,
     via_cost: float = 20.0,
     max_nodes: int = 200_000,
+    start_layer: Optional[str] = None,
+    end_layer: Optional[str] = None,
 ) -> RouteResult:
     """Route from *start* to *end* with obstacle-avoiding grid A*.
 
@@ -119,6 +121,11 @@ def route_grid_astar(
     trace_width_mm / 2``; obstacles on the routed *net* are passable.  Cells
     within one grid step of the endpoints are exempt from blocking so the
     route can escape dense pad fields.
+
+    ``start_layer`` / ``end_layer`` pin the endpoints to a specific copper
+    layer (an SMD pad's layer); ``None`` means "any" — the search then starts
+    on ``layers[0]`` and accepts the goal on whatever layer it reaches, which
+    is only correct for through-hole endpoints or bare points.
 
     Returns a :class:`RouteResult`; on failure ``success`` is False and
     ``message`` explains why (endpoint outside bounds, blocked endpoint, node
@@ -154,12 +161,29 @@ def route_grid_astar(
     layer_index = {name: k for k, name in enumerate(layers)}
     n_layers = len(layers)
 
+    if start_layer is not None and start_layer not in layer_index:
+        return _fail(f"start layer {start_layer} is not among the routing layers {list(layers)}")
+    if end_layer is not None and end_layer not in layer_index:
+        return _fail(f"end layer {end_layer} is not among the routing layers {list(layers)}")
+    start_li = layer_index[start_layer] if start_layer is not None else 0
+    end_li: Optional[int] = layer_index[end_layer] if end_layer is not None else None
+
     # Endpoint blockage checks use the exact points, before any exemption.
-    blocker = _blocking_obstacle(sx, sy, layers[0], obstacles, net, margin)
-    if blocker is not None:
-        owner = f" by an obstacle on net '{blocker.net}'" if blocker.net else " by an obstacle"
-        return _fail(f"start point ({sx:g}, {sy:g}) is blocked on {layers[0]}{owner}")
-    end_blockers = [_blocking_obstacle(ex, ey, name, obstacles, net, margin) for name in layers]
+    start_layers = [start_layer] if start_layer is not None else list(layers)
+    start_blockers = [
+        _blocking_obstacle(sx, sy, name, obstacles, net, margin) for name in start_layers
+    ]
+    if all(b is not None for b in start_blockers):
+        first = start_blockers[0]
+        owner = (
+            f" by an obstacle on net '{first.net}'"
+            if first is not None and first.net
+            else " by an obstacle"
+        )
+        where = start_layer if start_layer is not None else "all layers"
+        return _fail(f"start point ({sx:g}, {sy:g}) is blocked on {where}{owner}")
+    end_layers = [end_layer] if end_layer is not None else list(layers)
+    end_blockers = [_blocking_obstacle(ex, ey, name, obstacles, net, margin) for name in end_layers]
     if all(b is not None for b in end_blockers):
         first = end_blockers[0]
         owner = (
@@ -167,7 +191,8 @@ def route_grid_astar(
             if first is not None and first.net
             else " by an obstacle"
         )
-        return _fail(f"end point ({ex:g}, {ey:g}) is blocked on all layers{owner}")
+        where = end_layer if end_layer is not None else "all layers"
+        return _fail(f"end point ({ex:g}, {ey:g}) is blocked on {where}{owner}")
 
     # Rasterize each foreign-net obstacle's inflated rect into per-layer
     # blocked-cell sets once, so neighbour expansion is a set lookup.
@@ -211,7 +236,7 @@ def route_grid_astar(
         dy = abs(j - ej)
         return max(dx, dy) + (_SQRT2 - 1.0) * min(dx, dy)
 
-    start_state: _State = (si, sj, 0)
+    start_state: _State = (si, sj, start_li)
     counter = itertools.count()  # monotonic tie-breaker for determinism
     g_best: Dict[_State, float] = {start_state: 0.0}
     parents: Dict[_State, _State] = {}
@@ -226,7 +251,7 @@ def route_grid_astar(
         if g > g_best.get(state, math.inf) + _EPS:
             continue  # stale queue entry
         i, j, li = state
-        if (i, j) == (ei, ej):
+        if (i, j) == (ei, ej) and (end_li is None or li == end_li):
             goal_state = state
             break
         explored += 1

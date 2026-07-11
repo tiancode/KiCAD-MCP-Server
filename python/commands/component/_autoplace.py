@@ -321,8 +321,6 @@ def auto_place(
     board_size: Tuple[float, float],
     spacing_mm: float = 1.0,
     grid_mm: float = 0.5,
-    cluster_power_nets: bool = False,
-    power_net_patterns: Tuple[str, ...] = _DEFAULT_POWER_NET_PATTERNS,
 ) -> Dict[str, Any]:
     """Greedy connectivity-driven auto-placement (all units mm).
 
@@ -333,11 +331,6 @@ def auto_place(
         board_size: Placement area (width, height) in mm.
         spacing_mm: Minimum gap enforced between courtyards.
         grid_mm: Placement positions snap to this grid (relative to origin).
-        cluster_power_nets: When False (default), power nets are excluded
-            from the affinity graph — they connect everything and would
-            collapse the layout.
-        power_net_patterns: Case-insensitive substrings identifying power
-            nets.
 
     Returns:
         ``{"success": True, "placements": [{"reference", "x", "y"}],
@@ -357,8 +350,11 @@ def auto_place(
     for i, ref_a in enumerate(refs):
         for ref_b in refs[i + 1 :]:
             shared = comps[ref_a].nets & comps[ref_b].nets
-            if not cluster_power_nets:
-                shared = frozenset(n for n in shared if not _is_power_net(n, power_net_patterns))
+            # Power nets connect everything and would collapse the layout —
+            # always exclude them from affinity.
+            shared = frozenset(
+                n for n in shared if not _is_power_net(n, _DEFAULT_POWER_NET_PATTERNS)
+            )
             weight = len(shared)
             if weight:
                 affinity[ref_a][ref_b] = weight
@@ -486,8 +482,8 @@ def auto_place(
     before: Optional[float] = None
     if all(c.x is not None and c.y is not None for c in components):
         initial = {c.reference: (float(c.x), float(c.y)) for c in components}  # type: ignore[arg-type]
-        before = _estimate_hpwl(components, initial, power_net_patterns)
-    after = _estimate_hpwl(components, placed, power_net_patterns)
+        before = _estimate_hpwl(components, initial, _DEFAULT_POWER_NET_PATTERNS)
+    after = _estimate_hpwl(components, placed, _DEFAULT_POWER_NET_PATTERNS)
 
     return {
         "success": True,

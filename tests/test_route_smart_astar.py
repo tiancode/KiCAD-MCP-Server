@@ -274,3 +274,77 @@ class TestObstaclesFromBoardItems:
         items = [{"type": "pad", "x1": 0, "y1": 0, "x2": 1, "y2": 1, "layer": "F.Cu", "net": "SIG"}]
         (ob,) = obstacles_from_board_items(items)
         assert ob.layer == "F.Cu"
+
+
+@pytest.mark.unit
+class TestEndpointLayerPinning:
+    """route_smart review fix: SMD endpoints must start/end on their layer."""
+
+    BOUNDS = (0.0, 0.0, 30.0, 30.0)
+
+    def test_pinned_endpoints_route_on_their_layer(self):
+        result = route_grid_astar(
+            (5.0, 15.0),
+            (25.0, 15.0),
+            net="SIG",
+            layers=("F.Cu", "B.Cu"),
+            obstacles=[],
+            bounds=self.BOUNDS,
+            start_layer="B.Cu",
+            end_layer="B.Cu",
+        )
+        assert result.success
+        assert {seg["layer"] for seg in result.segments} == {"B.Cu"}
+        assert result.vias == []
+
+    def test_mismatched_endpoint_layers_force_a_via(self):
+        result = route_grid_astar(
+            (5.0, 15.0),
+            (25.0, 15.0),
+            net="SIG",
+            layers=("F.Cu", "B.Cu"),
+            obstacles=[],
+            bounds=self.BOUNDS,
+            start_layer="F.Cu",
+            end_layer="B.Cu",
+        )
+        assert result.success
+        assert len(result.vias) >= 1
+        assert result.segments[0]["layer"] == "F.Cu"
+        # The layer change may happen anywhere up to the goal cell itself: a
+        # trailing via AT the endpoint is electrically equivalent to a final
+        # B.Cu segment (the through via lands on the B.Cu pad).
+        last = result.segments[-1]
+        via_at_end = any(
+            abs(v["x"] - 25.0) < 0.3 and abs(v["y"] - 15.0) < 0.3 for v in result.vias
+        )
+        assert last["layer"] == "B.Cu" or via_at_end
+
+    def test_start_blockage_checked_on_start_layer_not_layers0(self):
+        # Foreign-net obstacle covers the start on F.Cu only; the B.Cu-pinned
+        # start must NOT be refused (the pre-fix code only tested layers[0]).
+        wall = RouteObstacle(x1=4.0, y1=14.0, x2=6.0, y2=16.0, layer="F.Cu", net="GND")
+        result = route_grid_astar(
+            (5.0, 15.0),
+            (25.0, 15.0),
+            net="SIG",
+            layers=("F.Cu", "B.Cu"),
+            obstacles=[wall],
+            bounds=self.BOUNDS,
+            start_layer="B.Cu",
+            end_layer="B.Cu",
+        )
+        assert result.success, result.message
+
+    def test_unknown_endpoint_layer_refused(self):
+        result = route_grid_astar(
+            (5.0, 15.0),
+            (25.0, 15.0),
+            net="SIG",
+            layers=("F.Cu",),
+            obstacles=[],
+            bounds=self.BOUNDS,
+            start_layer="In1.Cu",
+        )
+        assert not result.success
+        assert "In1.Cu" in result.message

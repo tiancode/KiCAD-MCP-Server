@@ -13,7 +13,7 @@ from commands.routing import RoutingCommands
 _NM = 1_000_000
 
 
-def _mock_pad(number, x_mm, y_mm, net="NET1", through=False, size_mm=1.0):
+def _mock_pad(number, x_mm, y_mm, net="NET1", through=False, size_mm=1.0, layers=("F.Cu", "B.Cu")):
     pad = MagicMock()
     pad.GetNumber.return_value = number
     pos = MagicMock()
@@ -21,7 +21,8 @@ def _mock_pad(number, x_mm, y_mm, net="NET1", through=False, size_mm=1.0):
     pad.GetPosition.return_value = pos
     pad.GetNetname.return_value = net
     pad.HasHole.return_value = through
-    pad.IsOnLayer.return_value = True
+    _layer_ids = {0: "F.Cu", 31: "B.Cu"}
+    pad.IsOnLayer.side_effect = lambda lid: _layer_ids.get(lid) in layers
     bb = MagicMock()
     half = int(size_mm * _NM / 2)
     bb.GetLeft.return_value = pos.x - half
@@ -122,3 +123,58 @@ class TestRouteSmartBridge:
         )
         assert result["success"], result
         assert result["lengthMm"] == pytest.approx(15.0, abs=1.0)
+
+
+@pytest.mark.unit
+class TestRouteSmartLayerHandling:
+    def test_smd_pads_on_bcu_route_on_bcu(self):
+        board = _mock_board(
+            {
+                "R1": [_mock_pad("1", 5.0, 25.0, layers=("B.Cu",))],
+                "R2": [_mock_pad("1", 45.0, 25.0, layers=("B.Cu",))],
+            }
+        )
+        rc = RoutingCommands(board)
+        result = rc.route_smart(
+            {
+                "fromRef": "R1",
+                "fromPad": "1",
+                "toRef": "R2",
+                "toPad": "1",
+                "layers": ["F.Cu", "B.Cu"],
+                "width": 0.25,
+            }
+        )
+        assert result["success"], result
+        assert {seg["layer"] for seg in result["segments"]} == {"B.Cu"}
+        assert result["viasCreated"] == 0
+
+    def test_pad_on_unrequested_layer_refused(self):
+        board = _mock_board(
+            {
+                "R1": [_mock_pad("1", 5.0, 25.0, layers=("B.Cu",))],
+                "R2": [_mock_pad("1", 45.0, 25.0, layers=("B.Cu",))],
+            }
+        )
+        rc = RoutingCommands(board)
+        result = rc.route_smart(
+            {"fromRef": "R1", "fromPad": "1", "toRef": "R2", "toPad": "1", "layers": ["F.Cu"]}
+        )
+        assert result["success"] is False
+        assert "not on any requested routing layer" in result["message"]
+
+    def test_zero_netclass_width_falls_back(self):
+        board = _mock_board(
+            {
+                "R1": [_mock_pad("1", 5.0, 25.0)],
+                "R2": [_mock_pad("1", 45.0, 25.0)],
+            }
+        )
+        netclass = MagicMock()
+        netclass.GetTrackWidth.return_value = 0  # KiCad "inherit" sentinel
+        board.GetNetInfo.return_value.GetNetItem.return_value.GetNetClass.return_value = netclass
+        board.GetDesignSettings.return_value.GetCurrentTrackWidth.return_value = 0
+        rc = RoutingCommands(board)
+        result = rc.route_smart({"fromRef": "R1", "fromPad": "1", "toRef": "R2", "toPad": "1"})
+        assert result["success"], result
+        assert result["widthMm"] == pytest.approx(0.25)

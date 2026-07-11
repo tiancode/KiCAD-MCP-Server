@@ -47,13 +47,18 @@ class SmartRouteMixin:
                 if self.board.GetLayerID(layer_name) < 0:
                     return {"success": False, "message": f"Unknown layer: {layer_name}"}
 
-            start_pt, end_pt, net = self._resolve_smart_endpoints(params)
+            start_pt, end_pt, net = self._resolve_smart_endpoints(params, layers)
             if isinstance(start_pt, dict):  # error dict from resolver
                 return start_pt
             start_xy: Tuple[float, float] = (start_pt[0], start_pt[1])
             end_xy: Tuple[float, float] = (end_pt[0], end_pt[1])
 
             width_mm = float(params.get("width") or self._smart_default_width_mm(net))
+            if width_mm <= 0:
+                return {
+                    "success": False,
+                    "message": f"Track width must be positive (got {width_mm} mm)",
+                }
 
             items = self._collect_obstacle_items(layers)
             obstacles = obstacles_from_board_items(items)
@@ -83,6 +88,8 @@ class SmartRouteMixin:
                 trace_width_mm=width_mm,
                 via_cost=float(params.get("viaCost", 20.0)),
                 max_nodes=int(params.get("maxNodes", 200_000)),
+                start_layer=start_pt[2],
+                end_layer=end_pt[2],
             )
             if not result.success:
                 return {
@@ -116,8 +123,16 @@ class SmartRouteMixin:
 
     # -- helpers -----------------------------------------------------------
 
-    def _resolve_smart_endpoints(self, params: Dict[str, Any]):
-        """Return ((x, y, pad|None), (x, y, pad|None), net) or (error_dict, _, _)."""
+    def _resolve_smart_endpoints(
+        self, params: Dict[str, Any], layers: List[str]
+    ) -> Tuple[Any, Any, Optional[str]]:
+        """Return ((x, y, layer|None), (x, y, layer|None), net) or (error_dict, None, None).
+
+        The layer element pins an SMD pad's endpoint to its copper layer so the
+        search starts/ends there; through-hole pads and bare points yield None
+        (any routing layer). An SMD pad on none of the requested layers is a
+        refusal — routing to it would be electrically disconnected.
+        """
         start = params.get("start")
         end = params.get("end")
         if start and end:
@@ -142,7 +157,7 @@ class SmartRouteMixin:
                 None,
             )
         footprints = {fp.GetReference(): fp for fp in self.board.GetFootprints()}
-        pads = []
+        endpoints = []
         for ref, pad_num in ((from_ref, from_pad), (to_ref, to_pad)):
             fp = footprints.get(ref)
             if fp is None:
@@ -154,17 +169,52 @@ class SmartRouteMixin:
                     None,
                     None,
                 )
-            pads.append(pad)
-        net = params.get("net") or pads[0].GetNetname() or None
-        pos_a, pos_b = pads[0].GetPosition(), pads[1].GetPosition()
+            pad_layer = self._pad_routing_layer(pad, layers)
+            if pad_layer == "":
+                return (
+                    {
+                        "success": False,
+                        "message": (
+                            f"Pad {pad_num} on {ref} is not on any requested routing layer "
+                            f"({', '.join(layers)}); include the pad's copper layer in `layers`"
+                        ),
+                    },
+                    None,
+                    None,
+                )
+            endpoints.append((pad, pad_layer))
+        net = params.get("net") or endpoints[0][0].GetNetname() or None
+        pos_a = endpoints[0][0].GetPosition()
+        pos_b = endpoints[1][0].GetPosition()
         return (
-            (pos_a.x / _NM, pos_a.y / _NM, pads[0]),
-            (pos_b.x / _NM, pos_b.y / _NM, pads[1]),
+            (pos_a.x / _NM, pos_a.y / _NM, endpoints[0][1]),
+            (pos_b.x / _NM, pos_b.y / _NM, endpoints[1][1]),
             net,
         )
 
+    def _pad_routing_layer(self, pad: Any, layers: List[str]) -> Optional[str]:
+        """The routing layer an endpoint pad pins the search to.
+
+        Through-hole pads span the stackup -> None (any layer). SMD pads
+        return the first requested layer they sit on, or "" (sentinel) when
+        they are on none of them — the caller refuses that case.
+        """
+        through = bool(pad.HasHole()) if hasattr(pad, "HasHole") else True
+        if through:
+            return None
+        for layer_name in layers:
+            layer_id = self.board.GetLayerID(layer_name)
+            if layer_id >= 0 and pad.IsOnLayer(layer_id):
+                return layer_name
+        return ""
+
     def _smart_default_width_mm(self, net: Optional[str]) -> float:
-        """Netclass track width for the net, falling back to the board default."""
+        """Netclass track width for the net, falling back to the board default.
+
+        Non-positive widths are KiCad's "inherit" sentinel, not real widths —
+        treat them as unset and keep falling back (same convention as
+        _geometry._netclass_track_width_mm), ending at 0.25 mm.
+        """
         try:
             design = self.board.GetDesignSettings()
             if net:
@@ -172,8 +222,13 @@ class SmartRouteMixin:
                 if net_item is not None:
                     netclass = net_item.GetNetClass()
                     if netclass is not None:
-                        return netclass.GetTrackWidth() / _NM
-            return design.GetCurrentTrackWidth() / _NM
+                        width = int(netclass.GetTrackWidth())
+                        if width > 0:
+                            return width / _NM
+            width = int(design.GetCurrentTrackWidth())
+            if width > 0:
+                return width / _NM
+            return 0.25
         except Exception:  # noqa: BLE001 — conservative fallback
             return 0.25
 

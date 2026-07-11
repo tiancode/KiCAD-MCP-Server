@@ -251,3 +251,7 @@ def test_add_zone_alias_stays_removed():
 
     assert "add_zone" not in KiCADInterface.IPC_CAPABLE_COMMANDS
     assert "add_zone" not in KiCADInterface._BOARD_MUTATING_COMMANDS
+    # Same cleanup removed the add_text alias (canonical name: add_board_text).
+    assert "add_text" not in KiCADInterface.IPC_CAPABLE_COMMANDS
+    assert "add_text" not in KiCADInterface._BOARD_MUTATING_COMMANDS
+    assert "add_board_text" in KiCADInterface.IPC_CAPABLE_COMMANDS

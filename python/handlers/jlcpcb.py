@@ -276,7 +276,7 @@ def handle_check_bom_availability(
             }
 
         stats = iface.jlcpcb_parts.get_database_stats()
-        if not stats or not stats.get("total_components"):
+        if not stats or not stats.get("total_parts"):
             return {
                 "success": False,
                 "message": "Local JLCPCB parts database is empty",
@@ -309,11 +309,22 @@ def handle_check_bom_availability(
         if not components:
             return {"success": False, "message": "Board has no footprints to check"}
 
+        def _search_with_prices(**kw: Any) -> Dict[str, Any]:
+            # search_parts_meta returns raw DB rows carrying only price_json;
+            # normalize into price_breaks the same way handle_search_jlcpcb_parts
+            # does, so search-matched BOM lines get priced like LCSC-exact ones.
+            result = iface.jlcpcb_parts.search_parts_meta(**kw)
+            for part in result.get("parts", []):
+                part["price_breaks"] = iface.jlcpcb_parts.normalize_price_breaks(
+                    part.get("price_json")
+                )
+            return result
+
         lines = group_bom(components)
         report = evaluate_bom_lines(
             lines,
             lookup_lcsc=iface.jlcpcb_parts.get_part_info,
-            search=lambda **kw: iface.jlcpcb_parts.search_parts_meta(**kw),
+            search=_search_with_prices,
             board_qty=board_qty,
         )
         return {"success": True, **report}

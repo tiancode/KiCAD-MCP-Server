@@ -48,6 +48,11 @@ const LONG_RUNNING_COMMANDS = new Set([
   "download_jlcpcb_database",
   "import_jlcpcb_symbol",
   "import_jlcpcb_symbols",
+  // route_smart's grid A* (200k-node default budget) and auto_place's
+  // ring-search placement are board-size dependent and can exceed 30s in
+  // pure Python on dense boards.
+  "route_smart",
+  "auto_place_components",
 ]);
 
 // Import tool registration functions
@@ -752,7 +757,17 @@ export class KiCADMcpServer {
 
       // Determine timeout based on command type
       let commandTimeout = 30000; // Default 30 seconds
-      if (command === "autoroute") {
+      if (command === "run_simulation") {
+        // The Python side runs two sequential subprocesses (kicad-cli netlist
+        // export + ngspice), each bounded by the tool's timeout param
+        // (default 120s). Size the Node cap above that combined budget so the
+        // internal timeouts fire first instead of a worker kill at 30s.
+        const perStep = Math.max(30, Number((params as any)?.timeout) || 120);
+        commandTimeout = (2 * perStep + 60) * 1000;
+        logger.info(
+          `Using simulation timeout (${commandTimeout / 1000}s) for ngspice run @ ${perStep}s/step`,
+        );
+      } else if (command === "autoroute") {
         // Freerouting runs `attempts` sequential passes, each up to the tool's
         // per-attempt `timeout` (seconds), plus DSN-export + SES-import
         // overhead. The fixed 10-minute bucket below isn't enough for best-of-N,
