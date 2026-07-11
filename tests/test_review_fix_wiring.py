@@ -58,9 +58,7 @@ class TestCheckBomAvailabilityWiring:
         assert "empty" not in result.get("message", "")
 
     def test_truly_empty_database_still_refused(self):
-        iface = _bom_iface(
-            [_footprint("R1", "10k", "R_0603")], stats={"total_parts": 0}
-        )
+        iface = _bom_iface([_footprint("R1", "10k", "R_0603")], stats={"total_parts": 0})
         result = handle_check_bom_availability(iface, {})
         assert result["success"] is False
         assert "download_jlcpcb_database" in result["hint"]
@@ -145,7 +143,7 @@ class TestAutoPlaceWiring:
         assert result["success"], result
 
         placement = {p["reference"]: p for p in result["placements"]}["U1"]
-        (args, _), = fp_a.SetPosition.call_args_list
+        ((args, _),) = fp_a.SetPosition.call_args_list
         vec = args[0]
         # VECTOR2I called with ints: recover mm
         set_x, set_y = vec if isinstance(vec, tuple) else (None, None)

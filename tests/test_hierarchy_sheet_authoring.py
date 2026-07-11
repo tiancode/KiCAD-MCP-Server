@@ -112,8 +112,9 @@ class TestCreateHierarchicalSheet:
         assert "(version 20250114)" in child_content
         assert '(paper "A4")' in child_content
         assert child_content.count("(") == child_content.count(")")
-        # Fresh uuid, not the parent's.
-        m = re.search(r'\(uuid\s+"([0-9a-f-]+)"\)', child_content)
+        # Fresh uuid, not the parent's (child comes from SchematicManager's
+        # template, whose top-level uuid is written unquoted).
+        m = re.search(r'\(uuid\s+"?([0-9a-f-]+)"?\)', child_content)
         assert m and m.group(1) != _ROOT_UUID
 
     def test_existing_child_not_overwritten(self, tmp_path: Path) -> None:

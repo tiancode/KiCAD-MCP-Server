@@ -1317,7 +1317,11 @@ class WireManager:
         sheetname_pattern = re.compile(
             r'\(property\s+"Sheetname"\s+"' + re.escape(sheet_name) + r'"'
         )
-        sheet_block_pattern = re.compile(r"^\t\(sheet\b")
+        # Tolerate any leading whitespace before ``(sheet`` so a block emitted
+        # by :meth:`add_sheet` (which indents one extra level when inserting
+        # before ``(sheet_instances``) is still found.  ``\b`` after ``sheet``
+        # keeps ``(sheet_instances`` from matching.
+        sheet_block_pattern = re.compile(r"^\s*\(sheet\b")
 
         # Find the sheet block that contains the target Sheetname property
         i = 0

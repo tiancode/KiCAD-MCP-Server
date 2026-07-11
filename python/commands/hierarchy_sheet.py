@@ -1,40 +1,36 @@
 """Hierarchical-sheet authoring for ``.kicad_sch`` files (KiCad 9/10 format).
 
-Pure text-manipulation functions operating on file paths — no pcbnew, no
-kicad-skip.  Two public entry points:
+Two public entry points:
 
 * :func:`create_hierarchical_sheet` — insert a ``(sheet ...)`` box into a
   parent schematic (optionally creating the referenced child file).
 * :func:`add_sheet_pin` — add a ``(pin ...)`` on a named sheet's border and,
   optionally, the matching ``(hierarchical_label ...)`` in the child sheet.
 
-The emitted S-expressions mirror what KiCad 9/10 (file version 20250114+)
-writes itself:
+This module is a thin *composition* layer: the S-expression emission is owned
+by :class:`commands.wire_manager.WireManager` (``add_sheet`` / ``add_sheet_pin``
+/ ``add_hierarchical_label``), child-file creation by
+:meth:`commands.schematic.SchematicManager.create_schematic`, and atomic writes
+by :func:`commands.schematic_locks.atomic_write_text`.  What lives here is the
+value the callers layer on top of those primitives: auto-stacked sheet-pin
+positions per border side, on-demand child-file creation, and the matching
+vertically-stacked hierarchical label written into the child schematic.
 
-* the sheet box carries ``Sheetname`` (above the top edge, ``justify left
-  bottom``) and ``Sheetfile`` (below the bottom edge, ``justify left top``)
-  properties plus an ``(instances (project ... (path "/ROOT_UUID"
-  (page "N"))))`` block keyed on the parent schematic's own top-level uuid;
-* sheet pins use the KiCad angle convention documented on
-  :data:`_SIDE_ANGLE`: a pin on the *left* edge has angle 180 (text justified
-  right, inside the box), *right* edge angle 0 (justify left), *top* edge
-  angle 90 and *bottom* edge angle 270.
-
-All writes go through an atomic temp-file + ``os.replace`` swap, and every
-assembled file is balance-checked before touching disk so a malformed block
-can never truncate an existing schematic.
+Sheet pins use the KiCad angle convention: a pin on the *left* edge has angle
+180, *right* edge angle 0, *top* edge angle 90, *bottom* edge angle 270 (see
+:data:`_SIDE_ANGLE`).
 """
 
 from __future__ import annotations
 
-import os
-import re
-import tempfile
-import uuid as uuid_module
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from utils import sexpr
+import sexpdata
+from sexpdata import Symbol
+
+from commands.schematic_locks import atomic_write_text
+from commands.wire_manager import WireManager
 
 __all__ = ["create_hierarchical_sheet", "add_sheet_pin"]
 
@@ -43,25 +39,23 @@ _VALID_SIDES = ("left", "right", "top", "bottom")
 
 # KiCad sheet-pin angle convention per border side (see module docstring).
 _SIDE_ANGLE: Dict[str, int] = {"left": 180, "right": 0, "top": 90, "bottom": 270}
-# Text justification that pairs with each angle so the pin label sits inside
-# the sheet box (matches what eeschema writes).
-_SIDE_JUSTIFY: Dict[str, str] = {
-    "left": "right",
-    "right": "left",
-    "top": "left",
-    "bottom": "right",
-}
 
 _PIN_STEP_MM = 2.54
 _CHILD_LABEL_X_MM = 25.4
 _CHILD_LABEL_START_Y_MM = 25.4
 
-_DEFAULT_VERSION = "20250114"
-_DEFAULT_GENERATOR = "KiCAD-MCP-Server"
+_SYM_KICAD_SCH = Symbol("kicad_sch")
+_SYM_SHEET = Symbol("sheet")
+_SYM_PROPERTY = Symbol("property")
+_SYM_PIN = Symbol("pin")
+_SYM_AT = Symbol("at")
+_SYM_SIZE = Symbol("size")
+_SYM_UUID = Symbol("uuid")
+_SYM_HIER_LABEL = Symbol("hierarchical_label")
 
 
 # ---------------------------------------------------------------------------
-# Low-level helpers
+# Low-level helpers (inspection only — all emission is delegated)
 # ---------------------------------------------------------------------------
 
 
@@ -69,326 +63,69 @@ def _fail(message: str) -> Dict[str, Any]:
     return {"success": False, "message": message}
 
 
-def _fmt(value: float) -> str:
-    """Format a coordinate the way KiCad does: no exponent, no trailing zeros."""
-    return f"{round(float(value), 4):g}"
-
-
-def _parens_balanced(content: str) -> bool:
-    """String-aware parenthesis balance check (parens inside ``"..."`` ignored)."""
-    depth = 0
-    in_str = False
-    esc = False
-    for ch in content:
-        if esc:
-            esc = False
-            continue
-        if ch == "\\":
-            esc = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth < 0:
-                return False
-    return depth == 0 and not in_str
-
-
-def _is_parseable_root(content: str) -> bool:
-    """True when ``content`` is a balanced S-expression rooted at (kicad_sch ...)."""
-    if not content.lstrip().startswith("(kicad_sch"):
-        return False
-    return _parens_balanced(content)
-
-
-def _iter_top_level_blocks(content: str) -> Iterator[Tuple[int, int, str]]:
-    """Yield ``(start, end, keyword)`` for each direct child of the root form.
-
-    ``start``/``end`` are the indices of the child's opening and closing
-    parens.  String-aware, so quoted parens are ignored.
-    """
-    root = content.find("(")
-    if root < 0:
-        return
-    depth = 0
-    in_str = False
-    esc = False
-    child_start = -1
-    i = root + 1
-    while i < len(content):
-        ch = content[i]
-        if esc:
-            esc = False
-        elif ch == "\\":
-            esc = True
-        elif ch == '"':
-            in_str = not in_str
-        elif not in_str:
-            if ch == "(":
-                if depth == 0:
-                    child_start = i
-                depth += 1
-            elif ch == ")":
-                if depth == 0:
-                    return  # closing paren of the root form
-                depth -= 1
-                if depth == 0 and child_start >= 0:
-                    kw_match = re.match(r"\(\s*([A-Za-z_0-9]+)", content[child_start : i + 1])
-                    yield child_start, i, kw_match.group(1) if kw_match else ""
-                    child_start = -1
-        i += 1
-
-
-def _root_uuid(content: str) -> Optional[str]:
-    """Return the schematic's own top-level ``(uuid ...)`` value, if any."""
-    for start, end, keyword in _iter_top_level_blocks(content):
-        if keyword == "uuid":
-            m = re.match(r'\(\s*uuid\s+"?([0-9a-fA-F-]+)"?\s*\)', content[start : end + 1])
-            if m:
-                return m.group(1)
-    return None
-
-
-def _top_level_sheet_blocks(content: str) -> List[Tuple[int, int]]:
-    """Spans of every top-level ``(sheet ...)`` block (not ``sheet_instances``)."""
-    return [(s, e) for s, e, kw in _iter_top_level_blocks(content) if kw == "sheet"]
-
-
-def _header_token(content: str, keyword: str, default: str) -> str:
-    """Extract a top-level single-token header value like (version N) / (generator "X")."""
-    for start, end, kw in _iter_top_level_blocks(content):
-        if kw == keyword:
-            m = re.match(
-                r"\(\s*" + keyword + r'\s+"?([^"()]+?)"?\s*\)',
-                content[start : end + 1],
-            )
-            if m:
-                return m.group(1).strip()
-    return default
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` via a same-directory temp file + os.replace."""
-    directory = path.parent if str(path.parent) else Path(".")
-    fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=f".{path.name}.", suffix=".tmp")
+def _load_root(content: str) -> Optional[list]:
+    """Parse ``content``; return the tree iff it is a ``(kicad_sch ...)`` root."""
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
-def _insert_top_level(content: str, block_text: str) -> Optional[str]:
-    """Insert ``block_text`` as a new top-level child of the root form.
-
-    Prefers the position just before ``(sheet_instances`` (the root sheet's
-    trailer); falls back to just before the final closing paren (sub-sheets
-    carry no ``sheet_instances``).  Returns None when no insertion point
-    exists.
-    """
-    insert_at = content.rfind("(sheet_instances")
-    if insert_at != -1:
-        return content[:insert_at] + block_text.lstrip("\n") + "\t" + content[insert_at:]
-    stripped = content.rstrip()
-    if not stripped.endswith(")"):
+        tree = sexpdata.loads(content)
+    except Exception:
         return None
-    insert_at = len(stripped) - 1
-    return content[:insert_at] + block_text.lstrip("\n") + content[insert_at:]
-
-
-def _guess_project_name(parent_path: Path) -> str:
-    """Project name = sibling ``.kicad_pro`` stem when present, else the sheet stem."""
-    pros = sorted(parent_path.parent.glob("*.kicad_pro"))
-    if pros:
-        return pros[0].stem
-    return parent_path.stem
-
-
-# ---------------------------------------------------------------------------
-# S-expression builders
-# ---------------------------------------------------------------------------
-
-
-def _make_sheet_block(
-    sheet_name: str,
-    sheet_file: str,
-    position: Tuple[float, float],
-    size: Tuple[float, float],
-    project_name: str,
-    root_uuid: str,
-    page_number: str,
-    sheet_uuid: str,
-) -> str:
-    """Build a KiCad 9/10 ``(sheet ...)`` block as tab-indented text.
-
-    Sheetname is anchored just above the top edge (justify left bottom),
-    Sheetfile just below the bottom edge (justify left top) — the placement
-    eeschema itself uses.
-    """
-    x, y = position
-    w, h = size
-    name_y = round(y - 0.7625, 4)
-    file_y = round(y + h + 0.61, 4)
-    name_esc = sexpr.escape_sexpr_string(sheet_name)
-    file_esc = sexpr.escape_sexpr_string(sheet_file)
-    proj_esc = sexpr.escape_sexpr_string(project_name)
-    return (
-        f"\t(sheet\n"
-        f"\t\t(at {_fmt(x)} {_fmt(y)})\n"
-        f"\t\t(size {_fmt(w)} {_fmt(h)})\n"
-        f"\t\t(exclude_from_sim no)\n"
-        f"\t\t(in_bom yes)\n"
-        f"\t\t(on_board yes)\n"
-        f"\t\t(dnp no)\n"
-        f"\t\t(stroke\n"
-        f"\t\t\t(width 0)\n"
-        f"\t\t\t(type solid)\n"
-        f"\t\t)\n"
-        f"\t\t(fill\n"
-        f"\t\t\t(color 0 0 0 0.0000)\n"
-        f"\t\t)\n"
-        f'\t\t(uuid "{sheet_uuid}")\n'
-        f'\t\t(property "Sheetname" "{name_esc}"\n'
-        f"\t\t\t(at {_fmt(x)} {_fmt(name_y)} 0)\n"
-        f"\t\t\t(effects\n"
-        f"\t\t\t\t(font\n"
-        f"\t\t\t\t\t(size 1.27 1.27)\n"
-        f"\t\t\t\t)\n"
-        f"\t\t\t\t(justify left bottom)\n"
-        f"\t\t\t)\n"
-        f"\t\t)\n"
-        f'\t\t(property "Sheetfile" "{file_esc}"\n'
-        f"\t\t\t(at {_fmt(x)} {_fmt(file_y)} 0)\n"
-        f"\t\t\t(effects\n"
-        f"\t\t\t\t(font\n"
-        f"\t\t\t\t\t(size 1.27 1.27)\n"
-        f"\t\t\t\t)\n"
-        f"\t\t\t\t(justify left top)\n"
-        f"\t\t\t)\n"
-        f"\t\t)\n"
-        f"\t\t(instances\n"
-        f'\t\t\t(project "{proj_esc}"\n'
-        f'\t\t\t\t(path "/{root_uuid}"\n'
-        f'\t\t\t\t\t(page "{page_number}")\n'
-        f"\t\t\t\t)\n"
-        f"\t\t\t)\n"
-        f"\t\t)\n"
-        f"\t)\n"
-    )
-
-
-def _make_pin_text(
-    pin_name: str,
-    shape: str,
-    position: Tuple[float, float],
-    angle: int,
-    justify: str,
-    pin_uuid: str,
-) -> str:
-    """Build a sheet ``(pin ...)`` block, indented for insertion inside a sheet."""
-    name_esc = sexpr.escape_sexpr_string(pin_name)
-    return (
-        f'\t\t(pin "{name_esc}" {shape}\n'
-        f"\t\t\t(at {_fmt(position[0])} {_fmt(position[1])} {angle})\n"
-        f"\t\t\t(effects\n"
-        f"\t\t\t\t(font\n"
-        f"\t\t\t\t\t(size 1.27 1.27)\n"
-        f"\t\t\t\t)\n"
-        f"\t\t\t\t(justify {justify})\n"
-        f"\t\t\t)\n"
-        f'\t\t\t(uuid "{pin_uuid}")\n'
-        f"\t\t)\n"
-    )
-
-
-def _make_hier_label_text(
-    name: str,
-    shape: str,
-    position: Tuple[float, float],
-    label_uuid: str,
-) -> str:
-    """Build a top-level ``(hierarchical_label ...)`` block (angle 0, justify left)."""
-    name_esc = sexpr.escape_sexpr_string(name)
-    return (
-        f'\t(hierarchical_label "{name_esc}"\n'
-        f"\t\t(shape {shape})\n"
-        f"\t\t(at {_fmt(position[0])} {_fmt(position[1])} 0)\n"
-        f"\t\t(effects\n"
-        f"\t\t\t(font\n"
-        f"\t\t\t\t(size 1.27 1.27)\n"
-        f"\t\t\t)\n"
-        f"\t\t\t(justify left)\n"
-        f"\t\t)\n"
-        f'\t\t(uuid "{label_uuid}")\n'
-        f"\t)\n"
-    )
-
-
-def _make_empty_child(version: str, generator: str) -> str:
-    """Build a minimal valid empty ``.kicad_sch`` with a fresh uuid."""
-    child_uuid = str(uuid_module.uuid4())
-    return (
-        f"(kicad_sch\n"
-        f"\t(version {version})\n"
-        f'\t(generator "{sexpr.escape_sexpr_string(generator)}")\n'
-        f'\t(uuid "{child_uuid}")\n'
-        f'\t(paper "A4")\n'
-        f"\t(lib_symbols)\n"
-        f")\n"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Sheet-block inspection
-# ---------------------------------------------------------------------------
-
-
-def _sheet_has_name(block: str, sheet_name: str) -> bool:
-    escaped = re.escape(sexpr.escape_sexpr_string(sheet_name))
-    return re.search(r'\(property\s+"Sheetname"\s+"' + escaped + r'"', block) is not None
-
-
-def _find_sheet_block(content: str, sheet_name: str) -> Optional[Tuple[int, int]]:
-    """Span of the top-level (sheet ...) block whose Sheetname matches, or None."""
-    for start, end in _top_level_sheet_blocks(content):
-        if _sheet_has_name(content[start : end + 1], sheet_name):
-            return start, end
+    if isinstance(tree, list) and tree and tree[0] == _SYM_KICAD_SCH:
+        return tree
     return None
 
 
-def _sheet_geometry(block: str) -> Optional[Tuple[float, float, float, float]]:
-    """Return (x, y, w, h) parsed from the sheet block's (at ...) and (size ...)."""
-    at = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)\s*\)", block)
-    size = re.search(r"\(size\s+([-\d.]+)\s+([-\d.]+)\s*\)", block)
-    if not at or not size:
+def _child_lists(node: list, head: Symbol) -> List[list]:
+    """Direct child S-expressions of ``node`` whose head symbol is ``head``."""
+    return [c for c in node[1:] if isinstance(c, list) and c and c[0] == head]
+
+
+def _sub(node: list, head: Symbol) -> Optional[list]:
+    """First direct child of ``node`` whose head symbol is ``head``."""
+    for c in node[1:]:
+        if isinstance(c, list) and c and c[0] == head:
+            return c
+    return None
+
+
+def _property_value(sheet: list, prop_name: str) -> Optional[str]:
+    """Value of the ``(property "<prop_name>" "<value>" ...)`` in a sheet block."""
+    for prop in _child_lists(sheet, _SYM_PROPERTY):
+        if len(prop) >= 3 and str(prop[1]) == prop_name:
+            return str(prop[2])
+    return None
+
+
+def _sheet_name(sheet: list) -> Optional[str]:
+    return _property_value(sheet, "Sheetname")
+
+
+def _find_sheet(tree: list, sheet_name: str) -> Optional[list]:
+    """Top-level ``(sheet ...)`` block whose Sheetname matches, or None."""
+    for sheet in _child_lists(tree, _SYM_SHEET):
+        if _sheet_name(sheet) == sheet_name:
+            return sheet
+    return None
+
+
+def _sheet_geometry(sheet: list) -> Optional[Tuple[float, float, float, float]]:
+    """Return (x, y, w, h) from a sheet block's (at ...) / (size ...)."""
+    at = _sub(sheet, _SYM_AT)
+    size = _sub(sheet, _SYM_SIZE)
+    if not (at and len(at) >= 3 and size and len(size) >= 3):
         return None
-    return float(at.group(1)), float(at.group(2)), float(size.group(1)), float(size.group(2))
+    return float(at[1]), float(at[2]), float(size[1]), float(size[2])
 
 
-def _existing_pins(block: str) -> List[Tuple[str, float, float, int]]:
+def _existing_pins(sheet: list) -> List[Tuple[str, float, float, int]]:
     """All (name, x, y, angle) sheet pins declared inside a sheet block."""
     pins: List[Tuple[str, float, float, int]] = []
-    for m in re.finditer(r'\(pin\s+"((?:[^"\\]|\\.)*)"', block):
-        end = sexpr.find_matching_paren(block, m.start())
-        if end < 0:
+    for pin in _child_lists(sheet, _SYM_PIN):
+        if len(pin) < 2:
             continue
-        pin_block = block[m.start() : end + 1]
-        at = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\)", pin_block)
-        if at:
-            pins.append(
-                (m.group(1), float(at.group(1)), float(at.group(2)), int(float(at.group(3))))
-            )
+        name = str(pin[1])
+        at = _sub(pin, _SYM_AT)
+        if at and len(at) >= 4:
+            pins.append((name, float(at[1]), float(at[2]), int(float(at[3]))))
     return pins
 
 
@@ -469,54 +206,51 @@ def create_hierarchical_sheet(
         content = parent.read_text(encoding="utf-8")
     except OSError as e:
         return _fail(f"Could not read parent schematic: {e}")
-    if not _is_parseable_root(content):
+
+    tree = _load_root(content)
+    if tree is None:
         return _fail(f"Parent schematic is not a parseable (kicad_sch ...) file: {parent_sch_path}")
 
-    root_uuid = _root_uuid(content)
-    if not root_uuid:
+    if not WireManager._root_schematic_uuid(content):
         return _fail(
             "Parent schematic has no top-level (uuid ...) — cannot key the sheet's "
             "(instances ...) page number"
         )
 
-    existing_sheets = _top_level_sheet_blocks(content)
-    for start, end in existing_sheets:
-        if _sheet_has_name(content[start : end + 1], sheet_name):
-            return _fail(f"A sheet named '{sheet_name}' already exists in {parent.name}")
+    if _find_sheet(tree, sheet_name) is not None:
+        return _fail(f"A sheet named '{sheet_name}' already exists in {parent.name}")
 
-    # Parent is page 1; each existing sheet already occupies a page after it.
-    page = str(len(existing_sheets) + 2)
-    sheet_uuid = str(uuid_module.uuid4())
-    block = _make_sheet_block(
-        sheet_name,
-        child_filename,
-        position,
-        size,
-        _guess_project_name(parent),
-        root_uuid,
-        page,
-        sheet_uuid,
-    )
-    new_content = _insert_top_level(content, block)
-    if new_content is None or not _is_parseable_root(new_content):
-        return _fail("Internal error: sheet insertion would corrupt the parent schematic")
-
+    # Create the child file first (mirrors handle_add_schematic_sheet) so a
+    # write failure leaves the parent untouched.
     child_created = False
     child_path = parent.parent / child_filename
     if create_child and not child_path.exists():
-        version = _header_token(content, "version", _DEFAULT_VERSION)
-        generator = _header_token(content, "generator", _DEFAULT_GENERATOR)
+        from commands.schematic import SchematicManager
+
         child_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(child_path, _make_empty_child(version, generator))
+        SchematicManager.create_schematic(
+            child_path.stem,
+            path=str(child_path.parent),
+            template="empty.kicad_sch",
+        )
         child_created = True
 
-    _atomic_write(parent, new_content)
+    success, info = WireManager.add_sheet(
+        parent,
+        sheet_name,
+        child_filename,
+        [float(position[0]), float(position[1])],
+        size=[float(size[0]), float(size[1])],
+    )
+    if not success:
+        return _fail(f"Failed to insert sheet: {info.get('error', 'unknown error')}")
+
     return {
         "success": True,
         "sheetName": sheet_name,
         "sheetFile": child_filename,
-        "uuid": sheet_uuid,
-        "page": page,
+        "uuid": info.get("uuid"),
+        "page": info.get("page"),
         "childCreated": child_created,
     }
 
@@ -561,57 +295,50 @@ def add_sheet_pin(
         content = parent.read_text(encoding="utf-8")
     except OSError as e:
         return _fail(f"Could not read parent schematic: {e}")
-    if not _is_parseable_root(content):
+
+    tree = _load_root(content)
+    if tree is None:
         return _fail(f"Parent schematic is not a parseable (kicad_sch ...) file: {parent_sch_path}")
 
-    span = _find_sheet_block(content, sheet_name)
-    if span is None:
+    sheet = _find_sheet(tree, sheet_name)
+    if sheet is None:
         return _fail(f"Sheet '{sheet_name}' not found in {parent.name}")
-    start, end = span
-    block = content[start : end + 1]
 
-    geometry = _sheet_geometry(block)
+    geometry = _sheet_geometry(sheet)
     if geometry is None:
         return _fail(f"Sheet '{sheet_name}' has no parseable (at ...) / (size ...) geometry")
 
-    existing = _existing_pins(block)
-    if any(p[0] == sexpr.escape_sexpr_string(pin_name) for p in existing):
+    existing = _existing_pins(sheet)
+    if any(p[0] == pin_name for p in existing):
         return _fail(f"Sheet '{sheet_name}' already has a pin named '{pin_name}'")
 
     px, py = _pin_position(side, offset_mm, geometry, existing)
+    px, py = round(px, 4), round(py, 4)
     x, y, w, h = geometry
     if not (x <= px <= x + w and y <= py <= y + h):
         return _fail(
             f"No room left on the {side} side of sheet '{sheet_name}' — "
-            f"computed pin position ({_fmt(px)}, {_fmt(py)}) falls outside the sheet"
+            f"computed pin position ({px:g}, {py:g}) falls outside the sheet"
         )
 
     angle = _SIDE_ANGLE[side]
-    pin_uuid = str(uuid_module.uuid4())
-    pin_text = _make_pin_text(pin_name, shape, (px, py), angle, _SIDE_JUSTIFY[side], pin_uuid)
-
-    # Insert the pin just before the line carrying the sheet block's closer.
-    line_start = content.rfind("\n", start, end)
-    if line_start != -1:
-        insert_at = line_start + 1
-        new_content = content[:insert_at] + pin_text + content[insert_at:]
-    else:  # single-line sheet block — keep it valid anyway
-        new_content = content[:end] + "\n" + pin_text + "\t" + content[end:]
-    if not _is_parseable_root(new_content):
+    new_content, ok = WireManager.add_sheet_pin(
+        content, sheet_name, pin_name, shape, [px, py], orientation=angle
+    )
+    if not ok or _load_root(new_content) is None:
         return _fail("Internal error: pin insertion would corrupt the parent schematic")
-    _atomic_write(parent, new_content)
+    atomic_write_text(parent, new_content)
 
     child_label_added = False
     note: Optional[str] = None
     if add_child_label:
-        sheetfile = re.search(r'\(property\s+"Sheetfile"\s+"((?:[^"\\]|\\.)*)"', block)
+        sheetfile = _property_value(sheet, "Sheetfile")
         if not sheetfile:
             note = "sheet has no Sheetfile property; child label skipped"
         else:
-            child_path = parent.parent / sheetfile.group(1).replace('\\"', '"').replace(
-                "\\\\", "\\"
+            child_label_added, note = _append_child_label(
+                parent.parent / sheetfile, pin_name, shape
             )
-            child_label_added, note = _append_child_label(child_path, pin_name, shape)
 
     result: Dict[str, Any] = {
         "success": True,
@@ -619,15 +346,29 @@ def add_sheet_pin(
             "name": pin_name,
             "shape": shape,
             "side": side,
-            "position": [round(px, 4), round(py, 4)],
+            "position": [px, py],
             "angle": angle,
-            "uuid": pin_uuid,
+            "uuid": _last_pin_uuid(new_content, pin_name),
         },
         "childLabelAdded": child_label_added,
     }
     if note:
         result["message"] = note
     return result
+
+
+def _last_pin_uuid(content: str, pin_name: str) -> Optional[str]:
+    """Best-effort: the uuid of the just-inserted named sheet pin."""
+    tree = _load_root(content)
+    if tree is None:
+        return None
+    for sheet in _child_lists(tree, _SYM_SHEET):
+        for pin in _child_lists(sheet, _SYM_PIN):
+            if len(pin) >= 2 and str(pin[1]) == pin_name:
+                uid = _sub(pin, _SYM_UUID)
+                if uid and len(uid) >= 2:
+                    return str(uid[1])
+    return None
 
 
 def _append_child_label(child_path: Path, pin_name: str, shape: str) -> Tuple[bool, Optional[str]]:
@@ -642,22 +383,19 @@ def _append_child_label(child_path: Path, pin_name: str, shape: str) -> Tuple[bo
         child_content = child_path.read_text(encoding="utf-8")
     except OSError as e:
         return False, f"could not read child schematic: {e}"
-    if not _is_parseable_root(child_content):
+
+    tree = _load_root(child_content)
+    if tree is None:
         return False, f"child schematic {child_path.name} is not parseable; child label skipped"
 
-    name_esc = re.escape(sexpr.escape_sexpr_string(pin_name))
-    if re.search(r'\(hierarchical_label\s+"' + name_esc + r'"', child_content):
+    labels = _child_lists(tree, _SYM_HIER_LABEL)
+    if any(len(lbl) >= 2 and str(lbl[1]) == pin_name for lbl in labels):
         return False, f"child already has a hierarchical label '{pin_name}'"
 
-    label_count = sum(
-        1 for _, _, kw in _iter_top_level_blocks(child_content) if kw == "hierarchical_label"
+    label_y = _CHILD_LABEL_START_Y_MM + _PIN_STEP_MM * len(labels)
+    ok = WireManager.add_hierarchical_label(
+        child_path, pin_name, [_CHILD_LABEL_X_MM, label_y], shape=shape, orientation=0
     )
-    label_y = _CHILD_LABEL_START_Y_MM + _PIN_STEP_MM * label_count
-    label_text = _make_hier_label_text(
-        pin_name, shape, (_CHILD_LABEL_X_MM, label_y), str(uuid_module.uuid4())
-    )
-    new_child = _insert_top_level(child_content, label_text)
-    if new_child is None or not _is_parseable_root(new_child):
-        return False, "child label insertion would corrupt the child schematic; skipped"
-    _atomic_write(child_path, new_child)
+    if not ok:
+        return False, "child label insertion failed; skipped"
     return True, None

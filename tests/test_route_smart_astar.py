@@ -315,9 +315,7 @@ class TestEndpointLayerPinning:
         # trailing via AT the endpoint is electrically equivalent to a final
         # B.Cu segment (the through via lands on the B.Cu pad).
         last = result.segments[-1]
-        via_at_end = any(
-            abs(v["x"] - 25.0) < 0.3 and abs(v["y"] - 15.0) < 0.3 for v in result.vias
-        )
+        via_at_end = any(abs(v["x"] - 25.0) < 0.3 and abs(v["y"] - 15.0) < 0.3 for v in result.vias)
         assert last["layer"] == "B.Cu" or via_at_end
 
     def test_start_blockage_checked_on_start_layer_not_layers0(self):
