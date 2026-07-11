@@ -4,20 +4,7 @@ Split out of the former monolithic kicad_api/ipc_backend.py.
 """
 
 import logging
-import os
-import platform
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-
-from kicad_api.base import APINotAvailableError, BoardAPI, ConnectionError, KiCADBackend
-
-from ._helpers import (
-    INCH_TO_NM,
-    MM_TO_NM,
-    _document_type_enum,
-    get_open_documents_compat,
-    has_open_pcb_document,
-)
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("kicad_interface")
 

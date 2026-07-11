@@ -5,7 +5,6 @@ Split out of the former monolithic commands/library_symbol.py.
 
 import logging
 import re
-from pathlib import Path
 from typing import Dict, List
 
 from ._models import SymbolInfo

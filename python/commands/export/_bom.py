@@ -7,8 +7,6 @@ import logging
 import os
 from typing import Any, Dict, List
 
-import pcbnew
-
 logger = logging.getLogger("kicad_interface")
 
 

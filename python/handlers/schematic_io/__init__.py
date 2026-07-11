@@ -9,7 +9,6 @@ from ._io import (
     handle_sync_schematic_to_board,
     handle_export_schematic_svg,
     handle_export_schematic_pdf,
-    handle_load_schematic,
     handle_create_schematic,
 )
 from ._netlist import handle_export_netlist, handle_generate_netlist
@@ -51,7 +50,6 @@ __all__ = [
     "handle_export_schematic_pdf",
     "handle_export_schematic_svg",
     "handle_generate_netlist",
-    "handle_load_schematic",
     "handle_run_erc",
     "handle_sync_schematic_to_board",
 ]

@@ -6,9 +6,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams, truncationNote } from "../pagination-params.js";
-import { formatKicadResult } from "../tool-response.js";
+import { makePassthrough } from "../tool-response.js";
 
 export function registerSchematicQueryTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // One-shot schematic snapshot — components + wires + labels + nets in a
   // single response. Cuts 3 MCP round-trips out of basic schematic inspection.
   server.tool(
@@ -17,10 +18,7 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
     },
-    async (args: { schematicPath: string }) => {
-      const result = await callKicadScript("get_schematic_overview", args);
-      return formatKicadResult(result);
-    },
+    passthrough("get_schematic_overview"),
   );
 
   // List all components in schematic

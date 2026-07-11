@@ -8,8 +8,6 @@ import os
 from datetime import datetime
 from typing import Optional
 
-import pcbnew
-
 logger = logging.getLogger("kicad_interface")
 
 

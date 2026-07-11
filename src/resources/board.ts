@@ -7,10 +7,8 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-import { countComponentTypes } from "./component-utils.js";
-
-// Command function type for KiCAD script calls
-type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+import { countComponentTypes, jsonResource, resourceError } from "./component-utils.js";
+import { CommandFunction } from "../tools/tool-response.js";
 
 /**
  * Register board resources with the MCP server
@@ -30,30 +28,11 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
 
     if (!result.success) {
       logger.error(`Failed to retrieve board information: ${result.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to retrieve board information",
-              details: result.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to retrieve board information", result.errorDetails);
     }
 
     logger.debug("Successfully retrieved board information");
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(result),
-          mimeType: "application/json",
-        },
-      ],
-    };
+    return jsonResource(uri, result);
   });
 
   // ------------------------------------------------------
@@ -65,30 +44,11 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
 
     if (!result.success) {
       logger.error(`Failed to retrieve layer list: ${result.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to retrieve layer list",
-              details: result.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to retrieve layer list", result.errorDetails);
     }
 
     logger.debug(`Successfully retrieved ${result.layers?.length || 0} layers`);
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(result),
-          mimeType: "application/json",
-        },
-      ],
-    };
+    return jsonResource(uri, result);
   });
 
   // ------------------------------------------------------
@@ -112,30 +72,11 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
 
       if (!result.success) {
         logger.error(`Failed to retrieve board extents: ${result.errorDetails}`);
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              text: JSON.stringify({
-                error: "Failed to retrieve board extents",
-                details: result.errorDetails,
-              }),
-              mimeType: "application/json",
-            },
-          ],
-        };
+        return resourceError(uri, "Failed to retrieve board extents", result.errorDetails);
       }
 
       logger.debug("Successfully retrieved board extents");
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify(result),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return jsonResource(uri, result);
     },
   );
 
@@ -170,18 +111,7 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
 
       if (!result.success) {
         logger.error(`Failed to retrieve 2D board view: ${result.errorDetails}`);
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              text: JSON.stringify({
-                error: "Failed to retrieve 2D board view",
-                details: result.errorDetails,
-              }),
-              mimeType: "application/json",
-            },
-          ],
-        };
+        return resourceError(uri, "Failed to retrieve 2D board view", result.errorDetails);
       }
 
       logger.debug("Successfully retrieved 2D board view");
@@ -224,54 +154,25 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     const boardResult = await callKicadScript("get_board_info", {});
     if (!boardResult.success) {
       logger.error(`Failed to retrieve board information: ${boardResult.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to generate board statistics",
-              details: boardResult.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to generate board statistics", boardResult.errorDetails);
     }
 
     // Get component list (limit:0 = uncapped; resources carry full data)
     const componentsResult = await callKicadScript("get_component_list", { limit: 0 });
     if (!componentsResult.success) {
       logger.error(`Failed to retrieve component list: ${componentsResult.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to generate board statistics",
-              details: componentsResult.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(
+        uri,
+        "Failed to generate board statistics",
+        componentsResult.errorDetails,
+      );
     }
 
     // Get nets list (limit:0 = uncapped; resources carry full data)
     const netsResult = await callKicadScript("get_nets_list", { limit: 0 });
     if (!netsResult.success) {
       logger.error(`Failed to retrieve nets list: ${netsResult.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to generate board statistics",
-              details: netsResult.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to generate board statistics", netsResult.errorDetails);
     }
 
     // Combine all information into statistics
@@ -291,15 +192,7 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     };
 
     logger.debug("Successfully generated board statistics");
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(statistics),
-          mimeType: "application/json",
-        },
-      ],
-    };
+    return jsonResource(uri, statistics);
   });
 
   logger.info("Board resources registered");

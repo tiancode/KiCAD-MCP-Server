@@ -6,10 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
 import { paginationParams } from "./pagination-params.js";
-import { formatKicadResult } from "./tool-response.js";
-
-// Command function type for KiCAD script calls
-type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+import { CommandFunction, formatKicadResult } from "./tool-response.js";
 
 /**
  * Register component management tools with the MCP server

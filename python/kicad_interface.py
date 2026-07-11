@@ -42,8 +42,8 @@ _annotation_loader = AnnotationLoader()
 
 # Configure logging.
 #
-# LOG_LEVEL env var (shared with the TypeScript side via src/server.ts /
-# src/config.ts) drives both layers — defaults to INFO.  Previously this
+# LOG_LEVEL env var drives this layer's verbosity (the TS parent passes its
+# environment through unchanged) — defaults to INFO.  Previously this
 # was hardcoded to DEBUG, flooding ~/.kicad-mcp/logs/kicad_interface.log
 # every session and, on the no-write fallback path, dumping DEBUG noise
 # onto stderr where the TS parent re-logs it all as ERROR.
@@ -380,19 +380,15 @@ class KiCADInterface(BoardPersistenceMixin):
         "export_schematic_pdf": "schematic_io",
         "export_schematic_svg": "schematic_io",
         "generate_netlist": "schematic_io",
-        "load_schematic": "schematic_io",
         "run_erc": "schematic_io",
         "sync_schematic_to_board": "schematic_io",
         "add_schematic_text": "schematic_query",
-        "check_wire_collisions": "schematic_query",
-        "find_unconnected_pins": "schematic_query",
         "get_net_at_point": "schematic_query",
         "get_net_connections": "schematic_query",
         "get_schematic_pin_locations": "schematic_query",
         "get_wire_connections": "schematic_query",
         "list_schematic_components": "schematic_query",
         "list_schematic_labels": "schematic_query",
-        "list_schematic_libraries": "schematic_query",
         "list_schematic_nets": "schematic_query",
         "list_schematic_texts": "schematic_query",
         "list_schematic_wires": "schematic_query",
@@ -495,7 +491,6 @@ class KiCADInterface(BoardPersistenceMixin):
     def __init__(self) -> None:
         """Initialize the interface and command handlers"""
         self.board = None
-        self.project_filename = None
         # On-disk signature (mtime_ns, sha256_hex) of self.board's file as of
         # last load or successful auto-save.  Used by _auto_save_board() to
         # detect external modifications and refuse to clobber them.
@@ -566,94 +561,143 @@ class KiCADInterface(BoardPersistenceMixin):
         # below from _HANDLER_MAP, which keeps the two sources of truth from
         # drifting apart.  Adding such a tool now means touching _HANDLER_MAP
         # plus the matching handlers/<module>.py, not three places.
-        self.command_routes = {
-            # Project commands
-            "save_project": self.project_commands.save_project,
-            "get_project_info": self.project_commands.get_project_info,
-            # Board commands
-            "set_board_size": self.board_commands.set_board_size,
-            "add_layer": self.board_commands.add_layer,
-            "set_active_layer": self.board_commands.set_active_layer,
-            "get_board_info": self.board_commands.get_board_info,
-            "get_layer_list": self.board_commands.get_layer_list,
-            "get_board_2d_view": self.board_commands.get_board_2d_view,
-            "get_board_extents": self.board_commands.get_board_extents,
-            "add_board_outline": self.board_commands.add_board_outline,
-            "add_mounting_hole": self.board_commands.add_mounting_hole,
-            "add_text": self.board_commands.add_text,
-            "add_board_text": self.board_commands.add_text,  # Alias for TypeScript tool
-            # Component commands
-            "route_pad_to_pad": self.routing_commands.route_pad_to_pad,
-            "move_component": self.component_commands.move_component,
-            "rotate_component": self.component_commands.rotate_component,
-            "delete_component": self.component_commands.delete_component,
-            "edit_component": self.component_commands.edit_component,
-            "get_component_properties": self.component_commands.get_component_properties,
-            "get_component_list": self.component_commands.get_component_list,
-            "find_component": self.component_commands.find_component,
-            "get_component_pads": self.component_commands.get_component_pads,
-            "get_pad_position": self.component_commands.get_pad_position,
-            "place_component_array": self.component_commands.place_component_array,
-            "align_components": self.component_commands.align_components,
-            "check_courtyard_overlaps": self.component_commands.check_courtyard_overlaps,
-            "duplicate_component": self.component_commands.duplicate_component,
-            # Routing commands
-            "add_net": self.routing_commands.add_net,
-            "route_trace": self.routing_commands.route_trace,
-            "route_arc_trace": self.routing_commands.route_arc_trace,
-            "add_via": self.routing_commands.add_via,
-            "delete_trace": self.routing_commands.delete_trace,
-            "query_traces": self.routing_commands.query_traces,
-            "query_zones": self.routing_commands.query_zones,
-            "edit_copper_pour": self.routing_commands.edit_copper_pour,
-            "delete_copper_pour": self.routing_commands.delete_copper_pour,
-            "add_gnd_stitching_vias": self.routing_commands.add_gnd_stitching_vias,
-            "modify_trace": self.routing_commands.modify_trace,
-            "copy_routing_pattern": self.routing_commands.copy_routing_pattern,
-            "get_nets_list": self.routing_commands.get_nets_list,
-            "create_netclass": self.routing_commands.create_netclass,
-            "assign_net_to_class": self.routing_commands.assign_net_to_class,
-            "assign_netclass_pattern": self.routing_commands.assign_netclass_pattern,
-            "add_copper_pour": self._add_copper_pour_with_optional_refill,
-            # ``add_zone`` is the same operation under a different MCP name
-            # (the TS schema exposes both for historical reasons).  Route to
-            # the shared SWIG impl so removing the schema later is a one-line
-            # change and callers don't get an "Unknown command" surprise.
-            "add_zone": self._add_copper_pour_with_optional_refill,
-            "route_differential_pair": self.routing_commands.route_differential_pair,
-            # Design rule commands
-            "set_design_rules": self.design_rule_commands.set_design_rules,
-            "get_design_rules": self.design_rule_commands.get_design_rules,
-            "run_drc": self.design_rule_commands.run_drc,
-            "get_drc_violations": self.design_rule_commands.get_drc_violations,
-            # Export commands
-            "export_gerber": self.export_commands.export_gerber,
-            "export_pdf": self.export_commands.export_pdf,
-            "export_svg": self.export_commands.export_svg,
-            "export_3d": self.export_commands.export_3d,
-            "export_bom": self.export_commands.export_bom,
-            "export_position_file": self.export_commands.export_position_file,
-            # Library commands (footprint management)
-            "list_libraries": self.library_commands.list_libraries,
-            "search_footprints": self.library_commands.search_footprints,
-            "list_library_footprints": self.library_commands.list_library_footprints,
-            "get_footprint_info": self.library_commands.get_footprint_info,
-            # Symbol library commands (local KiCad symbol library search)
-            "list_symbol_libraries": self.symbol_library_commands.list_symbol_libraries,
-            "search_symbols": self.symbol_library_commands.search_symbols,
-            "list_library_symbols": self.symbol_library_commands.list_library_symbols,
-            "get_symbol_info": self.symbol_library_commands.get_symbol_info,
-            "refresh_symbol_libraries": self.symbol_library_commands.refresh_symbol_libraries,
-            # Internal warm-up (pays wxApp init cost during startup).
-            # _handle_warmup is a real method on this class, not synthesised
-            # from _HANDLER_MAP, so it has to be registered explicitly.
-            "_warmup": self._handle_warmup,
-            # Freerouting autoroute commands
-            "autoroute": self.freerouting_commands.autoroute,
-            "export_dsn": self.freerouting_commands.export_dsn,
-            "import_ses": self.freerouting_commands.import_ses,
-            "check_freerouting": self.freerouting_commands.check_freerouting,
-        }
+        # Identity routes: each command dispatches to the same-named method
+        # on one handler object. Kept as a data table so the name/method
+        # pairing can't drift; non-identity routes (aliases, wrappers) follow
+        # explicitly below.
+        self.command_routes = {}
+        for _obj, _names in (
+            (
+                self.project_commands,
+                (
+                    "save_project",
+                    "get_project_info",
+                ),
+            ),
+            (
+                self.board_commands,
+                (
+                    "set_board_size",
+                    "add_layer",
+                    "set_active_layer",
+                    "get_board_info",
+                    "get_layer_list",
+                    "get_board_2d_view",
+                    "get_board_extents",
+                    "add_board_outline",
+                    "add_mounting_hole",
+                    "add_text",
+                ),
+            ),
+            (
+                self.routing_commands,
+                (
+                    "route_pad_to_pad",
+                    "add_net",
+                    "route_trace",
+                    "route_arc_trace",
+                    "add_via",
+                    "delete_trace",
+                    "query_traces",
+                    "query_zones",
+                    "edit_copper_pour",
+                    "delete_copper_pour",
+                    "add_gnd_stitching_vias",
+                    "modify_trace",
+                    "copy_routing_pattern",
+                    "get_nets_list",
+                    "create_netclass",
+                    "assign_net_to_class",
+                    "assign_netclass_pattern",
+                    "route_differential_pair",
+                ),
+            ),
+            (
+                self.component_commands,
+                (
+                    "move_component",
+                    "rotate_component",
+                    "delete_component",
+                    "edit_component",
+                    "get_component_properties",
+                    "get_component_list",
+                    "find_component",
+                    "get_component_pads",
+                    "get_pad_position",
+                    "place_component_array",
+                    "align_components",
+                    "check_courtyard_overlaps",
+                    "duplicate_component",
+                ),
+            ),
+            (
+                self.design_rule_commands,
+                (
+                    "set_design_rules",
+                    "get_design_rules",
+                    "run_drc",
+                    "get_drc_violations",
+                ),
+            ),
+            (
+                self.export_commands,
+                (
+                    "export_gerber",
+                    "export_pdf",
+                    "export_svg",
+                    "export_3d",
+                    "export_bom",
+                    "export_position_file",
+                ),
+            ),
+            (
+                self.library_commands,
+                (
+                    "list_libraries",
+                    "search_footprints",
+                    "list_library_footprints",
+                    "get_footprint_info",
+                ),
+            ),
+            (
+                self.symbol_library_commands,
+                (
+                    "list_symbol_libraries",
+                    "search_symbols",
+                    "list_library_symbols",
+                    "get_symbol_info",
+                    "refresh_symbol_libraries",
+                ),
+            ),
+            (
+                self.freerouting_commands,
+                (
+                    "autoroute",
+                    "export_dsn",
+                    "import_ses",
+                    "check_freerouting",
+                ),
+            ),
+        ):
+            for _name in _names:
+                self.command_routes[_name] = getattr(_obj, _name)
+
+        self.command_routes.update(
+            {
+                "add_board_text": self.board_commands.add_text,  # Alias for TypeScript tool
+                "add_copper_pour": self._add_copper_pour_with_optional_refill,
+                # ``add_zone`` is the same operation under a different MCP name.
+                # The TS layer no longer registers it, but the route is kept as a
+                # documented python-only compat command (see
+                # tests/test_ts_tool_registry.py) so callers don't get an
+                # "Unknown command" surprise.
+                "add_zone": self._add_copper_pour_with_optional_refill,
+                # Internal warm-up (pays wxApp init cost during startup).
+                # _handle_warmup is a real method on this class, not synthesised
+                # from _HANDLER_MAP, so it has to be registered explicitly.
+                "_warmup": self._handle_warmup,
+            }
+        )
 
         # Auto-inject handler-module dispatchers.  Each _HANDLER_MAP entry
         # points at a python/handlers/<module>.py whose handle_<cmd>(iface,
@@ -1724,13 +1768,16 @@ class KiCADInterface(BoardPersistenceMixin):
     def _update_command_handlers(self) -> None:
         """Update board reference in all command handlers"""
         logger.debug("Updating board reference in command handlers")
-        self.project_commands.board = self.board
-        self.board_commands.board = self.board
-        self.component_commands.board = self.board
-        self.routing_commands.board = self.board
-        self.design_rule_commands.board = self.board
-        self.export_commands.board = self.board
-        self.freerouting_commands.board = self.board
+        for _attr in (
+            "project_commands",
+            "board_commands",
+            "component_commands",
+            "routing_commands",
+            "design_rule_commands",
+            "export_commands",
+            "freerouting_commands",
+        ):
+            getattr(self, _attr).board = self.board
 
     # Stable BOARD methods used to detect SWIG dehydration. Newer KiCAD nightly
     # builds occasionally return a raw SwigPyObject from pcbnew.LoadBoard after
@@ -1979,10 +2026,6 @@ class KiCADInterface(BoardPersistenceMixin):
     ) -> Tuple[str, str]:
         """Add or update a property within a placed-symbol block."""
         return sexpr.set_property_in_block(block, name, spec, default_position)
-
-    def _set_hide_on_property(self, block: str, name: str, hide: bool) -> str:
-        """Set the (hide yes|no) flag on a named property's effects clause."""
-        return sexpr.set_hide_on_property(block, name, hide)
 
     def _remove_property_from_block(self, block: str, name: str) -> Tuple[str, bool]:
         """Remove a property from the symbol block. Returns (new_block, removed_bool)."""
@@ -2293,11 +2336,12 @@ class KiCADInterface(BoardPersistenceMixin):
         whose body extends to x=80 mm would otherwise be overlapped by
         the new grid at x=70 mm).
         """
+        page_origin = (
+            self._NEW_FOOTPRINT_GRID_START_NM,
+            self._NEW_FOOTPRINT_GRID_START_NM,
+        )
         if not existing_fps:
-            return (
-                self._NEW_FOOTPRINT_GRID_START_NM,
-                self._NEW_FOOTPRINT_GRID_START_NM,
-            )
+            return page_origin
         max_right: Optional[int] = None
         for fp in existing_fps:
             right = self._footprint_right_edge_nm(fp)
@@ -2312,10 +2356,7 @@ class KiCADInterface(BoardPersistenceMixin):
         if max_right is None:
             # Every footprint failed to report a bbox or position —
             # fall back to the empty-board contract rather than (0, 0).
-            return (
-                self._NEW_FOOTPRINT_GRID_START_NM,
-                self._NEW_FOOTPRINT_GRID_START_NM,
-            )
+            return page_origin
         return (
             max_right + self._NEW_FOOTPRINT_GRID_GUTTER_NM,
             self._NEW_FOOTPRINT_GRID_START_NM,
@@ -2574,6 +2615,16 @@ def _write_response(response_fd: Any, response: Any) -> None:
     os.write(response_fd, payload.encode("utf-8"))
 
 
+def _rpc_result(request_id: Any, result: Any) -> Dict[str, Any]:
+    """Wrap a payload in a JSON-RPC 2.0 result envelope."""
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _rpc_error(request_id: Any, code: int, message: str) -> Dict[str, Any]:
+    """Wrap an error in a JSON-RPC 2.0 error envelope."""
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
 def main() -> None:
     """Main entry point"""
     # --- Redirect stdout so pcbnew C++ noise never reaches the TS host ---
@@ -2610,10 +2661,9 @@ def main() -> None:
                     # Handle MCP protocol methods
                     if method == "initialize":
                         logger.info("Handling MCP initialize")
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {
+                        response = _rpc_result(
+                            request_id,
+                            {
                                 "protocolVersion": "2025-06-18",
                                 "capabilities": {
                                     "tools": {"listChanged": True},
@@ -2629,7 +2679,7 @@ def main() -> None:
                                 },
                                 "instructions": "AI-assisted PCB design with KiCAD. Use tools to create projects, design boards, place components, route traces, and export manufacturing files.",
                             },
-                        }
+                        )
                     elif method == "tools/list":
                         logger.info("Handling MCP tools/list")
                         # Return list of available tools with proper schemas
@@ -2656,11 +2706,7 @@ def main() -> None:
                             )
 
                         logger.info(f"Returning {len(tools)} tools")
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {"tools": tools},
-                        }
+                        response = _rpc_result(request_id, {"tools": tools})
                     elif method == "tools/call":
                         logger.info("Handling MCP tools/call")
                         tool_name = params.get("name")
@@ -2669,55 +2715,34 @@ def main() -> None:
                         # Execute the command
                         result = interface.handle_command(tool_name, tool_params)
 
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {
+                        response = _rpc_result(
+                            request_id,
+                            {
                                 "content": [
                                     {"type": "text", "text": json.dumps(result, default=str)}
                                 ]
                             },
-                        }
+                        )
                     elif method == "resources/list":
                         logger.info("Handling MCP resources/list")
                         # Return list of available resources
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {"resources": RESOURCE_DEFINITIONS},
-                        }
+                        response = _rpc_result(request_id, {"resources": RESOURCE_DEFINITIONS})
                     elif method == "resources/read":
                         logger.info("Handling MCP resources/read")
                         resource_uri = params.get("uri")
 
                         if not resource_uri:
-                            response = {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "error": {
-                                    "code": -32602,
-                                    "message": "Missing required parameter: uri",
-                                },
-                            }
+                            response = _rpc_error(
+                                request_id, -32602, "Missing required parameter: uri"
+                            )
                         else:
                             # Read the resource
                             resource_data = handle_resource_read(resource_uri, interface)
 
-                            response = {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "result": resource_data,
-                            }
+                            response = _rpc_result(request_id, resource_data)
                     else:
                         logger.error(f"Unknown JSON-RPC method: {method}")
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {
-                                "code": -32601,
-                                "message": f"Method not found: {method}",
-                            },
-                        }
+                        response = _rpc_error(request_id, -32601, f"Method not found: {method}")
                 else:
                     # Handle legacy custom format
                     logger.info("Detected custom format message")

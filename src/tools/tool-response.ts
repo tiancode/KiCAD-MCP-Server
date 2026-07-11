@@ -1,3 +1,9 @@
+/**
+ * Signature of the server's `callKicadScript` bridge, shared by tool and
+ * resource registrars (each previously declared an identical private copy).
+ */
+export type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+
 export type McpTextResult = {
   content: Array<{
     type: "text";
@@ -80,7 +86,7 @@ export function formatKicadResult(result: unknown): McpTextResult {
  * keeps the content shape in one place so future changes (error
  * routing, structured content blocks, etc.) only touch one file.
  */
-export function passthroughCall(
+function passthroughCall(
   callKicadScript: (command: string, args: Record<string, unknown>) => Promise<unknown>,
   command: string,
 ) {

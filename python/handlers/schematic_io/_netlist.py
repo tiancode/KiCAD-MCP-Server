@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING, Any, Dict
 from ._project_libs import _merged_project_lib_env, _project_dir_for
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger("handlers.schematic_io")

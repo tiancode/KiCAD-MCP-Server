@@ -14,8 +14,6 @@ import pcbnew  # type: ignore[import-not-found]
 from commands.schematic import SchematicManager
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger("handlers.schematic_io")
@@ -294,28 +292,6 @@ def handle_export_schematic_pdf(iface: "KiCADInterface", params: Dict[str, Any])
         return {"success": False, "message": "kicad-cli not found in PATH"}
     except Exception as e:
         logger.error(f"Error exporting schematic to PDF: {str(e)}")
-        return {"success": False, "message": str(e)}
-
-
-def handle_load_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Load an existing schematic"""
-    logger.info("Loading schematic")
-    try:
-        filename = params.get("filename")
-
-        if not filename:
-            return {"success": False, "message": "Filename is required"}
-
-        schematic = SchematicManager.load_schematic(filename)
-        success = schematic is not None
-
-        if success:
-            metadata = SchematicManager.get_schematic_metadata(schematic)
-            return {"success": success, "metadata": metadata}
-        else:
-            return {"success": False, "message": "Failed to load schematic"}
-    except Exception as e:
-        logger.error(f"Error loading schematic: {str(e)}")
         return {"success": False, "message": str(e)}
 
 

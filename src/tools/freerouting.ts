@@ -6,9 +6,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "./tool-response.js";
+import { makePassthrough } from "./tool-response.js";
 
 export function registerFreeroutingTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Full autoroute: export DSN -> run Freerouting -> import SES
   //
   // Best-of-N support (the `attempts` / `targetNets` / `passSchedule`
@@ -57,10 +58,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Fun
           "Per-attempt `--max-passes` values to cycle through (default: [50, 60, 65, 70, 75, 80, 85, 90, 55, 95]). The list wraps if `attempts` exceeds its length.",
         ),
     },
-    async (args: any) => {
-      const result = await callKicadScript("autoroute", args);
-      return formatKicadResult(result);
-    },
+    passthrough("autoroute"),
   );
 
   // Check Freerouting dependencies

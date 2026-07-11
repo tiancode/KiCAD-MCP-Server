@@ -18,6 +18,42 @@ import { findPythonExecutable } from "./python-discovery.js";
 // .stdout/.stderr properties when the child produced output before exiting.
 const execFileAsync = promisify(execFile);
 
+// Commands that get the extended 10-minute timeout instead of the 30s
+// default. DRC and export operations need longer timeouts for large boards.
+const LONG_RUNNING_COMMANDS = new Set([
+  "run_drc",
+  // run_erc spawns kicad-cli sch erc and pre-refreshes lib_symbols —
+  // like run_drc, unbounded by design size, so it gets the long bucket.
+  "run_erc",
+  "export_gerber",
+  "export_pdf",
+  "export_3d",
+  "sync_schematic_to_board",
+  "list_schematic_nets",
+  "list_schematic_labels",
+  "get_schematic_view",
+  // Aggregators that fan out to the slow list_* handlers above (nets +
+  // labels each already warrant the extended timeout on their own), so
+  // the bundled call must inherit it too — otherwise a large schematic
+  // blows the 30s default.
+  "get_schematic_overview",
+  "get_pcb_overview",
+  // Symbol library queries: cold-parse of all .kicad_sym can exceed 30s
+  // on Flatpak/NFS the very first time, then is fast forever after.
+  "search_symbols",
+  "list_symbol_libraries",
+  "list_library_symbols",
+  // Downloads the JLCPCB catalog / fetches a part from EasyEDA over the
+  // network — can exceed 30s.
+  "download_jlcpcb_database",
+  "import_jlcpcb_symbol",
+  "import_jlcpcb_symbols",
+  // Specctra round-trip for the autoroute flow: DSN export and SES
+  // import both walk the whole board and can exceed 30s on large designs.
+  "export_dsn",
+  "import_ses",
+]);
+
 // Import tool registration functions
 import { registerProjectTools } from "./tools/project.js";
 import { registerBoardTools } from "./tools/board.js";
@@ -75,10 +111,10 @@ export class KiCADMcpServer {
     id: number;
   } | null = null;
 
-  /** Resolved when Python prints {"type":"ready"} — stdin loop is live. */
+  /** Resolved when Python prints {"type":"ready"} — stdin loop is live.
+   *  Never rejects: startup failures surface via waitForReady's timeout. */
   private readyPromise: Promise<void>;
   private resolveReady!: () => void;
-  private rejectReady!: (err: Error) => void;
   /** Accumulates stdout until the READY marker is seen. */
   private startupBuffer: string = "";
   /** True after READY marker detected; persistent handler takes over. */
@@ -134,9 +170,8 @@ export class KiCADMcpServer {
       },
     );
     // Create the ready promise (resolved when Python sends {"type":"ready"})
-    this.readyPromise = new Promise((resolve, reject) => {
+    this.readyPromise = new Promise((resolve) => {
       this.resolveReady = resolve;
-      this.rejectReady = reject;
     });
 
     // Initialize STDIO transport
@@ -433,9 +468,8 @@ export class KiCADMcpServer {
     this.drainQueueForRespawn(new Error("Python process exited; respawning"));
 
     // Reset per-spawn state so the new process starts from a clean slate.
-    this.readyPromise = new Promise<void>((resolve, reject) => {
+    this.readyPromise = new Promise<void>((resolve) => {
       this.resolveReady = resolve;
-      this.rejectReady = reject;
     });
     this.startupBuffer = "";
     this.readyDetected = false;
@@ -620,12 +654,11 @@ export class KiCADMcpServer {
       const timeout = setTimeout(() => {
         reject(new Error(`Python process did not send READY within ${timeoutMs / 1000} s`));
       }, timeoutMs);
-      this.readyPromise
-        .then(() => {
-          clearTimeout(timeout);
-          _resolve();
-        })
-        .catch(reject);
+      // readyPromise never rejects — the timeout above is the only error path.
+      void this.readyPromise.then(() => {
+        clearTimeout(timeout);
+        _resolve();
+      });
     });
   }
 
@@ -722,41 +755,7 @@ export class KiCADMcpServer {
       }
 
       // Determine timeout based on command type
-      // DRC and export operations need longer timeouts for large boards
       let commandTimeout = 30000; // Default 30 seconds
-      const longRunningCommands = [
-        "run_drc",
-        // run_erc spawns kicad-cli sch erc and pre-refreshes lib_symbols —
-        // like run_drc, unbounded by design size, so it gets the long bucket.
-        "run_erc",
-        "export_gerber",
-        "export_pdf",
-        "export_3d",
-        "sync_schematic_to_board",
-        "list_schematic_nets",
-        "list_schematic_labels",
-        "get_schematic_view",
-        // Aggregators that fan out to the slow list_* handlers above (nets +
-        // labels each already warrant the extended timeout on their own), so
-        // the bundled call must inherit it too — otherwise a large schematic
-        // blows the 30s default.
-        "get_schematic_overview",
-        "get_pcb_overview",
-        // Symbol library queries: cold-parse of all .kicad_sym can exceed 30s
-        // on Flatpak/NFS the very first time, then is fast forever after.
-        "search_symbols",
-        "list_symbol_libraries",
-        "list_library_symbols",
-        // Downloads the JLCPCB catalog / fetches a part from EasyEDA over the
-        // network — can exceed 30s.
-        "download_jlcpcb_database",
-        "import_jlcpcb_symbol",
-        "import_jlcpcb_symbols",
-        // Specctra round-trip for the autoroute flow: DSN export and SES
-        // import both walk the whole board and can exceed 30s on large designs.
-        "export_dsn",
-        "import_ses",
-      ];
       if (command === "autoroute") {
         // Freerouting runs `attempts` sequential passes, each up to the tool's
         // per-attempt `timeout` (seconds), plus DSN-export + SES-import
@@ -771,7 +770,7 @@ export class KiCADMcpServer {
           `Using autoroute timeout (${commandTimeout / 1000}s) for ${attempts} attempt(s) ` +
             `@ ${perAttempt}s each`,
         );
-      } else if (longRunningCommands.includes(command)) {
+      } else if (LONG_RUNNING_COMMANDS.has(command)) {
         commandTimeout = 600000; // 10 minutes for long operations
         logger.info(`Using extended timeout (${commandTimeout / 1000}s) for command: ${command}`);
       }

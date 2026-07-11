@@ -105,9 +105,9 @@ const OPEN_WORLD_EXACT = new Set<string>([
 ]);
 
 /**
- * Classify a tool name into its MCP behaviour hints.  Exported for tests.
+ * Classify a tool name into its MCP behaviour hints.
  */
-export function annotationsFor(name: string): ToolAnnotations {
+function annotationsFor(name: string): ToolAnnotations {
   const annotations: ToolAnnotations = {};
 
   if (OPEN_WORLD_EXACT.has(name)) {

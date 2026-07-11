@@ -5,9 +5,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams } from "./pagination-params.js";
-import { formatKicadResult } from "./tool-response.js";
+import { makePassthrough } from "./tool-response.js";
 
 export function registerRoutingTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Add net tool
   server.tool(
     "add_net",
@@ -16,10 +17,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       name: z.string().describe("Net name"),
       netClass: z.string().optional().describe("Net class name"),
     },
-    async (args: { name: string; netClass?: string }) => {
-      const result = await callKicadScript("add_net", args);
-      return formatKicadResult(result);
-    },
+    passthrough("add_net"),
   );
 
   // Route trace tool
@@ -45,10 +43,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       width: z.number().describe("Trace width in mm"),
       net: z.string().describe("Net name"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("route_trace", args);
-      return formatKicadResult(result);
-    },
+    passthrough("route_trace"),
   );
 
   // Route arc trace tool
@@ -81,10 +76,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       width: z.number().describe("Trace width in mm"),
       net: z.string().optional().describe("Net name"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("route_arc_trace", args);
-      return formatKicadResult(result);
-    },
+    passthrough("route_arc_trace"),
   );
 
   // Add via tool
@@ -102,10 +94,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       net: z.string().describe("Net name"),
       viaType: z.string().optional().describe("Via type (through, blind, buried)"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("add_via", args);
-      return formatKicadResult(result);
-    },
+    passthrough("add_via"),
   );
 
   // Add copper pour tool
@@ -130,10 +119,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
           "Run refill_zones after creating the pour (default true). Set false for batch mode — multiple add_copper_pour calls followed by a single refill_zones at the end.",
         ),
     },
-    async (args: any) => {
-      const result = await callKicadScript("add_copper_pour", args);
-      return formatKicadResult(result);
-    },
+    passthrough("add_copper_pour"),
   );
 
   // Edit copper pour tool
@@ -163,10 +149,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Replace the zone boundary with these {x, y} points (mm, min 3)"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("edit_copper_pour", args);
-      return formatKicadResult(result);
-    },
+    passthrough("edit_copper_pour"),
   );
 
   // Delete copper pour tool
@@ -182,10 +165,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Delete every zone the selectors match (default false: refuse on multiple)"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("delete_copper_pour", args);
-      return formatKicadResult(result);
-    },
+    passthrough("delete_copper_pour"),
   );
 
   // Delete trace tool
@@ -206,10 +186,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       layer: z.string().optional().describe("Filter by layer when using net-based deletion"),
       includeVias: z.boolean().optional().describe("Include vias in net-based deletion"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("delete_trace", args);
-      return formatKicadResult(result);
-    },
+    passthrough("delete_trace"),
   );
 
   // Query traces tool
@@ -233,10 +210,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       includeVias: z.boolean().optional().describe("Also return vias (default false)"),
       ...paginationParams,
     },
-    async (args: any) => {
-      const result = await callKicadScript("query_traces", args);
-      return formatKicadResult(result);
-    },
+    passthrough("query_traces"),
   );
 
   // Query zones tool
@@ -260,10 +234,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Filter to zones whose bounding box overlaps this region"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("query_zones", args);
-      return formatKicadResult(result);
-    },
+    passthrough("query_zones"),
   );
 
   // ------------------------------------------------------
@@ -339,10 +310,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
           "If true, return the placements that would be made but don't modify the board (default false).",
         ),
     },
-    async (args: any) => {
-      const result = await callKicadScript("add_gnd_stitching_vias", args);
-      return formatKicadResult(result);
-    },
+    passthrough("add_gnd_stitching_vias"),
   );
 
   // Get nets list tool
@@ -357,10 +325,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for length measurements"),
       ...paginationParams,
     },
-    async (args: any) => {
-      const result = await callKicadScript("get_nets_list", args);
-      return formatKicadResult(result);
-    },
+    passthrough("get_nets_list"),
   );
 
   // Modify trace tool
@@ -373,10 +338,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       layer: z.string().optional().describe("New layer name"),
       net: z.string().optional().describe("New net name"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("modify_trace", args);
-      return formatKicadResult(result);
-    },
+    passthrough("modify_trace"),
   );
 
   // Create netclass tool
@@ -400,10 +362,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
           "Wildcard membership patterns (netclass_patterns). '*' = any, '?' = one char. Matches the full hierarchical net name, so a leading '*' is often needed (e.g. '*VLV?_DRAIN').",
         ),
     },
-    async (args: any) => {
-      const result = await callKicadScript("create_netclass", args);
-      return formatKicadResult(result);
-    },
+    passthrough("create_netclass"),
   );
 
   // Assign netclass pattern tool
@@ -414,10 +373,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       netClass: z.string().describe("Name of the (existing) net class to assign nets to"),
       pattern: z.string().describe("Wildcard pattern, e.g. '+24V_*' or '*VLV?_DRAIN'"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("assign_netclass_pattern", args);
-      return formatKicadResult(result);
-    },
+    passthrough("assign_netclass_pattern"),
   );
 
   // Route differential pair tool
@@ -443,10 +399,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
       positiveNet: z.string().describe("Positive net name"),
       negativeNet: z.string().describe("Negative net name"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("route_differential_pair", args);
-      return formatKicadResult(result);
-    },
+    passthrough("route_differential_pair"),
   );
 
   // Refill zones tool
@@ -463,10 +416,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
           "Opt into the SWIG fill when IPC isn't available (default false → refused with requires_ipc:true). Only for headless flows that need a filled .kicad_pcb on disk; verify the result with run_drc.",
         ),
     },
-    async (args: any) => {
-      const result = await callKicadScript("refill_zones", args);
-      return formatKicadResult(result);
-    },
+    passthrough("refill_zones"),
   );
 
   // Route pad to pad tool
@@ -501,10 +451,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
           "Insert the straight segment even when it crosses other pads (default false — the call refuses and returns obstaclesCrossed). Use only when you've decided to accept the resulting DRC errors.",
         ),
     },
-    async (args: any) => {
-      const result = await callKicadScript("route_pad_to_pad", args);
-      return formatKicadResult(result);
-    },
+    passthrough("route_pad_to_pad"),
   );
 
   // Copy routing pattern tool
@@ -526,9 +473,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Functio
         .optional()
         .describe("Override trace width in mm (default: keep original width)"),
     },
-    async (args: any) => {
-      const result = await callKicadScript("copy_routing_pattern", args);
-      return formatKicadResult(result);
-    },
+    passthrough("copy_routing_pattern"),
   );
 }

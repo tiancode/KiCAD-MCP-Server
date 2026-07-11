@@ -12,9 +12,6 @@ from typing import Any, Callable, Dict, List, Optional
 from kicad_api.base import APINotAvailableError, BoardAPI, ConnectionError, KiCADBackend
 
 from ._helpers import (
-    INCH_TO_NM,
-    MM_TO_NM,
-    _document_type_enum,
     get_open_documents_compat,
     has_open_pcb_document,
 )

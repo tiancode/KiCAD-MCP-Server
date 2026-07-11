@@ -7,7 +7,7 @@ See python/handlers/__init__.py for the calling convention.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface

@@ -7,10 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { formatKicadResult, makePassthrough } from "./tool-response.js";
-
-// Command function type for KiCAD script calls
-type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
 /**
  * Register board management tools with the MCP server

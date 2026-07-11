@@ -3,15 +3,12 @@
 Split out of the former monolithic commands/library_symbol.py.
 """
 
-import atexit
 import logging
 import os
 import pickle
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
-
-from ._models import SymbolInfo
 
 logger = logging.getLogger("kicad_interface")
 

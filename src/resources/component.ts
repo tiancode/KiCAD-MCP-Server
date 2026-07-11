@@ -7,9 +7,8 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-
-// Command function type for KiCAD script calls
-type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+import { jsonResource, resourceError } from "./component-utils.js";
+import { CommandFunction } from "../tools/tool-response.js";
 
 /**
  * Register component resources with the MCP server
@@ -35,30 +34,11 @@ export function registerComponentResources(
 
     if (!result.success) {
       logger.error(`Failed to retrieve component list: ${result.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to retrieve component list",
-              details: result.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to retrieve component list", result.errorDetails);
     }
 
     logger.debug(`Successfully retrieved ${result.components?.length || 0} components`);
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(result),
-          mimeType: "application/json",
-        },
-      ],
-    };
+    return jsonResource(uri, result);
   });
 
   // ------------------------------------------------------
@@ -78,30 +58,15 @@ export function registerComponentResources(
 
       if (!result.success) {
         logger.error(`Failed to retrieve component details: ${result.errorDetails}`);
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              text: JSON.stringify({
-                error: `Failed to retrieve details for component ${reference}`,
-                details: result.errorDetails,
-              }),
-              mimeType: "application/json",
-            },
-          ],
-        };
+        return resourceError(
+          uri,
+          `Failed to retrieve details for component ${reference}`,
+          result.errorDetails,
+        );
       }
 
       logger.debug(`Successfully retrieved details for component: ${reference}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify(result),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return jsonResource(uri, result);
     },
   );
 

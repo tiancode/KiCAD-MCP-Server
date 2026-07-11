@@ -5,7 +5,7 @@ Split out of the former monolithic commands/component.py.
 
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import pcbnew
 

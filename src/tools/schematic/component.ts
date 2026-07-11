@@ -5,9 +5,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "../tool-response.js";
+import { makePassthrough } from "../tool-response.js";
 
 export function registerSchematicComponentTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Create schematic tool
   server.tool(
     "create_schematic",
@@ -22,10 +23,7 @@ export function registerSchematicComponentTools(server: McpServer, callKicadScri
           "Replace an existing schematic file. Defaults to false: if the target .kicad_sch already exists, the tool refuses (errorCode SCHEMATIC_EXISTS) instead of overwriting it. Set true only when you intend to replace it.",
         ),
     },
-    async (args: { name: string; path?: string; overwrite?: boolean }) => {
-      const result = await callKicadScript("create_schematic", args);
-      return formatKicadResult(result);
-    },
+    passthrough("create_schematic"),
   );
 
   // Add component to schematic

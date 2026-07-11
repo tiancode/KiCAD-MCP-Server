@@ -6,8 +6,6 @@ Split out of the former monolithic kicad_api/ipc_backend.py.
 import logging
 from typing import Any, List
 
-from kicad_api.base import APINotAvailableError, ConnectionError
-
 logger = logging.getLogger("kicad_interface")
 
 
