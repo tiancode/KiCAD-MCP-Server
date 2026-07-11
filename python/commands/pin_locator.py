@@ -44,8 +44,6 @@ class PinLocator:
     def __init__(self) -> None:
         """Bind to the shared, mtime-keyed class caches (see class docstring)."""
         self.pin_definition_cache = PinLocator._PINDEF_CACHE
-        self._schematic_cache = PinLocator._SCHEMATIC_CACHE
-        self._sexp_cache = PinLocator._SEXP_CACHE
 
     @staticmethod
     def _file_sig(path: Any) -> Tuple[str, int, int]:

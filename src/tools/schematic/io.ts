@@ -5,9 +5,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "../tool-response.js";
+import { makePassthrough } from "../tool-response.js";
 
 export function registerSchematicIoTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Export schematic to PDF
   server.tool(
     "export_schematic_pdf",
@@ -175,9 +176,6 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Fun
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
       boardPath: z.string().describe("Absolute path to the .kicad_pcb board file"),
     },
-    async (args: { schematicPath: string; boardPath: string }) => {
-      const result = await callKicadScript("sync_schematic_to_board", args);
-      return formatKicadResult(result);
-    },
+    passthrough("sync_schematic_to_board"),
   );
 }

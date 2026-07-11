@@ -53,9 +53,8 @@ class Logger {
    * @param message Message to log
    */
   warn(message: string): void {
-    if (["error", "warn", "info", "debug"].includes(this.logLevel)) {
-      this.log("warn", message);
-    }
+    // Like error(), warn is emitted at every log level.
+    this.log("warn", message);
   }
 
   /**

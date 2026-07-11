@@ -4,6 +4,39 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Maintainability Refactor + Dead-Code Cleanup (2026-07-11)
+
+No behavior change — tool surface, command routing, and response
+shapes are identical (route-table equivalence was verified against the
+pre-refactor mapping; full test suite unchanged at 1417 passing).
+
+- **Removed dead code (Python).** `commands/board.py` (unimportable —
+  shadowed by the `commands/board/` package), the never-wired
+  `check_wire_collisions` / `find_unconnected_pins` handlers (their
+  backing functions never existed), the unreachable `load_schematic` /
+  `list_schematic_libraries` routes, `ConnectionManager.generate_netlist`
+  (superseded by the kicad-cli netlist handler), and a handful of
+  write-only attributes and unused-import headers (~390 lines, mostly
+  copy-pasted import blocks in the `ipc_backend/_board_*.py` mixins).
+- **Removed dead code (TypeScript).** Unreferenced `src/resources/index.ts`
+  and `src/prompts/index.ts` barrels, the never-invoked `rejectReady`
+  promise path in `server.ts`, and a tautological log-level guard in
+  `logger.ts`.
+- **De-duplicated tool registration.** 37 verbatim passthrough closures
+  across 9 tool files now use the existing `makePassthrough` helper;
+  the 7 identical private `CommandFunction` type copies moved to
+  `tool-response.ts`; resource handlers share `jsonResource` /
+  `resourceError` builders instead of 21 inline response literals.
+- **Simplified `kicad_interface.py`.** The ~70-entry identity command
+  route table is now a data table + loop (name/method pairing can't
+  drift), JSON-RPC envelopes in `main()` go through `_rpc_result` /
+  `_rpc_error` helpers, and `_update_command_handlers` loops instead of
+  seven copy-pasted assignments.
+- `LONG_RUNNING_COMMANDS` is a module-level `Set` in `server.ts` instead
+  of an array literal rebuilt on every tool call; `src/tools/index.ts`
+  now re-exports the symbol-library and JLCPCB registrars so
+  `measure-tool-tokens.mjs` counts the full tool payload.
+
 ### Tool-Surface Cleanup + Graphic-Shape Editing (2026-06-11)
 
 - **New `list_shapes` / `delete_shape` / `edit_shape` tools (IPC).**

@@ -12,6 +12,8 @@ export { registerDesignRuleTools } from "./design-rules.js";
 export { registerExportTools } from "./export.js";
 export { registerSchematicTools } from "./schematic/index.js";
 export { registerLibraryTools } from "./library.js";
+export { registerSymbolLibraryTools } from "./library-symbol.js";
+export { registerJLCPCBApiTools } from "./jlcpcb-api.js";
 export { registerUITools } from "./ui.js";
 export { registerDatasheetTools } from "./datasheet.js";
 export { registerFootprintTools } from "./footprint.js";

@@ -10,7 +10,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict
 
-from commands.library_schematic import LibraryManager as SchematicLibraryManager
 from commands.schematic import SchematicManager
 from utils.pagination import paginate
 
@@ -743,61 +742,4 @@ def handle_get_schematic_pin_locations(
         import traceback
 
         logger.error(traceback.format_exc())
-        return {"success": False, "message": str(e)}
-
-
-def handle_check_wire_collisions(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Detect wires passing through component bodies without connecting to pins"""
-    logger.info("Checking wire collisions")
-    try:
-        from commands.schematic_analysis import check_wire_collisions
-
-        schematic_path = params.get("schematicPath")
-        if not schematic_path:
-            return {"success": False, "message": "schematicPath is required"}
-        result = check_wire_collisions(schematic_path)
-        return {"success": True, **result}
-    except ImportError:
-        return {
-            "success": False,
-            "message": "schematic_analysis module not available",
-        }
-    except Exception as e:
-        logger.error(f"Error checking wire collisions: {e}")
-        return {"success": False, "message": str(e)}
-
-
-def handle_find_unconnected_pins(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """List component pins with no wire/label/power symbol touching them"""
-    logger.info("Finding unconnected pins")
-    try:
-        from commands.schematic_analysis import find_unconnected_pins
-
-        schematic_path = params.get("schematicPath")
-        if not schematic_path:
-            return {"success": False, "message": "schematicPath is required"}
-        result = find_unconnected_pins(schematic_path)
-        return {"success": True, **result}
-    except ImportError:
-        return {
-            "success": False,
-            "message": "schematic_analysis module not available",
-        }
-    except Exception as e:
-        logger.error(f"Error finding unconnected pins: {e}")
-        return {"success": False, "message": str(e)}
-
-
-def handle_list_schematic_libraries(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
-    """List available symbol libraries"""
-    logger.info("Listing schematic libraries")
-    try:
-        search_paths = params.get("searchPaths")
-
-        libraries = SchematicLibraryManager.list_available_libraries(search_paths)
-        return {"success": True, "libraries": libraries}
-    except Exception as e:
-        logger.error(f"Error listing schematic libraries: {str(e)}")
         return {"success": False, "message": str(e)}

@@ -9,7 +9,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "./tool-response.js";
+import { makePassthrough } from "./tool-response.js";
 
 const PinSchema = z.object({
   name: z.string().describe("Pin name, e.g. 'VCC', 'GND', 'IN+', '~' for unnamed"),
@@ -77,6 +77,7 @@ const PolylineSchema = z.object({
 });
 
 export function registerSymbolCreatorTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // ── create_symbol ────────────────────────────────────────────────────── //
   server.tool(
     "create_symbol",
@@ -120,24 +121,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
         .optional()
         .describe("Replace existing symbol with same name (default false)"),
     },
-    async (args: {
-      libraryPath: string;
-      name: string;
-      referencePrefix?: string;
-      description?: string;
-      keywords?: string;
-      datasheet?: string;
-      footprint?: string;
-      inBom?: boolean;
-      onBoard?: boolean;
-      pins?: z.infer<typeof PinSchema>[];
-      rectangles?: z.infer<typeof RectSchema>[];
-      polylines?: z.infer<typeof PolylineSchema>[];
-      overwrite?: boolean;
-    }) => {
-      const result = await callKicadScript("create_symbol", args);
-      return formatKicadResult(result);
-    },
+    passthrough("create_symbol"),
   );
 
   // ── delete_symbol ────────────────────────────────────────────────────── //
@@ -148,10 +132,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
       libraryPath: z.string().describe("Path to the .kicad_sym file"),
       name: z.string().describe("Symbol name to delete"),
     },
-    async (args: { libraryPath: string; name: string }) => {
-      const result = await callKicadScript("delete_symbol", args);
-      return formatKicadResult(result);
-    },
+    passthrough("delete_symbol"),
   );
 
   // ── list_symbols_in_library ──────────────────────────────────────────── //
@@ -161,10 +142,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file"),
     },
-    async (args: { libraryPath: string }) => {
-      const result = await callKicadScript("list_symbols_in_library", args);
-      return formatKicadResult(result);
-    },
+    passthrough("list_symbols_in_library"),
   );
 
   // ── register_symbol_library ──────────────────────────────────────────── //
@@ -188,15 +166,6 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: F
         .optional()
         .describe("Path to .kicad_pro or its directory (for scope=project)"),
     },
-    async (args: {
-      libraryPath: string;
-      libraryName?: string;
-      description?: string;
-      scope?: "project" | "global";
-      projectPath?: string;
-    }) => {
-      const result = await callKicadScript("register_symbol_library", args);
-      return formatKicadResult(result);
-    },
+    passthrough("register_symbol_library"),
   );
 }

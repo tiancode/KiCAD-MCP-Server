@@ -8,7 +8,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "./tool-response.js";
+import { makePassthrough } from "./tool-response.js";
 
 // ---- shared sub-schemas ------------------------------------------------- //
 
@@ -64,6 +64,7 @@ const RectSchema = z.object({
 // ---- tool registration --------------------------------------------------- //
 
 export function registerFootprintTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // ── create_footprint ──────────────────────────────────────────────────── //
   server.tool(
     "create_footprint",
@@ -103,22 +104,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
         .optional()
         .describe("Replace existing footprint file (default: false)"),
     },
-    async (args: {
-      libraryPath: string;
-      name: string;
-      description?: string;
-      tags?: string;
-      pads?: z.infer<typeof PadSchema>[];
-      courtyard?: z.infer<typeof RectSchema>;
-      silkscreen?: z.infer<typeof RectSchema>;
-      fabLayer?: z.infer<typeof RectSchema>;
-      refPosition?: { x: number; y: number };
-      valuePosition?: { x: number; y: number };
-      overwrite?: boolean;
-    }) => {
-      const result = await callKicadScript("create_footprint", args);
-      return formatKicadResult(result);
-    },
+    passthrough("create_footprint"),
   );
 
   // ── edit_footprint_pad ────────────────────────────────────────────────── //
@@ -142,17 +128,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
         .describe("New drill size (for THT pads)"),
       shape: z.enum(["rect", "circle", "oval", "roundrect"]).optional().describe("New pad shape"),
     },
-    async (args: {
-      footprintPath: string;
-      padNumber: string | number;
-      size?: { w: number; h: number };
-      at?: { x: number; y: number; angle?: number };
-      drill?: number | { w: number; h: number };
-      shape?: string;
-    }) => {
-      const result = await callKicadScript("edit_footprint_pad", args);
-      return formatKicadResult(result);
-    },
+    passthrough("edit_footprint_pad"),
   );
 
   // ── register_footprint_library ───────────────────────────────────────── //
@@ -182,16 +158,7 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
             "when the library is not in the project folder)",
         ),
     },
-    async (args: {
-      libraryPath: string;
-      libraryName?: string;
-      description?: string;
-      scope?: "project" | "global";
-      projectPath?: string;
-    }) => {
-      const result = await callKicadScript("register_footprint_library", args);
-      return formatKicadResult(result);
-    },
+    passthrough("register_footprint_library"),
   );
 
   // ── list_footprint_libraries ─────────────────────────────────────────── //
@@ -206,9 +173,6 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Funct
           "Override default search paths. Each entry should be a directory that contains .pretty subdirs.",
         ),
     },
-    async (args: { searchPaths?: string[] }) => {
-      const result = await callKicadScript("list_footprint_libraries", args);
-      return formatKicadResult(result);
-    },
+    passthrough("list_footprint_libraries"),
   );
 }

@@ -29,8 +29,6 @@ def handle_delete_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]
         if not schematic_path:
             return {"success": False, "message": "schematicPath is required"}
 
-        from pathlib import Path
-
         from commands.wire_manager import WireManager
 
         start_point = [start.get("x", 0), start.get("y", 0)]
@@ -54,8 +52,6 @@ def handle_connect_passthrough(iface: "KiCADInterface", params: Dict[str, Any]) 
     """Connect all pins of source connector to matching pins of target connector"""
     logger.info("Connecting passthrough between two connectors")
     try:
-        from pathlib import Path
-
         schematic_path = params.get("schematicPath")
         source_ref = params.get("sourceRef")
         target_ref = params.get("targetRef")
@@ -133,8 +129,6 @@ def handle_connect_to_net(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
     """
     logger.info("Connecting component pin to net")
     try:
-        from pathlib import Path
-
         schematic_path = params.get("schematicPath")
         component_ref = params.get("componentRef")
         pin_name = params.get("pinName")
@@ -174,8 +168,6 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
     """Add a no-connect flag (X marker) to an unconnected pin in the schematic."""
     logger.info("Adding no-connect flag to schematic")
     try:
-        from pathlib import Path
-
         from commands.pin_locator import PinLocator
         from commands.wire_manager import WireManager
 
@@ -238,8 +230,6 @@ def handle_delete_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) ->
     """
     logger.info("Deleting no-connect flag from schematic")
     try:
-        from pathlib import Path
-
         from commands.pin_locator import PinLocator
         from commands.wire_manager import WireManager
 
@@ -300,8 +290,6 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
     """Add a wire to a schematic using WireManager, with optional pin snapping"""
     logger.info("Adding wire to schematic")
     try:
-        from pathlib import Path
-
         from commands.wire_manager import WireManager
 
         schematic_path = params.get("schematicPath")

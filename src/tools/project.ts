@@ -4,9 +4,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "./tool-response.js";
+import { formatKicadResult, makePassthrough } from "./tool-response.js";
 
 export function registerProjectTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Create project tool
   server.tool(
     "create_project",
@@ -27,10 +28,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
           "Replace an existing project at this path. Defaults to false: if the target .kicad_pro/.kicad_pcb/.kicad_sch already exist, the tool refuses (errorCode PROJECT_EXISTS) instead of clobbering them. Set true only when you intend to overwrite.",
         ),
     },
-    async (args: { path: string; name: string; autoLaunch?: boolean; overwrite?: boolean }) => {
-      const result = await callKicadScript("create_project", args);
-      return formatKicadResult(result);
-    },
+    passthrough("create_project"),
   );
 
   // Open project tool
@@ -46,10 +44,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
           "Launch the KiCAD UI for this project after opening so the IPC backend can attach. Defaults to true. Set false for headless / CI runs.",
         ),
     },
-    async (args: { filename: string; autoLaunch?: boolean }) => {
-      const result = await callKicadScript("open_project", args);
-      return formatKicadResult(result);
-    },
+    passthrough("open_project"),
   );
 
   // Save project tool
@@ -59,10 +54,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
     {
       path: z.string().optional().describe("Optional new path to save to"),
     },
-    async (args: { path?: string }) => {
-      const result = await callKicadScript("save_project", args);
-      return formatKicadResult(result);
-    },
+    passthrough("save_project"),
   );
 
   // Get project info tool
@@ -92,9 +84,6 @@ export function registerProjectTools(server: McpServer, callKicadScript: Functio
           "Full prompt text to save as PROMPT_step{step}_{timestamp}.md alongside the snapshot",
         ),
     },
-    async (args: { step: string; label: string; prompt?: string }) => {
-      const result = await callKicadScript("snapshot_project", args);
-      return formatKicadResult(result);
-    },
+    passthrough("snapshot_project"),
   );
 }

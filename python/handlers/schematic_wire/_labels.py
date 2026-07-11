@@ -10,7 +10,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from commands.connection_schematic import ConnectionManager
 from commands.schematic import SchematicManager
 
 if TYPE_CHECKING:

@@ -5,9 +5,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { formatKicadResult } from "./tool-response.js";
+import { makePassthrough } from "./tool-response.js";
 
 export function registerJLCPCBApiTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Download JLCPCB parts database
   server.tool(
     "download_jlcpcb_database",
@@ -415,10 +416,7 @@ Requires the easyeda2kicad package in the KiCAD MCP Python environment (pip inst
         .default(false)
         .describe("Re-fetch and overwrite even if the part is already in the cache library"),
     },
-    async (args: { lcsc_number: string; forceRefresh?: boolean }) => {
-      const result = await callKicadScript("import_jlcpcb_symbol", args);
-      return formatKicadResult(result);
-    },
+    passthrough("import_jlcpcb_symbol"),
   );
 
   // Batch-import multiple LCSC/JLCPCB parts (pre-cache a whole BOM)
@@ -442,9 +440,6 @@ Requires the easyeda2kicad package and network access to EasyEDA.`,
         .default(false)
         .describe("Re-fetch and overwrite parts already in the cache library"),
     },
-    async (args: { lcsc_numbers: string[]; forceRefresh?: boolean }) => {
-      const result = await callKicadScript("import_jlcpcb_symbols", args);
-      return formatKicadResult(result);
-    },
+    passthrough("import_jlcpcb_symbols"),
   );
 }

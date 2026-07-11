@@ -7,10 +7,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-import { countComponentTypes } from "./component-utils.js";
-
-// Command function type for KiCAD script calls
-type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+import { countComponentTypes, jsonResource, resourceError } from "./component-utils.js";
+import { CommandFunction } from "../tools/tool-response.js";
 
 /**
  * Register project resources with the MCP server
@@ -33,30 +31,11 @@ export function registerProjectResources(
 
     if (!result.success) {
       logger.error(`Failed to retrieve project information: ${result.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to retrieve project information",
-              details: result.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to retrieve project information", result.errorDetails);
     }
 
     logger.debug("Successfully retrieved project information");
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(result),
-          mimeType: "application/json",
-        },
-      ],
-    };
+    return jsonResource(uri, result);
   });
 
   // NOTE: former project_properties / project_files / project_status
@@ -74,54 +53,25 @@ export function registerProjectResources(
     const infoResult = await callKicadScript("get_project_info", {});
     if (!infoResult.success) {
       logger.error(`Failed to retrieve project information: ${infoResult.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to generate project summary",
-              details: infoResult.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to generate project summary", infoResult.errorDetails);
     }
 
     // Get board info
     const boardResult = await callKicadScript("get_board_info", {});
     if (!boardResult.success) {
       logger.error(`Failed to retrieve board information: ${boardResult.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to generate project summary",
-              details: boardResult.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(uri, "Failed to generate project summary", boardResult.errorDetails);
     }
 
     // Get component list (limit:0 = uncapped; resources carry full data)
     const componentsResult = await callKicadScript("get_component_list", { limit: 0 });
     if (!componentsResult.success) {
       logger.error(`Failed to retrieve component list: ${componentsResult.errorDetails}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify({
-              error: "Failed to generate project summary",
-              details: componentsResult.errorDetails,
-            }),
-            mimeType: "application/json",
-          },
-        ],
-      };
+      return resourceError(
+        uri,
+        "Failed to generate project summary",
+        componentsResult.errorDetails,
+      );
     }
 
     // Combine all information into a summary
@@ -139,15 +89,7 @@ export function registerProjectResources(
     };
 
     logger.debug("Successfully generated project summary");
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(summary),
-          mimeType: "application/json",
-        },
-      ],
-    };
+    return jsonResource(uri, summary);
   });
 
   logger.info("Project resources registered");
