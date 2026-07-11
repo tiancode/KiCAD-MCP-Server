@@ -5,9 +5,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { formatKicadResult, makePassthrough } from "./tool-response.js";
+import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
-export function registerUITools(server: McpServer, callKicadScript: Function) {
+export function registerUITools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
 
   // Backend info (version, capabilities) — complements get_backend_state which

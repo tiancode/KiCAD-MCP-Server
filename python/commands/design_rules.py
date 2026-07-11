@@ -447,6 +447,8 @@ class DesignRuleCommands:
 
         return find_kicad_cli()
 
+    # Consumed by python/resources/resource_definitions.py (drc_violations
+    # resource); the MCP command route was removed as redundant with run_drc.
     def get_drc_violations(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Get list of DRC violations

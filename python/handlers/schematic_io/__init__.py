@@ -7,7 +7,6 @@ Re-exports every handler and helper so the dispatcher
 
 from ._io import (
     handle_sync_schematic_to_board,
-    handle_export_schematic_svg,
     handle_export_schematic_pdf,
     handle_create_schematic,
 )
@@ -48,7 +47,6 @@ __all__ = [
     "handle_create_schematic",
     "handle_export_netlist",
     "handle_export_schematic_pdf",
-    "handle_export_schematic_svg",
     "handle_generate_netlist",
     "handle_run_erc",
     "handle_sync_schematic_to_board",

@@ -6,8 +6,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams, truncationNote } from "./pagination-params.js";
+import { CommandFunction } from "./tool-response.js";
 
-export function registerSymbolLibraryTools(server: McpServer, callKicadScript: Function) {
+export function registerSymbolLibraryTools(server: McpServer, callKicadScript: CommandFunction) {
   // List available symbol libraries
   server.tool(
     "list_symbol_libraries",

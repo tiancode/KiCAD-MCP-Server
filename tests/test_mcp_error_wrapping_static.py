@@ -31,7 +31,16 @@ class TestMcpErrorWrapping:
         """DRC/design-rule wrappers must not return success:false as a plain OK result."""
         source = DESIGN_RULES_TS.read_text(encoding="utf-8")
 
-        assert 'import { formatKicadResult } from "./tool-response.js";' in source
+        # Token-based (not byte-exact) so import formatting/merging can't
+        # break the test — we only care that the shared wrapper is imported.
+        import_lines = [
+            line
+            for line in source.splitlines()
+            if line.startswith("import ") and "./tool-response.js" in line
+        ]
+        assert any(
+            "formatKicadResult" in line for line in import_lines
+        ), "design-rules.ts must import formatKicadResult from tool-response"
 
         for command in (
             "set_design_rules",

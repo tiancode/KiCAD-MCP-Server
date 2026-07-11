@@ -6,9 +6,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams, truncationNote } from "../pagination-params.js";
-import { makePassthrough } from "../tool-response.js";
+import { CommandFunction, makePassthrough } from "../tool-response.js";
 
-export function registerSchematicQueryTools(server: McpServer, callKicadScript: Function) {
+export function registerSchematicQueryTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // One-shot schematic snapshot — components + wires + labels + nets in a
   // single response. Cuts 3 MCP round-trips out of basic schematic inspection.

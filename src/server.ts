@@ -48,10 +48,6 @@ const LONG_RUNNING_COMMANDS = new Set([
   "download_jlcpcb_database",
   "import_jlcpcb_symbol",
   "import_jlcpcb_symbols",
-  // Specctra round-trip for the autoroute flow: DSN export and SES
-  // import both walk the whole board and can exceed 30s on large designs.
-  "export_dsn",
-  "import_ses",
 ]);
 
 // Import tool registration functions

@@ -7,8 +7,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { CommandFunction } from "./tool-response.js";
 
-export function registerDatasheetTools(server: McpServer, callKicadScript: Function) {
+export function registerDatasheetTools(server: McpServer, callKicadScript: CommandFunction) {
   // ── enrich_datasheets ──────────────────────────────────────────────────────
   server.tool(
     "enrich_datasheets",

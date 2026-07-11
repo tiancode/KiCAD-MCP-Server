@@ -7,7 +7,7 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-import { countComponentTypes, jsonResource, resourceError } from "./component-utils.js";
+import { countComponentTypes, jsonResource, resourceError } from "./resource-utils.js";
 import { CommandFunction } from "../tools/tool-response.js";
 
 /**

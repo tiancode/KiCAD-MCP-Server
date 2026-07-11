@@ -382,7 +382,6 @@ class KiCADInterface(BoardPersistenceMixin):
         "create_schematic": "schematic_io",
         "export_netlist": "schematic_io",
         "export_schematic_pdf": "schematic_io",
-        "export_schematic_svg": "schematic_io",
         "generate_netlist": "schematic_io",
         "run_erc": "schematic_io",
         "sync_schematic_to_board": "schematic_io",
@@ -590,7 +589,6 @@ class KiCADInterface(BoardPersistenceMixin):
                     "get_board_extents",
                     "add_board_outline",
                     "add_mounting_hole",
-                    "add_text",
                 ),
             ),
             (
@@ -642,7 +640,6 @@ class KiCADInterface(BoardPersistenceMixin):
                     "set_design_rules",
                     "get_design_rules",
                     "run_drc",
-                    "get_drc_violations",
                 ),
             ),
             (
@@ -650,7 +647,6 @@ class KiCADInterface(BoardPersistenceMixin):
                 (
                     "export_gerber",
                     "export_pdf",
-                    "export_svg",
                     "export_3d",
                     "export_bom",
                     "export_position_file",
@@ -679,8 +675,6 @@ class KiCADInterface(BoardPersistenceMixin):
                 self.freerouting_commands,
                 (
                     "autoroute",
-                    "export_dsn",
-                    "import_ses",
                     "check_freerouting",
                 ),
             ),
@@ -692,12 +686,6 @@ class KiCADInterface(BoardPersistenceMixin):
             {
                 "add_board_text": self.board_commands.add_text,  # Alias for TypeScript tool
                 "add_copper_pour": self._add_copper_pour_with_optional_refill,
-                # ``add_zone`` is the same operation under a different MCP name.
-                # The TS layer no longer registers it, but the route is kept as a
-                # documented python-only compat command (see
-                # tests/test_ts_tool_registry.py) so callers don't get an
-                # "Unknown command" surprise.
-                "add_zone": self._add_copper_pour_with_optional_refill,
                 # Internal warm-up (pays wxApp init cost during startup).
                 # _handle_warmup is a real method on this class, not synthesised
                 # from _HANDLER_MAP, so it has to be registered explicitly.
@@ -731,7 +719,6 @@ class KiCADInterface(BoardPersistenceMixin):
         "add_copper_pour": "_ipc_add_copper_pour",
         # MCP-name alias of add_copper_pour — both names go through the
         # same IPC fast-path so the schema isn't a dispatch-time landmine.
-        "add_zone": "_ipc_add_copper_pour",
         "refill_zones": "_ipc_refill_zones",
         # Board commands
         "add_text": "_ipc_add_text",
@@ -1550,10 +1537,8 @@ class KiCADInterface(BoardPersistenceMixin):
         "add_net",
         "add_board_outline",
         "add_mounting_hole",
-        "add_text",
         "add_board_text",
         "add_copper_pour",
-        "add_zone",
         "edit_copper_pour",
         "delete_copper_pour",
         "refill_zones",
@@ -1776,16 +1761,16 @@ class KiCADInterface(BoardPersistenceMixin):
     def _update_command_handlers(self) -> None:
         """Update board reference in all command handlers"""
         logger.debug("Updating board reference in command handlers")
-        for _attr in (
-            "project_commands",
-            "board_commands",
-            "component_commands",
-            "routing_commands",
-            "design_rule_commands",
-            "export_commands",
-            "freerouting_commands",
+        for handler in (
+            self.project_commands,
+            self.board_commands,
+            self.component_commands,
+            self.routing_commands,
+            self.design_rule_commands,
+            self.export_commands,
+            self.freerouting_commands,
         ):
-            getattr(self, _attr).board = self.board
+            handler.board = self.board
 
     # Stable BOARD methods used to detect SWIG dehydration. Newer KiCAD nightly
     # builds occasionally return a raw SwigPyObject from pcbnew.LoadBoard after

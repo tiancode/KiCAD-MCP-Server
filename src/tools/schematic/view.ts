@@ -5,9 +5,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "../tool-response.js";
+import { CommandFunction, makePassthrough } from "../tool-response.js";
 
-export function registerSchematicViewTools(server: McpServer, callKicadScript: Function) {
+export function registerSchematicViewTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // Get schematic view (rasterized image)
   server.tool(

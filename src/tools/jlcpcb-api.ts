@@ -5,9 +5,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough } from "./tool-response.js";
 
-export function registerJLCPCBApiTools(server: McpServer, callKicadScript: Function) {
+export function registerJLCPCBApiTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
   // Download JLCPCB parts database
   server.tool(

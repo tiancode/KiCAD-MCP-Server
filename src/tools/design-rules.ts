@@ -7,8 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import type { CommandFunction } from "./tool-response.js";
-import { formatKicadResult } from "./tool-response.js";
+import { CommandFunction, formatKicadResult } from "./tool-response.js";
 
 /**
  * Register design rule tools with the MCP server

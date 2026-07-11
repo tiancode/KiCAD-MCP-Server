@@ -4,6 +4,28 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Command-Redundancy Cleanup + Type Consolidation (2026-07-11)
+
+- **Removed unreachable python command routes** left as "compat" after the
+  2026-06 TS tool cleanup — none of these command names could arrive from
+  the MCP surface: `add_zone` / `add_text` aliases, `export_svg`,
+  `export_schematic_svg`, `get_drc_violations` (method kept — the
+  drc_violations resource consumes it), `export_dsn` / `import_ses` routes
+  (methods kept — unit-tested building blocks). The `ipc_*` handler
+  routes stay (scripts/ipc_smoke_test.py drives them).
+- **Finished the `CommandFunction` type migration**: all 18 registrars
+  previously typed `callKicadScript: Function` now use the shared
+  `CommandFunction`; `makePassthrough` is fully typed (the `unknown`
+  cast and the single-caller `passthroughCall` indirection are gone).
+- `_update_command_handlers` iterates handler objects directly instead of
+  attribute-name strings (rename-safe, grep-able).
+- `src/resources/component-utils.ts` → `resource-utils.ts` — the shared
+  `jsonResource` / `resourceError` helpers now live in a file named for
+  their actual scope.
+- `tests/test_mcp_error_wrapping_static.py` asserts the tool-response
+  import token-wise instead of byte-exactly, so import formatting can't
+  break an unrelated test; design-rules.ts imports merged accordingly.
+
 ### Functional Expansion: Routing, Hierarchy, Simulation, Placement, DFM (2026-07-11)
 
 Six new MCP tools plus one enhancement, targeting KiCad 10:

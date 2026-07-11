@@ -80,30 +80,17 @@ export function formatKicadResult(result: unknown): McpTextResult {
 }
 
 /**
- * Build a parameterless MCP handler that forwards args to the Python
- * subprocess and serializes the response as compact JSON.  The 5-line inline
- * closure was being copy-pasted into every tool file — pulling it here
- * keeps the content shape in one place so future changes (error
- * routing, structured content blocks, etc.) only touch one file.
+ * Bind a `callKicadScript` once and return a `(command) => handler` factory:
+ * each handler forwards its args verbatim to the Python subprocess and
+ * serializes the response via `formatKicadResult`.  The 5-line inline
+ * closure was being copy-pasted into every tool file — centralizing it here
+ * means future changes (error routing, structured content blocks, etc.)
+ * only touch this one place.
  */
-function passthroughCall(
-  callKicadScript: (command: string, args: Record<string, unknown>) => Promise<unknown>,
-  command: string,
-) {
-  return async (args: Record<string, unknown> = {}) => {
-    const result = await callKicadScript(command, args);
-    return formatKicadResult(result);
-  };
-}
-
-/**
- * Bind a `callKicadScript` once and return a `(command) => handler` factory.
- * Tool files declare `callKicadScript` with varying local types (`Function`,
- * a per-file `CommandFunction`), so this accepts the loose form and applies
- * the same cast `passthroughCall` expects — the single place the identical
- * `const passthrough = ...` alias used to be copy-pasted.
- */
-export function makePassthrough(callKicadScript: unknown) {
+export function makePassthrough(callKicadScript: CommandFunction) {
   return (command: string) =>
-    passthroughCall(callKicadScript as Parameters<typeof passthroughCall>[0], command);
+    async (args: Record<string, unknown> = {}) => {
+      const result = await callKicadScript(command, args);
+      return formatKicadResult(result);
+    };
 }
