@@ -38,15 +38,13 @@ def iface():
     return _make_iface()
 
 
-_MINIMAL_SCH = textwrap.dedent(
-    """\
+_MINIMAL_SCH = textwrap.dedent("""\
     (kicad_sch (version 20250114) (generator "test")
     \t(uuid aaaaaaaa-0000-0000-0000-000000000001)
     \t(paper "A4")
     \t(sheet_instances (path "/" (page "1")))
     )
-    """
-)
+    """)
 
 
 # ---------------------------------------------------------------------------

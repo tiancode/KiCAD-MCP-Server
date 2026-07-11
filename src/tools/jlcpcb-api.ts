@@ -442,4 +442,23 @@ Requires the easyeda2kicad package and network access to EasyEDA.`,
     },
     passthrough("import_jlcpcb_symbols"),
   );
+  // BOM availability check against the local JLCPCB catalog
+  server.tool(
+    "check_bom_availability",
+    "Check every BOM line of the loaded board against the local JLCPCB parts catalog: groups footprints by " +
+      "value+footprint, matches each line by its LCSC field (exact) or by value+package search, and reports stock, " +
+      "unit price at the required quantity, and estimated cost per board. Requires the local database — run " +
+      "download_jlcpcb_database first. Lines with status not_found / low_stock / out_of_stock need sourcing attention " +
+      "before ordering.",
+    {
+      boardQty: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "How many boards you plan to order (default 1) — drives price breaks and stock sufficiency",
+        ),
+    },
+    passthrough("check_bom_availability"),
+  );
 }

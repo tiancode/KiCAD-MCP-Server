@@ -98,6 +98,10 @@ class BoardViewCommands:
             # Default on — was the user's #8 complaint.
             crop_to_board = bool(params.get("cropToBoard", True))
             crop_margin_px = int(params.get("cropMarginPx", 20))
+            # Optional zoom to a board-space region {x1,y1,x2,y2} in mm —
+            # applied to the plotted SVG before any raster conversion, so it
+            # works for svg/png/jpg alike and supersedes the alpha auto-crop.
+            region = params.get("region")
 
             # Create plot controller
             plotter = pcbnew.PLOT_CONTROLLER(self.board)
@@ -134,6 +138,39 @@ class BoardViewCommands:
             temp_svg = plotter.GetPlotFileName()
 
             plotter.ClosePlot()
+
+            if region:
+                from ._svg_region import crop_svg_to_region
+
+                try:
+                    region_tuple = (
+                        float(region["x1"]),
+                        float(region["y1"]),
+                        float(region["x2"]),
+                        float(region["y2"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    os.remove(temp_svg)
+                    return {
+                        "success": False,
+                        "message": "Invalid region: expected {x1, y1, x2, y2} in mm",
+                    }
+                with open(temp_svg, "r", encoding="utf-8") as f:
+                    svg_text = f.read()
+                cropped = crop_svg_to_region(svg_text, region_tuple)
+                if cropped is None:
+                    os.remove(temp_svg)
+                    return {
+                        "success": False,
+                        "message": "Could not crop SVG to region",
+                        "errorDetails": (
+                            "Region must have x2 > x1 and y2 > y1, and the plotted "
+                            "SVG must carry width/viewBox attributes"
+                        ),
+                    }
+                with open(temp_svg, "w", encoding="utf-8") as f:
+                    f.write(cropped)
+                crop_to_board = False  # the region IS the crop
 
             # Determine output path next to the PCB file
             board_dir = os.path.dirname(self.board.GetFileName())

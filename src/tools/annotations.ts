@@ -34,7 +34,16 @@ const READ_ONLY_PREFIXES = ["get_", "list_", "search_", "query_", "find_", "chec
  * `run_drc` / `run_erc` execute a rule check and return a report without
  * persisting board changes; `hit_test` probes geometry.
  */
-const READ_ONLY_EXACT = new Set<string>(["run_drc", "run_erc", "hit_test"]);
+// run_simulation only writes scratch files (netlist + ngspice output) in a
+// temp workdir — the project itself is untouched. report_net_lengths misses
+// the get_/list_ prefixes but is a pure read.
+const READ_ONLY_EXACT = new Set<string>([
+  "run_drc",
+  "run_erc",
+  "hit_test",
+  "run_simulation",
+  "report_net_lengths",
+]);
 
 /**
  * Tools that delete or overwrite existing data.  `delete_*` / `remove_*` are
@@ -64,6 +73,7 @@ const IDEMPOTENT_EXACT = new Set<string>([
   "set_title_block_info",
   "set_design_rules",
   "set_schematic_component_property",
+  "auto_place_components",
   // Edits that assign fixed values
   "edit_component",
   "edit_footprint_pad",

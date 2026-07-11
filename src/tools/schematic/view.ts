@@ -5,8 +5,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { makePassthrough } from "../tool-response.js";
 
 export function registerSchematicViewTools(server: McpServer, callKicadScript: Function) {
+  const passthrough = makePassthrough(callKicadScript);
   // Get schematic view (rasterized image)
   server.tool(
     "get_schematic_view",
@@ -436,6 +438,56 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: F
   );
 
   // Add sheet pin to a sheet block on the parent schematic
+  server.tool(
+    "create_hierarchical_sheet",
+    "Create a hierarchical sheet in a parent schematic: inserts the sheet block (Sheetname/Sheetfile properties, page " +
+      "instance) and creates the child .kicad_sch file if missing. Optionally authors sheet pins in the same call — " +
+      "each pin is auto-stacked on the requested side and gets a matching hierarchical_label written into the child. " +
+      "For a pin at an explicit position (without the child label), use add_sheet_pin.",
+    {
+      schematicPath: z.string().describe("Path to the parent .kicad_sch file"),
+      sheetName: z.string().describe("Sheet name (must be unique in the parent)"),
+      childFilename: z
+        .string()
+        .describe(
+          "Child schematic filename relative to the parent's directory, e.g. 'power.kicad_sch'",
+        ),
+      position: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("Sheet top-left position in mm (default 100, 50)"),
+      size: z
+        .object({ width: z.number(), height: z.number() })
+        .optional()
+        .describe("Sheet size in mm (default 50 x 40)"),
+      createChild: z
+        .boolean()
+        .optional()
+        .describe("Create the child file when it doesn't exist (default true)"),
+      pins: z
+        .array(
+          z.object({
+            name: z.string().describe("Pin / hierarchical label name"),
+            shape: z
+              .enum(["input", "output", "bidirectional", "tri_state", "passive"])
+              .optional()
+              .describe("Pin shape (default bidirectional)"),
+            side: z
+              .enum(["left", "right", "top", "bottom"])
+              .optional()
+              .describe("Sheet border to place the pin on (default left, auto-stacked)"),
+            addChildLabel: z
+              .boolean()
+              .optional()
+              .describe("Also add the matching hierarchical_label in the child (default true)"),
+          }),
+        )
+        .optional()
+        .describe("Sheet pins to author in the same call"),
+    },
+    passthrough("create_hierarchical_sheet"),
+  );
+
   server.tool(
     "add_sheet_pin",
     "Add a pin to a sheet symbol block on the parent schematic. Sheet pins are the " +

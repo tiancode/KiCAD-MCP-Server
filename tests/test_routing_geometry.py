@@ -231,6 +231,8 @@ EXPECTED_ROUTING_COMMANDS = {
     "query_zones",
     "route_arc_trace",
     "route_differential_pair",
+    "route_smart",
+    "report_net_lengths",
     "route_pad_to_pad",
     "route_trace",
 }
