@@ -4,6 +4,46 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Review Fixes: New-Tool Wiring Layer (2026-07-11)
+
+Adversarial review of the functional-expansion PR confirmed 9 defects, all
+in the handler/wiring layer the pure-module tests didn't cover. All fixed:
+
+- **`check_bom_availability` was dead on arrival** — read the nonexistent
+  `total_components` stats key (canonical: `total_parts`), so every call
+  reported an empty parts database. Search-matched BOM lines also never got
+  prices (`price_json` was not normalized into `price_breaks` on that path).
+- **`route_smart` endpoint layers** — the A* search started on `layers[0]`
+  and accepted the goal on any layer, producing electrically disconnected
+  routes for SMD pads on other layers (and spurious "start blocked"
+  refusals). Endpoints are now pinned to the pad's copper layer
+  (through-hole = any); pads outside the requested layer set are refused.
+- **Timeout buckets** — `route_smart` and `auto_place_components` joined
+  `LONG_RUNNING_COMMANDS`; `run_simulation` gets an autoroute-style derived
+  cap so its internal 120 s subprocess budgets fire before the 30 s Node
+  kill (which restarts the worker and loses board state).
+- **Auto-place anchor vs. center** — extraction now feeds keepout-box
+  centers (courtyard preferred, matching `component/_query.py`) and
+  write-back restores each footprint's anchor offset, so pin-1-origin
+  parts no longer get displaced keepouts. Zero netclass width (KiCad's
+  inherit sentinel) no longer produces zero-width `route_smart` tracks.
+- **`dryRun` previews no longer write the board** — the mutating-command
+  auto-save skips results carrying `dryRun: true` (also covers
+  `add_gnd_stitching_vias` previews).
+- **`add_text` half-removal completed** — the leftover IPC alias is gone;
+  the stays-removed guard now covers it.
+- **`hierarchy_sheet.py` consolidated onto WireManager** (663 → 401
+  lines): sheet blocks, pins, and hierarchical labels are emitted by the
+  existing `WireManager` builders instead of a duplicate s-expression
+  stack; only the new composition logic (auto-stacked pins, child-file
+  creation, child-label integration) remains. En route this fixed a
+  latent WireManager bug: `add_sheet_pin` could not find sheet blocks
+  written by `add_sheet` (indentation-sensitive matcher).
+
+New `tests/test_review_fix_wiring.py` exercises the handler layer
+(stats key, price normalization, anchor write-back, dryRun no-save),
+plus layer-pinning cases in the router suites.
+
 ### Command-Redundancy Cleanup + Type Consolidation (2026-07-11)
 
 - **Removed unreachable python command routes** left as "compat" after the

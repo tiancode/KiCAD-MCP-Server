@@ -32,6 +32,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("commands.simulation")
@@ -286,7 +287,7 @@ def run_simulation(
 
         if not schematic_path:
             return {"success": False, "message": "schematic_path is required"}
-        if not os.path.exists(schematic_path):
+        if not Path(schematic_path).exists():
             return {"success": False, "message": f"Schematic not found: {schematic_path}"}
 
         analysis = (analysis or "").strip().lower()
@@ -316,7 +317,7 @@ def run_simulation(
             os.makedirs(workdir, exist_ok=True)
 
         # -- 1. Export SPICE netlist ------------------------------------
-        netlist_path = os.path.join(workdir, "circuit.cir")
+        netlist_path = str(Path(workdir) / "circuit.cir")
         export_cmd = [
             cli,
             "sch",
@@ -343,7 +344,7 @@ def run_simulation(
                 "message": f"kicad-cli netlist export timed out after {timeout} seconds",
             }
         export_rc = getattr(export_proc, "returncode", 1)
-        if export_rc != 0 or not os.path.exists(netlist_path):
+        if export_rc != 0 or not Path(netlist_path).exists():
             stderr = _excerpt(getattr(export_proc, "stderr", "") or "")
             detail = f" (exit {export_rc})" if export_rc != 0 else " (no netlist written)"
             return {
@@ -356,9 +357,9 @@ def run_simulation(
         # -- 2. Build the control deck -----------------------------------
         with open(netlist_path, "r", encoding="utf-8") as fh:
             netlist_text = fh.read()
-        data_path = os.path.join(workdir, "data.txt")
+        data_path = str(Path(workdir) / "data.txt")
         deck = build_control_deck(netlist_text, analysis, params, signals, data_path)
-        deck_path = os.path.join(workdir, "deck.cir")
+        deck_path = str(Path(workdir) / "deck.cir")
         with open(deck_path, "w", encoding="utf-8") as fh:
             fh.write(deck)
 
@@ -420,7 +421,7 @@ def run_simulation(
             result["truncated"] = False
             return result
 
-        if not os.path.exists(data_path):
+        if not Path(data_path).exists():
             return {
                 "success": False,
                 "message": "ngspice produced no data file: "

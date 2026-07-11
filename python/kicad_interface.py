@@ -721,7 +721,6 @@ class KiCADInterface(BoardPersistenceMixin):
         # same IPC fast-path so the schema isn't a dispatch-time landmine.
         "refill_zones": "_ipc_refill_zones",
         # Board commands
-        "add_text": "_ipc_add_text",
         "add_board_text": "_ipc_add_text",
         "set_board_size": "_ipc_set_board_size",
         "get_board_info": "_ipc_get_board_info",
@@ -1475,13 +1474,17 @@ class KiCADInterface(BoardPersistenceMixin):
                         # KiCad memory now diverges from disk if KiCad has
                         # the file open.
                         self._swig_writes_landed = True
-                    elif command in self._BOARD_MUTATING_COMMANDS:
+                    elif command in self._BOARD_MUTATING_COMMANDS and not (
+                        isinstance(result, dict) and result.get("dryRun")
+                    ):
                         # Auto-save after every board mutation via SWIG.
                         # Prevents data loss if Claude hits context limit before
                         # an explicit save_project call.  When auto-save refuses
                         # because the on-disk file changed externally, surface
                         # a warning to the caller so they don't believe their
                         # mutation was persisted.
+                        # dryRun previews mutate nothing, so they skip the save
+                        # (no board rewrite, no .mcp-backups churn).
                         save_status = self._auto_save_board()
                         self._last_auto_save_status = save_status
                         if isinstance(result, dict) and not save_status.get("saved"):

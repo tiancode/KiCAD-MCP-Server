@@ -44,8 +44,28 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
         fixed_refs = set(params.get("fixedRefs") or [])
         dry_run = bool(params.get("dryRun", False))
 
+        import pcbnew
+
+        def _keepout_box(fp: Any) -> Any:
+            """Courtyard bbox when present (preferred for placement clearance,
+            matching component/_query.py), else the raw bounding box."""
+            try:
+                for layer_id in (pcbnew.F_CrtYd, pcbnew.B_CrtYd):
+                    courtyard = fp.GetCourtyard(layer_id)
+                    if courtyard and courtyard.OutlineCount() > 0:
+                        return courtyard.BBox()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+            return fp.GetBoundingBox()
+
         raw: List[Dict[str, Any]] = []
         modules: Dict[str, Any] = {}
+        # The placement algorithm works in CENTER coordinates, but
+        # SetPosition/GetPosition move the footprint ANCHOR — which is not
+        # the box center for pin-1-origin parts or asymmetric silkscreen.
+        # Track each footprint's (anchor - box_center) offset so extraction
+        # feeds centers in and write-back converts centers to anchors.
+        anchor_offsets: Dict[str, Any] = {}
         for fp in iface.board.GetFootprints():
             ref = fp.GetReference()
             modules[ref] = fp
@@ -54,17 +74,20 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
                 name = pad.GetNetname()
                 if name:
                     nets.add(name)
-            bb = fp.GetBoundingBox()
+            bb = _keepout_box(fp)
             pos = fp.GetPosition()
+            center_x = (bb.GetLeft() + bb.GetRight()) / 2.0 / _NM
+            center_y = (bb.GetTop() + bb.GetBottom()) / 2.0 / _NM
+            anchor_offsets[ref] = (pos.x / _NM - center_x, pos.y / _NM - center_y)
             raw.append(
                 {
                     "reference": ref,
                     "value": fp.GetValue(),
                     "nets": nets,
-                    "width": bb.GetWidth() / _NM,
-                    "height": bb.GetHeight() / _NM,
-                    "x": pos.x / _NM,
-                    "y": pos.y / _NM,
+                    "width": (bb.GetRight() - bb.GetLeft()) / _NM,
+                    "height": (bb.GetBottom() - bb.GetTop()) / _NM,
+                    "x": center_x,
+                    "y": center_y,
                     "locked": bool(fp.IsLocked()) if hasattr(fp, "IsLocked") else False,
                 }
             )
@@ -115,14 +138,18 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
 
         moved = 0
         if not dry_run:
-            import pcbnew
-
             for placement in result.get("placements", []):
                 fp = modules.get(placement["reference"])
                 if fp is None:
                     continue
+                # placement x/y is the keepout-box CENTER; convert back to the
+                # footprint anchor using the offset recorded at extraction.
+                off_x, off_y = anchor_offsets.get(placement["reference"], (0.0, 0.0))
                 fp.SetPosition(
-                    pcbnew.VECTOR2I(int(placement["x"] * _NM), int(placement["y"] * _NM))
+                    pcbnew.VECTOR2I(
+                        int((placement["x"] + off_x) * _NM),
+                        int((placement["y"] + off_y) * _NM),
+                    )
                 )
                 moved += 1
 
