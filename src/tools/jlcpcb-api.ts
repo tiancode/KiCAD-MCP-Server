@@ -365,7 +365,7 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
   // Import LCSC/JLCPCB parts as placeable KiCAD symbols + footprints
   server.tool(
     "import_jlcpcb_symbols",
-    `Generate KiCAD symbols + footprints for LCSC parts via easyeda2kicad into the shared "easyeda" cache library. Batch a whole BOM: cached parts are skipped, one bad id never aborts the rest. Then place with add_schematic_component(library="easyeda", componentName=<from response>). Needs easyeda2kicad + network.`,
+    `Generate KiCAD symbols + footprints for LCSC parts via easyeda2kicad into the shared "easyeda" cache library. Batch a whole BOM: cached parts are skipped, one bad id never aborts the rest. Then place with add_schematic_component(symbol="easyeda:<name from response>"). Needs easyeda2kicad + network.`,
     {
       lcscNumbers: z
         .array(z.string())

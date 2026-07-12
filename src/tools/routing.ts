@@ -49,9 +49,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .describe("End position"),
       layer: z.string().describe("PCB layer"),
       width: z.number().describe("Trace width in mm"),
-      net: z.string().describe("Net name"),
+      net: z.string().optional().describe("Net name (required for straight segments)"),
     },
     async (args) => {
+      if (!args.mid && !args.net) {
+        return formatKicadResult({
+          success: false,
+          message: "route_trace requires net for straight segments (omit only when mid is given)",
+        });
+      }
       const command = args.mid ? "route_arc_trace" : "route_trace";
       return formatKicadResult(await callKicadScript(command, args));
     },
@@ -81,7 +87,9 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     "Manage copper pours (zones). add: create a pour (layer+net required; auto-refills). " +
       "edit: modify one zone selected by uuid or net/layer (fill marked stale — refill afterwards). " +
       "delete: remove matching zone(s). " +
-      "refill: refill ALL zones via IPC; the SWIG fallback is subprocess-isolated — verify with run_drc.",
+      "refill: refill ALL zones via IPC; without IPC the SWIG fill is REFUSED by default " +
+      "(ZONE_FILLER can segfault/mis-fill outside KiCad — prefer letting KiCad refill on open); " +
+      "force=true opts into the subprocess-isolated SWIG fill anyway. Verify with run_drc.",
     {
       action: z.enum(["add", "edit", "delete", "refill"]).describe("What to do"),
       layer: z
@@ -126,6 +134,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     },
     async (args) => {
       const { action, ...params } = args;
+      // The python layer silently defaults a missing layer to F.Cu and a
+      // missing net to "no net" (floating pour) — enforce the pre-merge
+      // required fields for the add branch here.
+      if (action === "add" && (!params.layer || !params.net)) {
+        return formatKicadResult({
+          success: false,
+          message: "copper_pour action=add requires both layer and net",
+        });
+      }
       const command = {
         add: "add_copper_pour",
         edit: "edit_copper_pour",
@@ -345,7 +362,8 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     "route_smart",
     "Route between two pads (or two points). strategy=astar (default): grid A* OBSTACLE AVOIDANCE around other " +
       "pads/traces/vias. strategy=direct: ONE straight segment between two pads, no avoidance — refuses if it " +
-      "would cross a third pad unless force=true. Still run_drc afterwards.",
+      "would cross a third pad unless force=true; that gate only checks pads, so still run_drc to catch " +
+      "trace/zone/edge crossings.",
     {
       strategy: z.enum(["astar", "direct"]).optional().describe("Routing strategy (default astar)"),
       fromRef: z.string().optional().describe("Source component reference (e.g. 'U1')"),

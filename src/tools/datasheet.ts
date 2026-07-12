@@ -14,8 +14,8 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
   server.tool(
     "enrich_datasheets",
     "Fill in missing Datasheet URLs: every symbol with an LCSC property and an empty/'~' Datasheet field gets " +
-      "https://www.lcsc.com/datasheet/<LCSC>.pdf (constructed, no network). For a single part's URL use " +
-      "get_jlcpcb_part instead.",
+      "https://www.lcsc.com/datasheet/<LCSC>.pdf (constructed, no network). For a single part's URL just " +
+      "build it from the LCSC number with that same pattern — no lookup needed.",
     {
       schematic_path: z.string().describe("Path to the .kicad_sch file to enrich"),
       dry_run: z

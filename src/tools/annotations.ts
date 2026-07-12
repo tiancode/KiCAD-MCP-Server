@@ -54,8 +54,20 @@ const READ_ONLY_EXACT = new Set<string>([
  *     clobbers an existing board / sheet. (create_footprint / create_symbol
  *     are NOT here — they default overwrite=False and refuse if present.)
  *   - autoroute imports the SES and overwrites all existing routing.
+ *   - copper_pour / edit_schematic_net_label / set_no_connect /
+ *     edit_schematic_component are merged tools whose delete branch
+ *     (action="delete", remove=true, removeProperties) absorbed a former
+ *     delete-/remove-prefixed tool that carried the hint via its name.
  */
-const DESTRUCTIVE_EXACT = new Set<string>(["create_project", "create_schematic", "autoroute"]);
+const DESTRUCTIVE_EXACT = new Set<string>([
+  "create_project",
+  "create_schematic",
+  "autoroute",
+  "copper_pour",
+  "edit_schematic_net_label",
+  "set_no_connect",
+  "edit_schematic_component",
+]);
 
 /**
  * Mutating tools that converge to a fixed end state — calling twice with the
@@ -75,12 +87,9 @@ const IDEMPOTENT_EXACT = new Set<string>([
   "board_origin",
   "title_block",
   "auto_place_components",
-  "set_no_connect",
   // Edits that assign fixed values
   "edit_component",
   "edit_footprint_pad",
-  "edit_schematic_component",
-  "edit_schematic_net_label",
   // Absolute-position moves
   "move_component",
   "move_schematic_component",

@@ -434,7 +434,7 @@ Example:
 Test with prompt in Claude Desktop:
 
 ```text
-Use the kicad MCP server to run check_kicad_ui.
+Use the kicad MCP server to run manage_kicad_ui with action=status.
 ```
 
 ##### Notes
@@ -672,7 +672,7 @@ already built.
 
 1. Fully quit OpenCode.
 2. Start OpenCode again so it reloads `opencode.json`.
-3. Ask OpenCode to use the `kicad` MCP server and run `check_kicad_ui`.
+3. Ask OpenCode to use the `kicad` MCP server and run `manage_kicad_ui` (action=status).
 
 #### Disable the OpenCode MCP server
 
@@ -721,7 +721,7 @@ Install JLCPCB libraries via KiCAD's Plugin and Content Manager:
 2. Go to Tools > Plugin and Content Manager
 3. Search for "JLCPCB" or "JLC"
 4. Install libraries like `JLCPCB-KiCAD-Library` or `EDA_MCP`
-5. Use `search_symbols` to find components with pre-configured footprints and LCSC IDs
+5. Use `search_library_parts` (type=symbol) to find components with pre-configured footprints and LCSC IDs
 
 **Mode 3: Official JLCPCB API (Advanced - Requires Enterprise Account)**
 

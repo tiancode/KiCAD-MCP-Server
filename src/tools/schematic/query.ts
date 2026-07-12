@@ -87,7 +87,7 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
 
   server.tool(
     "check_schematic_layout",
-    "Run schematic layout sanity checks: overlaps (stacked symbols/labels, collinear wires), wires_crossing_symbols, floating_labels (not reaching any pin), orphaned_wires (dangling endpoints). All four by default. Returns per-check results.",
+    "Run schematic layout sanity checks: overlaps (stacked symbols/labels, collinear wires), wires_crossing_symbols, floating_labels (not reaching any pin), orphaned_wires (dangling endpoints). All four by default. Returns per-check results. File-only — does not need KiCad running.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       checks: z

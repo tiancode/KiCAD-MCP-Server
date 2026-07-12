@@ -66,6 +66,23 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
       >,
     ) => {
       const { kind, ...params } = args;
+      // The python handlers substitute silent defaults (origin, 1mm radius)
+      // for missing coordinates instead of erroring — enforce the per-kind
+      // required fields here, as the pre-merge per-shape schemas did.
+      const REQUIRED: Record<typeof kind, string[]> = {
+        segment: ["start", "end"],
+        arc: ["start", "mid", "end"],
+        circle: ["center", "radius"],
+        rectangle: ["topLeft", "bottomRight"],
+        polygon: ["points"],
+      };
+      const missing = REQUIRED[kind].filter((field) => params[field] === undefined);
+      if (missing.length > 0) {
+        return formatKicadResult({
+          success: false,
+          message: `add_shape kind=${kind} requires: ${missing.join(", ")}`,
+        });
+      }
       const result = await callKicadScript(`add_${kind}`, params);
       return formatKicadResult(result);
     },

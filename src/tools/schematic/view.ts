@@ -264,7 +264,8 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
     "Create a hierarchical sheet in a parent schematic: inserts the sheet block and creates the child " +
       ".kicad_sch if missing. Optional pins are auto-stacked on the requested side, each writing a matching " +
       "hierarchical_label into the child (for explicit pin positions use add_sheet_pin). " +
-      "pageNumber pins the child's page number and cannot be combined with pins.",
+      "pageNumber pins the child's page number and cannot be combined with pins. " +
+      "Inter-sheet nets connect via same-named global labels on each page — sheet pins are optional.",
     {
       schematicPath: z.string().describe("Path to the parent .kicad_sch file"),
       sheetName: z.string().describe("Sheet name (must be unique in the parent)"),

@@ -23,7 +23,7 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
   // Check / launch the KiCAD UI
   server.tool(
     "manage_kicad_ui",
-    "Check ('status') or launch ('launch', optionally with a project file) the KiCAD UI. Board/IPC ops need the PCB editor open; the server auto-heals unless KICAD_AUTO_LAUNCH=false. On needs_pcb_editor, ask the user to open the board — don't fall back to file-only edits.",
+    "Check ('status') or launch ('launch', optionally with a project file) the KiCAD UI. Board/IPC ops need the PCB editor open; the server auto-heals unless KICAD_AUTO_LAUNCH=false. On needs_pcb_editor, ask the user to open the board and wait — don't fall back to file-only edits.",
     {
       action: z.enum(["status", "launch"]).describe("status | launch"),
       projectPath: z.string().optional().describe("Path to .kicad_pcb file to open (launch only)"),
