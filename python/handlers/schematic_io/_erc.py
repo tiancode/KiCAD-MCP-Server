@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.schematic_io")
 
+# Default cap on the number of violations returned in the response list. The
+# summary always carries the full totals, so the cap only bounds the payload
+# size — callers raise it (or pass 0 for "all") via the ``maxViolations`` param.
+_DEFAULT_MAX_VIOLATIONS = 30
+
 
 # Net names whose presence as a label on the offending net strongly suggests
 # kicad-cli's "Input Power pin not driven" is a false positive — the netlist
@@ -547,6 +552,8 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
     import subprocess
     import tempfile
 
+    from utils.kicad_cli import c_locale_env
+
     try:
         schematic_path = params.get("schematicPath")
         if not schematic_path or not os.path.exists(schematic_path):
@@ -555,6 +562,16 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                 "message": "Schematic file not found",
                 "errorDetails": f"Path does not exist: {schematic_path}",
             }
+
+        # How many violations to include in the returned list. The full counts
+        # always live in ``summary`` so truncation is explicit; a non-positive
+        # value means "no cap" (return every violation).
+        try:
+            max_violations = int(params.get("maxViolations", _DEFAULT_MAX_VIOLATIONS))
+        except (TypeError, ValueError):
+            max_violations = _DEFAULT_MAX_VIOLATIONS
+        if max_violations < 0:
+            max_violations = 0
 
         # Locate the project root (the dir holding sym-lib-table / *.kicad_pro)
         # once — both the lib_symbols pre-refresh and the merged-config step
@@ -625,8 +642,21 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     schematic_path,
                 ]
                 logger.info(f"Running ERC command: {' '.join(cmd)}")
+                # Force English violation text: kicad-cli takes its language
+                # from the KiCad config, not LC_ALL. When the sym-lib-table
+                # merge already built a config home (a temp copy of the real
+                # config), override the language in place; otherwise build a
+                # derived English config. See utils.kicad_cli.c_locale_env.
+                run_env = c_locale_env(
+                    base_env=erc_env,
+                    owned_config_home=(erc_env or {}).get("KICAD_CONFIG_HOME"),
+                )
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=120, env=erc_env
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=run_env,
                 )
 
             # kicad-cli returns non-zero when ERC violations are found —
@@ -853,10 +883,20 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # top of the list when the agent scans it.
             violations.sort(key=lambda v: 1 if v.get("likely_false_positive") else 0)
 
+            # Cap the returned list so a huge ERC doesn't blow the MCP text
+            # budget. The cap is explicit: summary reports total vs shown and a
+            # `truncated` flag; `maxViolations` (0 = all) controls it end-to-end.
+            total_violations = len(violations)
+            if max_violations and total_violations > max_violations:
+                shown_violations = violations[:max_violations]
+            else:
+                shown_violations = violations
+            truncated = len(shown_violations) < total_violations
+
             response: Dict[str, Any] = {
                 "success": True,
                 "message": (
-                    f"ERC complete: {len(violations)} violation(s)"
+                    f"ERC complete: {total_violations} violation(s)"
                     + (
                         f" ({tagged_false_positives} tagged likely_false_positive)"
                         if tagged_false_positives
@@ -864,7 +904,19 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     )
                 ),
                 "summary": {
-                    "total": len(violations),
+                    # Headline numbers FIRST — real_errors (excluding PWR_FLAG
+                    # false positives) is the single most important field, so it
+                    # and the error/warning totals lead the payload.
+                    "real_errors": real_by_severity.get("error", 0),
+                    "real_warnings": real_by_severity.get("warning", 0),
+                    "errors": severity_counts.get("error", 0),
+                    "warnings": severity_counts.get("warning", 0),
+                    "total": total_violations,
+                    # Explicit truncation contract: how many of `total` are in
+                    # the returned `violations` list and whether it was capped.
+                    "shown": len(shown_violations),
+                    "truncated": truncated,
+                    "max_violations": max_violations,
                     # by_severity now counts ONLY real issues per bucket;
                     # tagged FPs are surfaced separately via
                     # likely_false_positives + raw_by_severity.
@@ -875,13 +927,12 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     # embedded def already matches disk (kicad-cli compare quirk,
                     # not user-actionable). 0 unless a project-scoped lib tripped it.
                     "lib_symbol_mismatch_false_positives": lib_mismatch_fp_count,
-                    "real_errors": real_by_severity.get("error", 0),
                     # Top-level remediation hints: one entry per known
                     # fix-class.  Currently only PWR_FLAG.  Empty list
                     # means "no auto-actionable suggestion".
                     "recommendations": recommendations,
                 },
-                "violations": violations,
+                "violations": shown_violations,
             }
             if lib_symbols_refresh is not None:
                 response["lib_symbols_refresh"] = lib_symbols_refresh

@@ -55,7 +55,7 @@ def test_default_refuses_swig_path():
     # Zone count is still reported so the caller knows the board state.
     assert out["zoneCount"] == 3
     # Recommendation gives a clear next step.
-    assert "launch_kicad_ui" in out["recommendation"]
+    assert "manage_kicad_ui(action=launch)" in out["recommendation"]
     # CRUCIALLY: the handler must not have touched the board.  No save
     # / subprocess call.  We verify via the board mock methods that DO
     # mutate state (the original handler called save_board_and_record).

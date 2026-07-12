@@ -32,6 +32,9 @@ _K = {
         "type",
         "uuid",
         "unit",
+        "label",
+        "global_label",
+        "hierarchical_label",
     ]
 }
 
@@ -569,3 +572,145 @@ class WireDragger:
             synthesized += 1
 
         return synthesized
+
+    @staticmethod
+    def _wire_endpoints(item: Any) -> List[Tuple[float, float]]:
+        """Return the [(x, y), …] endpoints of a wire s-expr item, else []."""
+        if not (isinstance(item, list) and item and item[0] == _K["wire"]):
+            return []
+        pts_sub = None
+        for sub in item[1:]:
+            if isinstance(sub, list) and sub and sub[0] == _K["pts"]:
+                pts_sub = sub
+                break
+        if pts_sub is None:
+            return []
+        xy_items = [
+            p for p in pts_sub[1:] if isinstance(p, list) and len(p) >= 3 and p[0] == _K["xy"]
+        ]
+        return [(float(p[1]), float(p[2])) for p in xy_items]
+
+    @staticmethod
+    def collect_stub_far_endpoints(
+        sch_data: list,
+        moved_reference: str,
+        pin_positions: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]],
+        eps: float = EPS,
+    ) -> Dict[Tuple[float, float], Tuple[float, float]]:
+        """Find 'stub' wires and return {far_old_xy: far_new_xy} for a rigid move.
+
+        A *stub* is a wire with exactly ONE endpoint on a moved pin (its OLD
+        world position) and the OTHER endpoint *free* — nothing but an optional
+        net label sits there.  That is the shape ``connect_to_net`` produces (a
+        2.54 mm wire from the pin plus a label at the far end).  When the
+        component moves, such a stub must translate *rigidly*: both endpoints
+        (and any label at the far end) shift by the same delta as the pin, so the
+        drag never leaves a stretched diagonal wire + orphaned label behind.
+
+        'Free' means the far endpoint is NOT another component's pin, NOT shared
+        with any other wire endpoint, and NOT a junction — i.e. it carries no
+        real connectivity of its own.  A wire whose far endpoint is anchored to
+        something real is deliberately omitted here so it keeps stretch behavior
+        (the caller still drags its moved endpoint via ``drag_wires``).
+
+        The returned map is meant to be merged into the ``old_to_new`` passed to
+        :meth:`drag_wires`; a label at ``far_old_xy`` is moved by
+        :meth:`move_labels_at_points` with that same map.
+        """
+        from collections import Counter
+
+        if not pin_positions:
+            return {}
+
+        # OLD moved-pin position (rounded) -> NEW position.
+        moved_pins: Dict[Tuple[float, float], Tuple[float, float]] = {}
+        for _pin, (old_xy, new_xy) in pin_positions.items():
+            moved_pins[(round(old_xy[0], 6), round(old_xy[1], 6))] = (new_xy[0], new_xy[1])
+
+        stationary_keys = set(
+            WireDragger.get_all_stationary_pin_positions(sch_data, moved_reference).keys()
+        )
+
+        # Count wire endpoints (a far end shared with another wire is anchored)
+        # and gather each wire's endpoints once.
+        endpoint_count: Counter = Counter()
+        wires: List[List[Tuple[float, float]]] = []
+        for item in sch_data:
+            eps_pts = WireDragger._wire_endpoints(item)
+            if len(eps_pts) >= 2:
+                wires.append(eps_pts)
+                for ep in (eps_pts[0], eps_pts[-1]):
+                    endpoint_count[(round(ep[0], 6), round(ep[1], 6))] += 1
+
+        # Junction positions mean real connectivity — not a free end.
+        junction_keys: set = set()
+        for item in sch_data:
+            if isinstance(item, list) and item and item[0] == _K["junction"]:
+                for sub in item[1:]:
+                    if isinstance(sub, list) and sub and sub[0] == _K["at"] and len(sub) >= 3:
+                        junction_keys.add((round(float(sub[1]), 6), round(float(sub[2]), 6)))
+                        break
+
+        far_map: Dict[Tuple[float, float], Tuple[float, float]] = {}
+        for eps_pts in wires:
+            a, b = eps_pts[0], eps_pts[-1]
+            a_key = (round(a[0], 6), round(a[1], 6))
+            b_key = (round(b[0], 6), round(b[1], 6))
+            a_moved = a_key in moved_pins
+            b_moved = b_key in moved_pins
+            # Exactly one endpoint on a moved pin => single-ended stub candidate.
+            if a_moved == b_moved:
+                continue
+            near_key = a_key if a_moved else b_key
+            far_key = b_key if a_moved else a_key
+            far_xy = b if a_moved else a
+            # Far end must be genuinely free (else keep stretch behavior).
+            if far_key in stationary_keys:
+                continue
+            if far_key in moved_pins:
+                continue
+            if endpoint_count.get(far_key, 0) > 1:
+                continue
+            if far_key in junction_keys:
+                continue
+            new_near = moved_pins[near_key]
+            dx = new_near[0] - near_key[0]
+            dy = new_near[1] - near_key[1]
+            far_map[far_key] = (round(far_xy[0] + dx, 6), round(far_xy[1] + dy, 6))
+        return far_map
+
+    @staticmethod
+    def move_labels_at_points(
+        sch_data: list,
+        old_to_new: Dict[Tuple[float, float], Tuple[float, float]],
+        eps: float = EPS,
+    ) -> int:
+        """Move net labels sitting on any moved point, in place. Returns count.
+
+        A label (``label`` / ``global_label`` / ``hierarchical_label``) whose
+        anchor coincides (within ``eps``) with a key of ``old_to_new`` is
+        relocated to the mapped new position, rotation preserved.  Combined with
+        the stub-far-endpoint map, this makes a ``connect_to_net`` label travel
+        rigidly with its component; used with the pin map alone it also moves a
+        label placed directly on a moved pin.
+        """
+        if not old_to_new:
+            return 0
+        label_syms = {_K["label"], _K["global_label"], _K["hierarchical_label"]}
+        at_k = _K["at"]
+        mapping = list(old_to_new.items())
+        moved = 0
+        for item in sch_data:
+            if not (isinstance(item, list) and item and item[0] in label_syms):
+                continue
+            for sub in item[1:]:
+                if isinstance(sub, list) and sub and sub[0] == at_k and len(sub) >= 3:
+                    lx, ly = float(sub[1]), float(sub[2])
+                    for (ox, oy), (nx, ny) in mapping:
+                        if _coords_match(lx, ly, ox, oy, eps):
+                            sub[1] = nx
+                            sub[2] = ny
+                            moved += 1
+                            break
+                    break
+        return moved

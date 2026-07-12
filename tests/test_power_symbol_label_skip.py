@@ -178,8 +178,29 @@ def test_label_on_regular_pin_unaffected(sch: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _inject_wire(sch: Path, x: float, y: float) -> None:
+    """Write a wire whose endpoint touches (x, y) straight into the file, so the
+    pin there reads as physically connected without going through the (mocked)
+    WireManager.add_wire. Used to exercise the F3 "already connected → skip" path.
+    """
+    import uuid as _uuid
+
+    text = sch.read_text()
+    wire = (
+        f"  (wire (pts (xy {x} {y}) (xy {x} {y - 2.54})) "
+        f'(stroke (width 0) (type default)) (uuid "{_uuid.uuid4()}"))\n'
+    )
+    marker = "  (sheet_instances"
+    assert marker in text
+    sch.write_text(text.replace(marker, wire + marker, 1))
+    _clear_caches()
+
+
 @pytest.mark.unit
-def test_connect_to_net_power_symbol_matching_value_skips_write(sch: Path) -> None:
+def test_connect_to_net_connected_power_symbol_matching_value_skips_write(sch: Path) -> None:
+    # F3: a power pin that is ALREADY physically connected (a wire touches
+    # #PWR01's pin at (100, 90)) still short-circuits — no duplicate wire/label.
+    _inject_wire(sch, 100.0, 90.0)
     _clear_caches()
     with (
         patch("commands.wire_manager.WireManager.add_wire", return_value=True) as add_wire,
@@ -193,6 +214,28 @@ def test_connect_to_net_power_symbol_matching_value_skips_write(sch: Path) -> No
     assert res["power_symbol"] == {"ref": "#PWR01", "value": "+5V"}
     # Neither a stub wire nor a label was drawn.
     add_wire.assert_not_called()
+    add_label.assert_not_called()
+
+
+@pytest.mark.unit
+def test_connect_to_net_floating_power_symbol_draws_stub(sch: Path) -> None:
+    # F3 core fix: a FLOATING power pin (#PWR01 pin at (100, 90), no wire, no
+    # coincident pin) must NOT be silently skipped — connect_to_net draws a stub
+    # WIRE so ERC no longer reports "Pin not connected", but NO label (the power
+    # symbol already names the net; a label would duplicate it).
+    _clear_caches()
+    with (
+        patch("commands.wire_manager.WireManager.add_wire", return_value=True) as add_wire,
+        patch("commands.wire_manager.WireManager.add_label", return_value=True) as add_label,
+    ):
+        res = ConnectionManager.connect_to_net(sch, "#PWR01", "1", "+5V")
+
+    assert res["success"] is True
+    assert res.get("already_connected") is None
+    assert res["drew_stub_wire"] is True
+    assert res["label_location"] is None
+    assert res["power_symbol"] == {"ref": "#PWR01", "value": "+5V"}
+    add_wire.assert_called_once()
     add_label.assert_not_called()
 
 

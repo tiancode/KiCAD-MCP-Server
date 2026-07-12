@@ -164,7 +164,8 @@ def test_grid_strategy_fills_empty_board():
     )
     assert out["success"], out
     placed = out["placed"]
-    # Grid from 0.5 to 19.5 stepping 5 -> {0.5, 5.5, 10.5, 15.5} -> 4*4 = 16
+    # edgeMargin 0.5 -> centre keep-out 0.8 (copper clearance + via radius 0.3)
+    # Grid from 0.8 to 19.2 stepping 5 -> {0.8, 5.8, 10.8, 15.8} -> 4*4 = 16
     assert len(placed) == 16
     assert out["summary"]["placed_count"] == 16
     # All placements inside the edge bounds
@@ -175,13 +176,16 @@ def test_grid_strategy_fills_empty_board():
 @pytest.mark.unit
 def test_collision_blocks_via_near_signal_track():
     # Signal track on B.Cu (net code 2) crossing the middle of the board.
+    # edgeClearance 0.2 -> centre keep-out 0.5 (via radius 0.3) -> grid rows
+    # at {0.5, 5.5, 10.5, 15.5}; the y=10.5 row sits within the track's
+    # collision distance and must be blocked.
     track = _track(net_code=2, x1=0, y1=10, x2=20, y2=10, width_mm=0.5)
     board = _board(width_mm=20, height_mm=20, tracks=[track])
     no_collision = _cmd(_board(width_mm=20, height_mm=20)).add_gnd_stitching_vias(
         {
             "strategies": ["grid"],
             "spacing": 5.0,
-            "edgeMargin": 0.5,
+            "edgeClearance": 0.2,
             "dryRun": True,
         }
     )
@@ -189,7 +193,7 @@ def test_collision_blocks_via_near_signal_track():
         {
             "strategies": ["grid"],
             "spacing": 5.0,
-            "edgeMargin": 0.5,
+            "edgeClearance": 0.2,
             "dryRun": True,
         }
     )
@@ -428,6 +432,143 @@ def test_named_gnd_net_used_when_specified():
     )
     assert out["success"]
     assert out["summary"]["gnd_net"] == "VSS"
+
+
+# ---------------------------------------------------------------------------
+# Fill-order guard + edge clearance (GD32 E2E regressions)
+# ---------------------------------------------------------------------------
+
+
+def _zone(net_code=1, filled=True, hit=None, layer=0):
+    """A copper zone MagicMock with controllable fill state and hit test."""
+    z = MagicMock()
+    z.GetNetCode.return_value = net_code
+    z.IsFilled.return_value = filled
+    z.GetLayer.return_value = layer
+    if hit is not None:
+        z.HitTestFilledArea.side_effect = hit
+    else:
+        z.HitTestFilledArea.return_value = True
+    z.GetBoundingBox.return_value = _bbox(0, 0, 20, 20)
+    return z
+
+
+@pytest.mark.unit
+def test_unfilled_gnd_zones_refused_with_needs_zone_fill():
+    """GND zones exist but none are filled -> refuse: the vias would dangle
+    (GD32 E2E: 20 via_dangling + 9 copper_edge errors from stitching two
+    unfilled GND zones)."""
+    board = _board(width_mm=20, height_mm=20, zones=[_zone(filled=False), _zone(filled=False)])
+    out = _cmd(board).add_gnd_stitching_vias({"strategies": ["grid"], "dryRun": True})
+    assert out["success"] is False
+    assert out["needs_zone_fill"] is True
+    assert "copper_pour" in out["errorDetails"]
+    assert out["summary"]["gnd_zone_count"] == 2
+    assert out["summary"]["filled_gnd_zone_count"] == 0
+    board.Add.assert_not_called()
+
+
+@pytest.mark.unit
+def test_unfilled_gnd_zones_force_override_places_anyway():
+    board = _board(width_mm=20, height_mm=20, zones=[_zone(filled=False)])
+    out = _cmd(board).add_gnd_stitching_vias(
+        {"strategies": ["grid"], "spacing": 5.0, "force": True, "dryRun": True}
+    )
+    assert out["success"], out
+    assert out["summary"]["placed_count"] > 0
+    assert out["summary"]["forced"] is True
+    assert out["summary"]["restricted_to_fill"] is False
+
+
+@pytest.mark.unit
+def test_filled_zone_restricts_grid_placement_to_fill(monkeypatch):
+    """With a filled GND zone present, even the plain grid strategy places
+    vias ONLY inside the filled polygon — off-fill vias dangle."""
+    monkeypatch.setattr(pcbnew, "VECTOR2I", lambda x, y: SimpleNamespace(x=x, y=y))
+
+    # Zone filled only on the left half of the board (x < 10 mm).
+    zone = _zone(filled=True, hit=lambda layer, pt, tol: pt.x < _mm(10))
+    board = _board(width_mm=20, height_mm=20, zones=[zone])
+    out = _cmd(board).add_gnd_stitching_vias(
+        {
+            "strategies": ["grid"],  # NOT in_zones — restriction is implicit
+            "spacing": 5.0,
+            "edgeClearance": 0.2,
+            "dryRun": True,
+        }
+    )
+    assert out["success"], out
+    assert out["summary"]["restricted_to_fill"] is True
+    assert out["placed"], "left half of the board should accept vias"
+    assert all(p["x"] < 10 for p in out["placed"])
+    assert out["summary"]["skipped_by_zone_membership"] > 0
+
+
+@pytest.mark.unit
+def test_only_filled_zones_used_for_membership(monkeypatch):
+    """A mix of filled and unfilled GND zones: membership must be evaluated
+    against the FILLED zones only."""
+    monkeypatch.setattr(pcbnew, "VECTOR2I", lambda x, y: SimpleNamespace(x=x, y=y))
+
+    filled = _zone(filled=True, hit=lambda layer, pt, tol: pt.x < _mm(10))
+    # The unfilled zone would accept everything — it must be ignored.
+    unfilled = _zone(filled=False, hit=lambda layer, pt, tol: True)
+    board = _board(width_mm=20, height_mm=20, zones=[filled, unfilled])
+    out = _cmd(board).add_gnd_stitching_vias(
+        {"strategies": ["grid"], "spacing": 5.0, "edgeClearance": 0.2, "dryRun": True}
+    )
+    assert out["success"], out
+    assert all(p["x"] < 10 for p in out["placed"])
+
+
+@pytest.mark.unit
+def test_edge_clearance_param_enforces_copper_distance():
+    """edgeClearance is the copper-to-edge distance: via centres must keep
+    edgeClearance + via radius from the board edge (GD32 E2E: passing
+    edgeClearance 1.5 was silently ignored — vias landed 0.5 mm from edge)."""
+    board = _board(width_mm=20, height_mm=20)
+    out = _cmd(board).add_gnd_stitching_vias(
+        {
+            "strategies": ["grid"],
+            "spacing": 2.0,
+            "edgeClearance": 1.5,
+            "viaSize": 0.6,
+            "dryRun": True,
+        }
+    )
+    assert out["success"], out
+    assert out["summary"]["edge_clearance_mm"] == 1.5
+    assert out["summary"]["edge_keepout_mm"] == pytest.approx(1.8)
+    assert out["placed"]
+    for p in out["placed"]:
+        copper_to_edge = min(p["x"], 20 - p["x"], p["y"], 20 - p["y"]) - 0.3
+        assert copper_to_edge >= 1.5 - 1e-6, f"via copper at {copper_to_edge}mm from edge"
+
+
+@pytest.mark.unit
+def test_edge_margin_alias_matches_edge_clearance():
+    board_a = _board(width_mm=20, height_mm=20)
+    board_b = _board(width_mm=20, height_mm=20)
+    out_clearance = _cmd(board_a).add_gnd_stitching_vias(
+        {"strategies": ["grid"], "spacing": 5.0, "edgeClearance": 1.0, "dryRun": True}
+    )
+    out_margin = _cmd(board_b).add_gnd_stitching_vias(
+        {"strategies": ["grid"], "spacing": 5.0, "edgeMargin": 1.0, "dryRun": True}
+    )
+    assert out_clearance["placed"] == out_margin["placed"]
+    assert out_margin["summary"]["edge_clearance_mm"] == 1.0
+
+
+@pytest.mark.unit
+def test_default_edge_clearance_keeps_copper_half_mm_from_edge():
+    """The dryRun default must not propose vias whose copper violates the
+    stock 0.5 mm copper_edge_clearance rule."""
+    board = _board(width_mm=20, height_mm=20)
+    out = _cmd(board).add_gnd_stitching_vias({"strategies": ["grid"], "dryRun": True})
+    assert out["success"], out
+    for p in out["placed"]:
+        copper_to_edge = min(p["x"], 20 - p["x"], p["y"], 20 - p["y"]) - 0.3
+        assert copper_to_edge >= 0.5 - 1e-6
 
 
 # ---------------------------------------------------------------------------

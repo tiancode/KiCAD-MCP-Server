@@ -325,7 +325,25 @@ def handle_move_schematic_component(
                     continue
                 old_to_new[old_xy] = new_xy
 
+            # A connect_to_net "stub" (short wire from the pin + a net label at
+            # its far end) must move RIGIDLY with the component: translate the
+            # far endpoint by the same delta as the pin, not just the pin side —
+            # otherwise the far end stays put and the wire stretches into a long
+            # diagonal that keeps the moved pin electrically tied to the OLD
+            # spot. Only genuinely-free far ends are folded into the drag map;
+            # a far end anchored to real connectivity keeps stretch behavior.
+            stub_far = WireDragger.collect_stub_far_endpoints(sch_data, reference, pin_positions)
+            for far_old, far_new in stub_far.items():
+                old_to_new.setdefault(far_old, far_new)
+
             drag_summary = WireDragger.drag_wires(sch_data, old_to_new)
+
+            # Move any net label sitting on a moved point — a pin the component
+            # dragged, or the far end of a rigidly-moved stub — so no label is
+            # left orphaned at the old coordinate (which would silently keep the
+            # net tied there).
+            labels_moved = WireDragger.move_labels_at_points(sch_data, old_to_new)
+            drag_summary["labels_moved"] = labels_moved
 
             # Synthesize wires for touching-pin connections after dragging,
             # so drag_wires doesn't accidentally move and collapse the new wire.
@@ -348,6 +366,7 @@ def handle_move_schematic_component(
             "wiresMoved": drag_summary.get("endpoints_moved", 0),
             "wiresRemoved": drag_summary.get("wires_removed", 0),
             "wiresSynthesized": drag_summary.get("wires_synthesized", 0),
+            "labelsMoved": drag_summary.get("labels_moved", 0),
         }
         if snapped:
             response["snap"] = {

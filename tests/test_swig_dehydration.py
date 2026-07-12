@@ -386,3 +386,50 @@ def test_run_drc_clamps_extreme_timeout_values():
     assert captured["timeouts"][0] == 10  # clamped to min
     assert captured["timeouts"][1] == 1800  # clamped to max
     assert captured["timeouts"][2] == 600  # fallback default
+
+
+def test_run_drc_forces_c_locale(tmp_path, monkeypatch):
+    """DRC's kicad-cli subprocess must run with LC_ALL=C AND a KICAD_CONFIG_HOME
+    whose kicad_common.json forces English — kicad-cli reads its violation-text
+    language from the config, not from LC_ALL. See utils.kicad_cli.c_locale_env.
+    """
+    import json
+    import subprocess as _sp
+
+    import utils.kicad_cli as kc
+    from commands.design_rules import DesignRuleCommands
+
+    # Fake a localized real config so the derivation is observable off-machine.
+    version = "10.0"
+    ver_dir = tmp_path / "realcfg" / version
+    ver_dir.mkdir(parents=True)
+    (ver_dir / "kicad_common.json").write_text(
+        json.dumps({"system": {"language": "简体中文", "file_history_size": 9}})
+    )
+    kc._en_config_cache.clear()
+    monkeypatch.setattr(kc, "_discover_real_config", lambda: (str(tmp_path / "realcfg"), version))
+
+    cmds = DesignRuleCommands(board=_make_healthy_board())
+    cmds.board.GetFileName = MagicMock(return_value="/tmp/exists.kicad_pcb")
+
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        raise _sp.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("subprocess.run", side_effect=_fake_run),
+        patch.object(cmds, "_find_kicad_cli", return_value="/usr/bin/kicad-cli"),
+    ):
+        cmds.run_drc({})
+
+    env = captured["env"]
+    assert env is not None
+    assert env["LC_ALL"] == "C"
+    common = Path(env["KICAD_CONFIG_HOME"]) / version / "kicad_common.json"
+    data = json.loads(common.read_text())
+    assert data["system"]["language"] == "English"
+    # Other config contents survive the derivation.
+    assert data["system"]["file_history_size"] == 9

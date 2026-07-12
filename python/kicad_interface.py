@@ -628,6 +628,7 @@ class KiCADInterface(BoardPersistenceMixin):
                     "find_component",
                     "get_component_pads",
                     "get_pad_position",
+                    "edit_component_pad",
                     "place_component_array",
                     "align_components",
                     "check_courtyard_overlaps",
@@ -1028,6 +1029,82 @@ class KiCADInterface(BoardPersistenceMixin):
             "board matches the recorded landed SWIG write, so KiCad memory == "
             "disk == SWIG (nothing to reconcile)."
         )
+
+    #: Deferred fresh-open clear (papercut: false staleVsDisk right after
+    #: manage_kicad_ui(action=launch)).  When the explicit launch handler
+    #: initiates a fresh board open but IPC hasn't attached yet (KiCad still
+    #: booting / the spawned editor still loading), it arms this marker:
+    #: ``(deadline, disk signature at launch time)``.  The first point where
+    #: a .kicad_pcb document is confirmed open over IPC consumes it.
+    _pending_fresh_open_clear: Optional[Tuple[float, Tuple[int, str]]] = None
+    _FRESH_OPEN_CLEAR_WINDOW_S = 120.0
+
+    def _arm_pending_fresh_open_clear(self) -> None:
+        """Arm the deferred variant of ``_clear_swig_landed_if_disk_matches``.
+
+        Called by the explicit-launch path (``handle_launch_kicad_ui``) when
+        it just initiated a fresh open of the current board but can't verify
+        the document yet.  Captures the disk signature NOW: if another SWIG
+        write lands between the launch and the eventual attach, the freshly
+        opened KiCad memory no longer equals disk, and the consume side must
+        keep the flag (comparing only at consume time would miss that race).
+        """
+        if not getattr(self, "_swig_writes_landed", False):
+            return
+        try:
+            board_path = self.board.GetFileName() if getattr(self, "board", None) else None
+        except Exception:
+            board_path = None
+        if not board_path:
+            return
+        sig = self._disk_signature(board_path)
+        if sig is None:
+            return
+        self._pending_fresh_open_clear = (
+            time.monotonic() + self._FRESH_OPEN_CLEAR_WINDOW_S,
+            sig,
+        )
+        logger.info(
+            "Armed deferred fresh-open clear: explicit launch initiated a board "
+            "open; will drop _swig_writes_landed once the document is visible "
+            "over IPC (if the disk signature still matches)."
+        )
+
+    def _consume_pending_fresh_open_clear(self) -> None:
+        """Fire the armed fresh-open clear.  Call ONLY at a point where a
+        ``.kicad_pcb`` document is confirmed open over IPC.
+
+        Safety mirrors ``_clear_swig_landed_if_disk_matches`` and adds one
+        more check: the current disk signature must equal the one captured at
+        launch time.  All three signatures (recorded landed write, launch
+        time, now) must agree before the flag drops — otherwise KiCad's
+        freshly opened memory may not include the latest landed content.
+        Single-shot: the marker is disarmed on the first consume attempt.
+        """
+        pending = self._pending_fresh_open_clear
+        if pending is None:
+            return
+        self._pending_fresh_open_clear = None
+        deadline, sig_at_launch = pending
+        if time.monotonic() > deadline:
+            logger.debug("Deferred fresh-open clear expired; keeping _swig_writes_landed")
+            return
+        if not getattr(self, "_swig_writes_landed", False):
+            return
+        try:
+            board_path = self.board.GetFileName() if getattr(self, "board", None) else None
+        except Exception:
+            board_path = None
+        if not board_path:
+            return
+        current = self._disk_signature(board_path)
+        if current is None or current[1] != sig_at_launch[1]:
+            logger.info(
+                "Deferred fresh-open clear aborted: the on-disk board changed "
+                "after the launch-time open; keeping _swig_writes_landed."
+            )
+            return
+        self._clear_swig_landed_if_disk_matches()
 
     def _reload_swig_board_if_disk_changed(self) -> Optional[Dict[str, Any]]:
         """Reload the SWIG in-memory board when the on-disk file has newer content.
@@ -1441,6 +1518,10 @@ class KiCADInterface(BoardPersistenceMixin):
             # doc.  The process-existence proxy lies when pcbnew is alive
             # as a kiway worker without a board loaded.
             if self._ipc_has_open_board_document():
+                # Board document confirmed open — fire any deferred
+                # fresh-open clear armed by an explicit launch, before the
+                # caller's cross-backend conflict check runs.
+                self._consume_pending_fresh_open_clear()
                 return None
             # No board document open — try to open it ourselves (file-open
             # forward / run_action) before bouncing the call to the user.
@@ -1465,7 +1546,8 @@ class KiCADInterface(BoardPersistenceMixin):
             return (
                 False,
                 "KiCAD is not running and auto-launch is disabled "
-                "(KICAD_AUTO_LAUNCH=false). Start KiCAD manually or call launch_kicad_ui.",
+                "(KICAD_AUTO_LAUNCH=false). Start KiCAD manually or call "
+                "manage_kicad_ui(action=launch).",
             )
 
         # KiCAD is already running but we couldn't get a usable IPC board API.
@@ -1655,6 +1737,12 @@ class KiCADInterface(BoardPersistenceMixin):
                 if not self._ipc_has_open_board_document():
                     if not self._try_auto_open_board():
                         return self._pcb_editor_gate_response(command)
+                # A board document is confirmed open here — if an explicit
+                # launch armed a deferred fresh-open clear, fire it BEFORE the
+                # conflict/stale checks below so a board KiCad just loaded
+                # fresh from disk isn't treated as stale vs a landed SWIG
+                # write it already includes.
+                self._consume_pending_fresh_open_clear()
 
                 # Cross-backend conflict: refuse IPC writes when SWIG has
                 # landed content on disk that KiCad memory doesn't include
@@ -1941,6 +2029,9 @@ class KiCADInterface(BoardPersistenceMixin):
         "auto_place_components",
         "set_board_size",
         "set_design_rules",
+        # Mutates pads of a placed footprint via SWIG (repairs broken
+        # library footprints, e.g. empty pad numbers / copper == drill).
+        "edit_component_pad",
     }
 
     # IPC commands that only read the board.  Used by the cross-backend

@@ -52,7 +52,13 @@ def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
     designators) are looked up against the live board's footprints — any
     that don't match are silently dropped so a partial hit still works;
     the handler reports back ``resolved`` vs ``requested`` counts.
+
+    Resolved KIIDs are normalized through ``kiid_str``: ``str()`` on a kipy
+    KIID proto prints the field repr (``value: "<uuid>"\\n``), which used to
+    leak into the response's ``requested`` list instead of the clean uuid.
     """
+    from kicad_api.ipc_backend._helpers import kiid_str
+
     raw_ids = params.get("ids") or []
     if isinstance(raw_ids, str):
         raw_ids = [raw_ids]
@@ -69,7 +75,7 @@ def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
                 try:
                     rf = fp.reference_field
                     if rf and rf.text.value in wanted:
-                        out.append(str(fp.id))
+                        out.append(kiid_str(fp.id))
                 except Exception:
                     continue
         except Exception as e:

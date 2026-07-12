@@ -87,7 +87,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     "Manage copper pours (zones). add: create a pour (layer+net required; auto-refills). " +
       "net resolves to the board's real net (e.g. 'GND'→'/GND'); no match is REFUSED with " +
       "candidates (never a dead net-0 plane) — allowUnconnected:true makes a deliberate no-net zone. " +
-      "edit: modify one zone selected by uuid or net/layer (fill marked stale — refill afterwards). " +
+      "edit: modify one zone selected by zoneUuid or net/layer (fill marked stale — refill afterwards). " +
       "delete: remove matching zone(s). " +
       "refill: refill ALL zones via IPC; without IPC the SWIG fill is REFUSED by default " +
       "(ZONE_FILLER can segfault/mis-fill outside KiCad — prefer letting KiCad refill on open); " +
@@ -99,10 +99,11 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .optional()
         .describe("add: pour layer (required). edit/delete: zone selector"),
       net: z.string().optional().describe("add: pour net (required). edit/delete: zone selector"),
-      uuid: z
+      zoneUuid: z
         .string()
         .optional()
         .describe("edit/delete: zone uuid from query_copper (preferred selector)"),
+      uuid: z.string().optional().describe("edit/delete: alias of zoneUuid"),
       clearance: z.number().optional().describe("add/edit: clearance in mm"),
       minWidth: z.number().optional().describe("add/edit: minimum fill width in mm (default 0.2)"),
       outline: z
@@ -192,7 +193,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // Query copper tool (traces or zones)
   server.tool(
     "query_copper",
-    "Query copper: kind=traces returns trace segments (paginated, optionally vias); kind=zones returns zones/pours with net, layers, priority, fill state, bbox. Filter by net, layer, or boundingBox.",
+    "Query copper: kind=traces returns trace segments (paginated, optionally vias); kind=zones returns zones/pours with net, layers, priority, fill state, filledArea in mm² (null when the backend can't compute it), bbox. Filters: net (resolved against real board nets, 'GND'→'/GND'; response notes resolvedNet, or netCandidates on no match), layer, boundingBox.",
     {
       kind: z.enum(["traces", "zones"]).describe("What to query"),
       net: z.string().optional().describe("Filter by net name"),
@@ -238,7 +239,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // ------------------------------------------------------
   server.tool(
     "add_gnd_stitching_vias",
-    "Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup). Combinable strategies: grid, around_refs (densify around named ICs), in_zones (only inside GND zones).",
+    "Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup). Strategies: grid, around_refs (densify around named ICs), in_zones. Refuses unfilled GND zones (needs_zone_fill — fill first or force=true); with filled zones, vias land only inside the fill.",
     {
       gndNet: z
         .string()
@@ -270,10 +271,17 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .int()
         .optional()
         .describe("Grid cells around each ref (default 2 = 5x5 field per ref)."),
-      edgeMargin: z
+      edgeClearance: z
         .number()
         .optional()
-        .describe("Keep-out from the board edge in mm (default 0.5)."),
+        .describe(
+          "Copper-to-edge clearance in mm (default 0.5); via copper keeps this from Edge.Cuts (center keep-out adds the via radius). Alias: edgeMargin.",
+        ),
+      edgeMargin: z.number().optional().describe("Deprecated alias for edgeClearance."),
+      force: z
+        .boolean()
+        .optional()
+        .describe("Place vias even when GND zones are unfilled (they will dangle). Default false."),
       maxVias: z.number().int().optional().describe("Cap on total placements (default unlimited)."),
       dryRun: z
         .boolean()

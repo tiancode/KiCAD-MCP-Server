@@ -39,6 +39,27 @@ def _board_lock_present(path: Path) -> bool:
         return False
 
 
+def _targets_current_board(iface: "KiCADInterface", path_obj: Path) -> bool:
+    """Whether an explicit-launch ``projectPath`` refers to the loaded SWIG board.
+
+    The fresh-open clear of ``_swig_writes_landed`` is only meaningful when
+    the board KiCad just opened is the SAME file the landed SWIG write went
+    to — launching a different project must not drop the flag.  A
+    ``.kicad_pro`` path matches through its ``.kicad_pcb`` sibling.
+    """
+    try:
+        board_path = iface.board.GetFileName() if getattr(iface, "board", None) else None
+    except Exception:
+        board_path = None
+    if not board_path:
+        return False
+    try:
+        target = path_obj if path_obj.suffix == ".kicad_pcb" else path_obj.with_suffix(".kicad_pcb")
+        return Path(board_path).resolve() == Path(target).resolve()
+    except Exception:
+        return False
+
+
 def handle_check_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Check if KiCAD UI is running.
 
@@ -128,6 +149,36 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         if path_obj is not None and result.get("alreadyRunning") and not result.get("launched"):
             forwarded = _forward_file_open_to_running_kicad(iface, path_obj)
             result.update(forwarded)
+
+        # B3 parity for the EXPLICIT launch path: a cold launch (board on
+        # argv) or a file-open forward (spawn / verified ipc_action) opens
+        # the board fresh from disk — exactly the state where a recorded
+        # landed SWIG write needn't gate IPC any more.  The auto-open
+        # self-heal already runs _clear_swig_landed_if_disk_matches; without
+        # this, manage_kicad_ui(action=launch) left the flag set, so the
+        # next IPC reads carried a false staleVsDisk and the first mutation
+        # ran a needless auto-reconcile.  "already_open" is deliberately
+        # NOT a fresh open (KiCad may hold memory that predates the landed
+        # write), and a launch of a DIFFERENT board never clears the flag.
+        fresh_open = bool(result.get("launched")) or result.get("fileOpenMethod") in (
+            "spawn",
+            "ipc_action",
+        )
+        if (
+            fresh_open
+            and path_obj is not None
+            and getattr(iface, "_swig_writes_landed", False)
+            and _targets_current_board(iface, path_obj)
+        ):
+            if iface._ipc_has_open_board_document():
+                # Attach + document already verified — clear synchronously
+                # (the helper re-checks the disk signature).
+                iface._clear_swig_landed_if_disk_matches()
+            else:
+                # KiCad still booting / editor still loading: defer the
+                # clear to the first point a board document is confirmed
+                # open over IPC (signature captured now for safety).
+                iface._arm_pending_fresh_open_clear()
 
         # F7: an explicit launch that did nothing must surface as
         # success:false — not the old success:true masking a silent no-op.
@@ -271,7 +322,7 @@ def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> 
                 f"KiCad is running and '{path.name}' is locked by another "
                 "instance (lock file present); not opening a second, "
                 "read-locked editor.  Bring that KiCad window forward, or "
-                "close it and call launch_kicad_ui again."
+                "close it and call manage_kicad_ui(action=launch) again."
             )
             return out
         argv = KiCADProcessManager.get_pcb_editor_command(path)
@@ -287,7 +338,8 @@ def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> 
             "KiCad is running but the MCP couldn't open the file: "
             "neither IPC's run_action nor a pcbnew/kicad executable is "
             "reachable.  Open the file manually in KiCad (File → Open, or "
-            "drag-drop the path) or close KiCad and call launch_kicad_ui again."
+            "drag-drop the path) or close KiCad and call "
+            "manage_kicad_ui(action=launch) again."
         )
         return out
 
@@ -314,7 +366,7 @@ def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> 
         out["warning"] = (
             "KiCad is running but the MCP couldn't forward the file-open: "
             f"{exc}.  Open the file manually in KiCad or close KiCad and "
-            "call launch_kicad_ui again."
+            "call manage_kicad_ui(action=launch) again."
         )
     return out
 
@@ -362,11 +414,11 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         response["kicad_running"] = False
         response["message"] = (
             "On SWIG backend — KiCad isn't running. "
-            f"Start KiCad (or call launch_kicad_ui) to enable IPC and unlock "
-            f"{unavailable_count} IPC-only tools."
+            f"Start KiCad (or call manage_kicad_ui(action=launch)) to enable "
+            f"IPC and unlock {unavailable_count} IPC-only tools."
         )
         response["recommendation"] = (
-            "Call ``launch_kicad_ui`` to start KiCad with IPC attached.  "
+            "Call ``manage_kicad_ui(action=launch)`` to start KiCad with IPC attached.  "
             "Alternatively start KiCad manually (any platform) — the next "
             "``get_backend_info`` call will retry the attach automatically.  "
             "Without IPC you lose: realtime UI sync (changes won't appear "

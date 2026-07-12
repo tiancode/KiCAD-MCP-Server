@@ -201,9 +201,41 @@ def handle_query_traces(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
             low_y, high_y = sorted((y1, y2))
             return low_x <= point.get("x", 0) <= high_x and low_y <= point.get("y", 0) <= high_y
 
+        tracks = list(iface.ipc_board_api.get_tracks())
+        vias_raw = list(iface.ipc_board_api.get_vias()) if include_vias else []
+
+        # Resolve the net filter against the board's real nets so a bare "GND"
+        # matches tracks/vias on a hierarchical "/GND" (Bug 2 — parity with
+        # copper_pour).  Read-only: never refuses, only annotates.  When the
+        # board nets can't be enumerated, resolve against the copper's own nets.
+        target_net = net_name
+        net_annotations: Dict[str, Any] = {}
+        if net_name:
+            from commands.routing._zones import resolve_query_net_filter
+
+            from ._zones import _ipc_available_net_names
+
+            available = _ipc_available_net_names(iface)
+            if available is None:
+                names = [t.get("net", "") for t in tracks]
+                names += [v.get("net", "") for v in vias_raw]
+                available = [n for n in names if n]
+            if available:
+                target_net, net_annotations = resolve_query_net_filter(net_name, available)
+
+        # Output unit: the TS schema documents `unit` for trace coordinates
+        # but it was silently ignored (always mm).
+        out_unit = str(params.get("unit", "mm")).lower()
+        if out_unit not in _TO_MM_SCALE:
+            out_unit = "mm"
+        from_mm = 1.0 / _TO_MM_SCALE[out_unit]  # mm -> requested unit
+
+        def convert(value: Any) -> Any:
+            return value if from_mm == 1.0 else value * from_mm
+
         traces = []
-        for track in iface.ipc_board_api.get_tracks():
-            if net_name and track.get("net") != net_name:
+        for track in tracks:
+            if target_net and track.get("net") != target_net:
                 continue
 
             layer = iface._normalize_ipc_layer_name(track.get("layer", ""))
@@ -215,8 +247,6 @@ def handle_query_traces(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
             if bbox and not (point_in_bbox(start) or point_in_bbox(end)):
                 continue
 
-            start_with_unit = {**start, "unit": "mm"}
-            end_with_unit = {**end, "unit": "mm"}
             dx = end.get("x", 0) - start.get("x", 0)
             dy = end.get("y", 0) - start.get("y", 0)
             traces.append(
@@ -225,19 +255,32 @@ def handle_query_traces(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                     "net": track.get("net", ""),
                     "netCode": track.get("netCode", 0),
                     "layer": layer,
-                    "width": track.get("width", 0),
-                    "start": start_with_unit,
-                    "end": end_with_unit,
-                    "length": (dx**2 + dy**2) ** 0.5,
+                    "width": convert(track.get("width", 0)),
+                    "start": {
+                        "x": convert(start.get("x", 0)),
+                        "y": convert(start.get("y", 0)),
+                        "unit": out_unit,
+                    },
+                    "end": {
+                        "x": convert(end.get("x", 0)),
+                        "y": convert(end.get("y", 0)),
+                        "unit": out_unit,
+                    },
+                    "length": convert((dx**2 + dy**2) ** 0.5),
                 }
             )
 
-        result: Dict[str, Any] = {"success": True, "traceCount": len(traces), "traces": traces}
+        result: Dict[str, Any] = {
+            "success": True,
+            "traceCount": len(traces),
+            "traces": traces,
+            **net_annotations,
+        }
 
         if include_vias:
             vias = []
-            for via in iface.ipc_board_api.get_vias():
-                if net_name and via.get("net") != net_name:
+            for via in vias_raw:
+                if target_net and via.get("net") != target_net:
                     continue
                 position = via.get("position", {})
                 if bbox and not point_in_bbox(position):
@@ -245,11 +288,15 @@ def handle_query_traces(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                 vias.append(
                     {
                         "uuid": via.get("id", ""),
-                        "position": {**position, "unit": "mm"},
+                        "position": {
+                            "x": convert(position.get("x", 0)),
+                            "y": convert(position.get("y", 0)),
+                            "unit": out_unit,
+                        },
                         "net": via.get("net", ""),
                         "netCode": via.get("netCode", 0),
-                        "diameter": via.get("diameter", 0),
-                        "drill": via.get("drill", 0),
+                        "diameter": convert(via.get("diameter", 0)),
+                        "drill": convert(via.get("drill", 0)),
                     }
                 )
             result["viaCount"] = len(vias)

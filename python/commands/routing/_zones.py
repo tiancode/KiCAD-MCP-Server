@@ -84,6 +84,73 @@ def resolve_net_name(
     return None, meaningful[:cap]
 
 
+def resolve_query_net_filter(
+    requested: Optional[str], available: List[str]
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Resolve a net-name *filter* for a read-only copper query.
+
+    ``query_copper`` (query_traces / query_zones) used to compare the requested
+    net verbatim, so a bare ``GND`` filter returned nothing on a board whose
+    real net is the sheet-prefixed ``/GND`` — while copper_pour/routing resolve
+    the same name via :func:`resolve_net_name` (Bug 2).  This routes a query's
+    net filter through the same resolver, but — being read-only — it never
+    refuses:
+
+      * unique match → return the resolved board net; annotate ``resolvedNet``
+        + ``requestedNet`` when it differs from what was asked.
+      * no / ambiguous match → return the literal requested name (so the query
+        yields an empty result, as before) and annotate ``netCandidates`` with
+        the closest names instead of silently returning nothing.
+
+    Returns ``(target_net, annotations)``.  ``annotations`` is empty on an
+    exact hit; merge it into the query response.  Pure over the net-name list.
+    """
+    annotations: Dict[str, Any] = {}
+    if not requested:
+        return requested, annotations
+    resolved, candidates = resolve_net_name(requested, available)
+    if resolved is None:
+        if candidates:
+            annotations["netCandidates"] = candidates
+        return requested, annotations
+    if resolved != requested:
+        annotations["resolvedNet"] = resolved
+        annotations["requestedNet"] = requested
+    return resolved, annotations
+
+
+def _zone_filled_area_mm2(zone: Any) -> Optional[float]:
+    """Filled copper area of a zone in mm², or ``None`` when unobtainable.
+
+    ``ZONE.GetFilledArea()`` returns the *cached* area (``m_area``), which is 0
+    for a zone freshly loaded from disk — the cache is only populated by a fill
+    operation or by ``CalculateFilledArea()``.  Reading the getter alone
+    therefore reported ``filledArea: 0`` for zones that carry ``filled_polygon``
+    geometry on disk (Bug 3).  Recompute via ``CalculateFilledArea()`` first so
+    the value is real; fall back to the cached getter; return ``None`` only when
+    the zone exposes neither numeric method (so the caller emits ``null`` rather
+    than a misleading 0).  An *unfilled* zone legitimately reports ``0.0``.
+    """
+    scale = 1000000  # internal units (nm) per mm
+    area_iu2: Optional[float] = None
+    for meth in ("CalculateFilledArea", "GetFilledArea"):
+        fn = getattr(zone, meth, None)
+        if fn is None:
+            continue
+        try:
+            val = fn()
+        except Exception:
+            continue
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            continue  # e.g. a bare MagicMock in unit tests — not a real area
+        area_iu2 = float(val)
+        if val:  # a non-zero CalculateFilledArea wins; a 0 falls through
+            break
+    if area_iu2 is None:
+        return None
+    return area_iu2 / (scale * scale)
+
+
 class ZoneMixin:
     def _board_net_names(self) -> List[str]:
         """All net names on the SWIG board (reliable across pcbnew versions)."""
@@ -117,6 +184,16 @@ class ZoneMixin:
             layer = params.get("layer")
             bbox = params.get("boundingBox")
 
+            # Resolve the net filter against the board's real nets so a bare
+            # "GND" query matches a hierarchical "/GND" zone (Bug 2 — parity
+            # with copper_pour).  Read-only: never refuses, only annotates.
+            target_net = net_name
+            net_annotations: Dict[str, Any] = {}
+            if net_name:
+                target_net, net_annotations = resolve_query_net_filter(
+                    net_name, self._board_net_names()
+                )
+
             scale = 1000000  # nm -> mm
             target_layer_id = None
             if layer:
@@ -137,7 +214,7 @@ class ZoneMixin:
             for zone in list(self.board.Zones()):
                 try:
                     z_net = zone.GetNetname()
-                    if net_name and z_net != net_name:
+                    if target_net and z_net != target_net:
                         continue
 
                     # A zone can span multiple copper layers; collect them.
@@ -188,11 +265,11 @@ class ZoneMixin:
                             "unit": "mm",
                         },
                     }
-                    # Area is only available when zone is filled.
-                    try:
-                        entry["filledArea"] = zone.GetFilledArea() / (scale * scale)
-                    except Exception:
-                        pass
+                    # Filled area in mm².  CalculateFilledArea() is called
+                    # first so a zone loaded from disk (empty area cache)
+                    # reports its real area instead of 0 (Bug 3); None when the
+                    # backend can't compute it (emitted as null, never a fake 0).
+                    entry["filledArea"] = _zone_filled_area_mm2(zone)
 
                     zones_out.append(entry)
                 except Exception as zone_err:
@@ -203,6 +280,7 @@ class ZoneMixin:
                 "success": True,
                 "zoneCount": len(zones_out),
                 "zones": zones_out,
+                **net_annotations,
             }
 
         except Exception as e:
@@ -470,14 +548,17 @@ class ZoneMixin:
     def edit_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Edit properties of an existing copper pour (zone).
 
-        Select the zone by ``uuid`` (preferred, from query_zones) or by
-        ``net``/``layer`` filters that must match exactly one zone.  Any of
+        Select the zone by ``zoneUuid`` (preferred, from query_zones; ``uuid``
+        accepted as an alias) or by ``net``/``layer`` filters that must match
+        exactly one zone.  Any of
         the optional property params then overwrite that zone's settings.
         The fill is marked stale — call refill_zones afterwards.
         """
         try:
             matches, err = self._find_zones(
-                params.get("uuid"), params.get("net"), params.get("layer")
+                params.get("zoneUuid") or params.get("uuid"),
+                params.get("net"),
+                params.get("layer"),
             )
             if err:
                 return err
@@ -485,7 +566,7 @@ class ZoneMixin:
                 return {
                     "success": False,
                     "message": (
-                        f"{len(matches)} zones matched — refine with uuid "
+                        f"{len(matches)} zones matched — refine with zoneUuid "
                         "(from query_zones) or a net+layer pair"
                     ),
                     "zones": [self._zone_brief(z) for z in matches],
@@ -635,13 +716,16 @@ class ZoneMixin:
     def delete_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Delete copper pour(s).
 
-        Select by ``uuid`` (single zone) or ``net``/``layer`` filters.  When
+        Select by ``zoneUuid`` (single zone; ``uuid`` accepted as an alias) or
+        ``net``/``layer`` filters.  When
         the filters match several zones, pass ``all=true`` to delete every
         match — otherwise the call is refused with the candidate list.
         """
         try:
             matches, err = self._find_zones(
-                params.get("uuid"), params.get("net"), params.get("layer")
+                params.get("zoneUuid") or params.get("uuid"),
+                params.get("net"),
+                params.get("layer"),
             )
             if err:
                 return err
@@ -650,7 +734,7 @@ class ZoneMixin:
                     "success": False,
                     "message": (
                         f"{len(matches)} zones matched — pass all=true to delete "
-                        "every match, or refine with uuid (from query_zones)"
+                        "every match, or refine with zoneUuid (from query_zones)"
                     ),
                     "zones": [self._zone_brief(z) for z in matches],
                 }
