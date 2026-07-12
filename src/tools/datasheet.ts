@@ -15,7 +15,8 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
     "enrich_datasheets",
     "Fill in missing Datasheet URLs from LCSC part numbers: every symbol with an LCSC property and an empty/'~' " +
       "Datasheet field gets https://www.lcsc.com/datasheet/<LCSC>.pdf (constructed directly, no network/API key). " +
-      "dry_run=true previews without writing.",
+      "dry_run=true previews without writing. For a single part's datasheet URL, use get_jlcpcb_part (its " +
+      "'Datasheet' field) instead.",
     {
       schematic_path: z.string().describe("Path to the .kicad_sch file to enrich"),
       dry_run: z
@@ -58,43 +59,6 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
           {
             type: "text",
             text: `Failed to enrich datasheets: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
-    },
-  );
-
-  // ── get_datasheet_url ──────────────────────────────────────────────────────
-  server.tool(
-    "get_datasheet_url",
-    `Get the LCSC datasheet URL for a component by LCSC number.
-
-Returns the direct PDF URL and product page URL.
-No network request – URL is constructed from the LCSC number alone.
-
-Example: get_datasheet_url("C179739")
-→ https://www.lcsc.com/datasheet/C179739.pdf`,
-    {
-      lcsc: z
-        .string()
-        .describe('LCSC part number, with or without "C" prefix (e.g. "C179739" or "179739")'),
-    },
-    async (args: { lcsc: string }) => {
-      const result = await callKicadScript("get_datasheet_url", { lcsc: args.lcsc });
-      if (result.success) {
-        const lines = [
-          `LCSC: ${result.lcsc}`,
-          `Datasheet PDF:  ${result.datasheet_url}`,
-          `Product page:   ${result.product_url}`,
-        ];
-        return { content: [{ type: "text", text: lines.join("\n") }] };
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Invalid LCSC number: ${args.lcsc}`,
           },
         ],
         isError: true,

@@ -4,7 +4,9 @@
  * create_symbol              – add a new symbol to a .kicad_sym library
  * delete_symbol              – remove a symbol from a library
  * list_symbols_in_library    – list all symbols in a .kicad_sym file
- * register_symbol_library    – add library to sym-lib-table
+ *
+ * (Adding a library to the sym-lib-table is handled by the merged
+ * register_library tool in library.ts.)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -81,7 +83,7 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
   // ── create_symbol ────────────────────────────────────────────────────── //
   server.tool(
     "create_symbol",
-    "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_symbol_library afterwards so KiCAD finds it. " +
+    "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_library (type=symbol) afterwards so KiCAD finds it. " +
       "Pin positions are the wire endpoints; the body is drawn between them. " +
       "Grid & pin length 2.54 mm; body ±2.54–5.08 mm: " +
       "left pins x=body_left−length angle=0; right x=body_right+length angle=180; " +
@@ -138,34 +140,10 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
   // ── list_symbols_in_library ──────────────────────────────────────────── //
   server.tool(
     "list_symbols_in_library",
-    "List the SYMBOL names in a single .kicad_sym library FILE given its path (libraryPath). Use for an unregistered/standalone file (e.g. right after create_symbol); if the library is registered and you only have its nickname, use list_library_symbols instead.",
+    "List the SYMBOL names in a single .kicad_sym library FILE given its path (libraryPath). Use for an unregistered/standalone file (e.g. right after create_symbol); if the library is registered and you only have its nickname, use list_library_contents (type=symbol) instead.",
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file"),
     },
     passthrough("list_symbols_in_library"),
-  );
-
-  // ── register_symbol_library ──────────────────────────────────────────── //
-  server.tool(
-    "register_symbol_library",
-    "Register a .kicad_sym library in KiCAD's sym-lib-table so symbols can be used in schematics. " +
-      "Run this after create_symbol when KiCAD shows 'library not found'.",
-    {
-      libraryPath: z.string().describe("Full path to the .kicad_sym file"),
-      libraryName: z
-        .string()
-        .optional()
-        .describe("Nickname (default: file name without extension)"),
-      description: z.string().optional(),
-      scope: z
-        .enum(["project", "global"])
-        .optional()
-        .describe("project = writes sym-lib-table next to .kicad_pro; global = user config"),
-      projectPath: z
-        .string()
-        .optional()
-        .describe("Path to .kicad_pro or its directory (for scope=project)"),
-    },
-    passthrough("register_symbol_library"),
   );
 }

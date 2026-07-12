@@ -20,30 +20,32 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
     passthrough("get_backend_info"),
   );
 
-  // Check if KiCAD UI is running
+  // Check / launch the KiCAD UI
   server.tool(
-    "check_kicad_ui",
-    "Check if KiCAD UI is currently running. Board/IPC operations need the PCB editor open with the board loaded; the server first tries to heal that itself (auto-launch KiCAD / auto-open the board — opt out with KICAD_AUTO_LAUNCH=false). If a call still returns needs_pcb_editor, ask the user to open the board and wait — do not fall back to file-only edits.",
-    {},
-    passthrough("check_kicad_ui"),
-  );
-
-  // Launch KiCAD UI
-  server.tool(
-    "launch_kicad_ui",
-    "Launch KiCAD UI, optionally with a project file",
+    "manage_kicad_ui",
+    "Check or launch the KiCAD UI. action='status' reports whether KiCAD is running (board/IPC ops need the PCB editor open; the server auto-heals unless KICAD_AUTO_LAUNCH=false — on needs_pcb_editor, ask the user to open the board, don't fall back to file-only edits). action='launch' starts KiCAD, optionally with a project file.",
     {
-      projectPath: z.string().optional().describe("Optional path to .kicad_pcb file to open"),
+      action: z
+        .enum(["status", "launch"])
+        .describe("'status' checks if KiCAD UI is running; 'launch' starts it."),
+      projectPath: z
+        .string()
+        .optional()
+        .describe("Optional path to .kicad_pcb file to open (launch only)"),
       autoLaunch: z
         .boolean()
         .optional()
-        .describe("Whether to launch KiCAD if not running (default: true)"),
+        .describe("Whether to launch KiCAD if not running (default: true; launch only)"),
     },
-    async (args: { projectPath?: string; autoLaunch?: boolean }) => {
-      logger.info(
-        `Launching KiCAD UI${args.projectPath ? " with project: " + args.projectPath : ""}`,
-      );
-      const result = await callKicadScript("launch_kicad_ui", args);
+    async (args: { action: "status" | "launch"; projectPath?: string; autoLaunch?: boolean }) => {
+      const { action, ...rest } = args;
+      if (action === "launch") {
+        logger.info(
+          `Launching KiCAD UI${rest.projectPath ? " with project: " + rest.projectPath : ""}`,
+        );
+      }
+      const command = action === "launch" ? "launch_kicad_ui" : "check_kicad_ui";
+      const result = await callKicadScript(command, rest);
       return formatKicadResult(result);
     },
   );
@@ -105,7 +107,7 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
     ids: z
       .array(z.string())
       .optional()
-      .describe("Board item KIIDs (preferred). Get them from get_component_list / query_traces."),
+      .describe("Board item KIIDs (preferred). Get them from get_component_list / query_copper."),
     references: z
       .array(z.string())
       .optional()

@@ -4,6 +4,9 @@
  * create_footprint      – generate a complete .kicad_mod file in a .pretty library
  * edit_footprint_pad    – update size / position / drill / shape of one pad
  * list_footprint_libraries – list available .pretty libraries
+ *
+ * (Registering a library in the fp-lib-table is handled by the merged
+ * register_library tool in library.ts.)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -131,40 +134,10 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
     passthrough("edit_footprint_pad"),
   );
 
-  // ── register_footprint_library ───────────────────────────────────────── //
-  server.tool(
-    "register_footprint_library",
-    "Register a .pretty footprint library in KiCAD's fp-lib-table so KiCAD can find the footprints. " +
-      "Run this after create_footprint when KiCAD shows 'library not found in footprint library table'.",
-    {
-      libraryPath: z.string().describe("Full path to the .pretty directory to register"),
-      libraryName: z
-        .string()
-        .optional()
-        .describe("Nickname for the library in KiCAD (default: directory name without .pretty)"),
-      description: z.string().optional().describe("Optional description"),
-      scope: z
-        .enum(["project", "global"])
-        .optional()
-        .describe(
-          "project = writes fp-lib-table next to the .kicad_pro file (default); " +
-            "global = writes to the user's global KiCAD config",
-        ),
-      projectPath: z
-        .string()
-        .optional()
-        .describe(
-          "Path to the .kicad_pro file or its directory (required for scope=project " +
-            "when the library is not in the project folder)",
-        ),
-    },
-    passthrough("register_footprint_library"),
-  );
-
   // ── list_footprint_libraries ─────────────────────────────────────────── //
   server.tool(
     "list_footprint_libraries",
-    "Discover FOOTPRINT libraries by SCANNING THE FILESYSTEM for .pretty directories, with a preview of the first 20 footprints in each. Use when libraries may not be registered in the fp-lib-table; for registered library names only use list_libraries, and for the full contents of ONE library use list_library_footprints.",
+    "Discover FOOTPRINT libraries by SCANNING THE FILESYSTEM for .pretty directories, with a preview of the first 20 footprints in each. Use when libraries may not be registered in the fp-lib-table; for registered library names only use list_libraries (type=footprint), and for the full contents of ONE library use list_library_contents (type=footprint).",
     {
       searchPaths: z
         .array(z.string())

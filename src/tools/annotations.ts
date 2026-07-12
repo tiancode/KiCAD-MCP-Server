@@ -66,14 +66,16 @@ const IDEMPOTENT_EXACT = new Set<string>([
   // Project lifecycle
   "open_project",
   "save_project",
-  // Absolute-value setters
+  // Absolute-value setters (design_rules / board_origin / title_block are
+  // merged read-write tools: the read path is trivially idempotent and the
+  // write path assigns absolute values)
   "set_board_size",
   "set_active_layer",
-  "set_origin",
-  "set_title_block_info",
-  "set_design_rules",
-  "set_schematic_component_property",
+  "design_rules",
+  "board_origin",
+  "title_block",
   "auto_place_components",
+  "set_no_connect",
   // Edits that assign fixed values
   "edit_component",
   "edit_footprint_pad",
@@ -82,9 +84,7 @@ const IDEMPOTENT_EXACT = new Set<string>([
   // Absolute-position moves
   "move_component",
   "move_schematic_component",
-  "move_schematic_net_label",
   // Converging operations
-  "refill_zones",
   "sync_schematic_to_board",
   "annotate_schematic",
   "snap_to_grid",
@@ -105,10 +105,8 @@ const OPEN_WORLD_EXACT = new Set<string>([
   "search_jlcpcb_parts",
   "get_jlcpcb_part",
   "suggest_jlcpcb_alternatives",
-  "import_jlcpcb_symbol",
   "import_jlcpcb_symbols",
   "enrich_datasheets",
-  "get_datasheet_url",
   // Freerouting in Docker mode runs `docker run eclipse-temurin:21-jre`,
   // which pulls the image from a remote registry when absent locally.
   "autoroute",

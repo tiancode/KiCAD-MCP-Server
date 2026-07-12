@@ -91,31 +91,23 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   );
 
   // ------------------------------------------------------
-  // Get Board Info Tool
+  // Get Board Info Tool (includes layer list + extents)
   // ------------------------------------------------------
   server.tool(
     "get_board_info",
-    "Retrieve general information about the current PCB board (dimensions, layer count, DRC status).",
-    {},
-    async () => {
+    "Retrieve general information about the current PCB board: dimensions, full layer list, and the bounding-box extents (left/top/right/bottom/center) of all board objects.",
+    {
+      unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for the extents (default mm)"),
+    },
+    async ({ unit }) => {
       logger.debug("Getting board information");
       const result = await callKicadScript("get_board_info", {});
-
-      return formatKicadResult(result);
-    },
-  );
-
-  // ------------------------------------------------------
-  // Get Layer List Tool
-  // ------------------------------------------------------
-  server.tool(
-    "get_layer_list",
-    "Return the list of all layers defined in the current PCB board.",
-    {},
-    async () => {
-      logger.debug("Getting layer list");
-      const result = await callKicadScript("get_layer_list", {});
-
+      if (result && typeof result === "object" && result.success !== false) {
+        const extents = await callKicadScript("get_board_extents", { unit });
+        if (extents && typeof extents === "object" && extents.success !== false) {
+          result.extents = extents.extents;
+        }
+      }
       return formatKicadResult(result);
     },
   );
@@ -237,20 +229,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // ------------------------------------------------------
   // Get Board Extents Tool
   // ------------------------------------------------------
-  server.tool(
-    "get_board_extents",
-    "Return the bounding box (min/max X and Y) of all objects on the current PCB board.",
-    {
-      unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit of measurement for the result"),
-    },
-    async ({ unit }) => {
-      logger.debug("Getting board extents");
-      const result = await callKicadScript("get_board_extents", { unit });
-
-      return formatKicadResult(result);
-    },
-  );
-
   // ------------------------------------------------------
   // Get Board 2D View Tool
   // ------------------------------------------------------
@@ -410,7 +388,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // server-side and returns a single response — saves 3-4 MCP round-trips.
   server.tool(
     "get_pcb_overview",
-    "One-shot snapshot of the loaded PCB: components, tracks, zones, nets, layers in a single response. Use this instead of calling get_component_list + query_traces + query_zones + get_nets_list separately.",
+    "One-shot snapshot of the loaded PCB: components, tracks, zones, nets, layers in a single response. Use this instead of calling get_component_list + query_copper + get_nets_list separately.",
     {},
     passthrough("get_pcb_overview"),
   );
@@ -421,47 +399,43 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       "'grid' = user grid origin; 'drill' (or 'aux') = drill/place origin used by Gerber and pick-and-place files.",
     );
 
+  // Reading is the no-position call; writing requires an explicit
+  // `position` so MCP clients can't accidentally snap the drill origin
+  // to (0, 0) — which would silently invalidate every Gerber/PnP file
+  // the user exports next. The backend also rejects missing coords as a
+  // second line of defence for non-schema callers.
   server.tool(
-    "get_origin",
-    "Return the board's grid or drill/place origin (IPC-only). The drill origin is what Gerber and pick-and-place exports use as their coordinate zero — get it wrong and the fab house gets coordinates shifted by the page margin.",
+    "board_origin",
+    "Read or move the board's grid or drill/place origin (IPC-only). Without `position` the current origin is returned; with `position` the origin is moved there. The drill origin is the coordinate zero of Gerber / pick-and-place exports — set it to your reference point (board corner or fiducial) before exporting.",
     {
       type: originTypeSchema.optional().describe("Default 'drill'."),
-      unit: z.enum(["mm", "inch"]).optional().describe("Coordinate unit (default mm)."),
-    },
-    passthrough("get_origin"),
-  );
-
-  // `position` is required at the schema level so MCP clients can't
-  // accidentally call set_origin with no coordinate and snap the drill
-  // origin to (0, 0) — which would silently invalidate every Gerber/PnP
-  // file the user exports next. The backend also rejects missing coords
-  // as a second line of defence for non-schema callers.
-  server.tool(
-    "set_origin",
-    "Move the board's grid or drill/place origin (IPC-only). Set the drill origin before exporting Gerber / PnP files so fab coordinates align with your reference point (typically a board corner or fiducial). Coordinates are required — calling with no position will be rejected to prevent accidentally snapping to (0,0).",
-    {
-      type: originTypeSchema,
       position: z
         .object({
           x: z.number(),
           y: z.number(),
           unit: z.enum(["mm", "inch"]).optional(),
         })
-        .describe("Target coordinate in mm (default) or inch."),
+        .optional()
+        .describe("Target coordinate — presence of this field switches the call to a write."),
+      unit: z.enum(["mm", "inch"]).optional().describe("Read: coordinate unit (default mm)."),
     },
-    passthrough("set_origin"),
+    async (args) => {
+      if (args.position) {
+        const { unit: _unit, ...params } = args;
+        void _unit;
+        return formatKicadResult(
+          await callKicadScript("set_origin", { ...params, type: params.type ?? "drill" }),
+        );
+      }
+      const { position: _p, ...params } = args;
+      void _p;
+      return formatKicadResult(await callKicadScript("get_origin", params));
+    },
   );
 
   server.tool(
-    "get_title_block_info",
-    "Read the board's title block — title, date, revision, company, and the nine free-form comment slots that appear on plotted PDF / drawing-sheet output (IPC-only).",
-    {},
-    passthrough("get_title_block_info"),
-  );
-
-  server.tool(
-    "set_title_block_info",
-    "Partial-update the board's title block (IPC-only). Any omitted field is preserved at its current value; pass an explicit empty string to clear a field/slot. `comments` accepts {'1': 'text', '5': 'more'} (slots 1-9) or a positional list ['a','b'] (index 0 → slot 1).",
+    "title_block",
+    "Read or partial-update the board's title block (IPC-only): title, date, revision, company, and the nine comment slots on plotted PDF / drawing-sheet output. With no parameters the current values are returned. On update, omitted fields keep their value; pass an explicit empty string to clear. `comments` accepts {'1': 'text'} (slots 1-9) or a positional list.",
     {
       title: z.string().optional().describe("Drawing title."),
       date: z.string().optional().describe("Date string (free-form — KiCad doesn't parse it)."),
@@ -472,6 +446,10 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         .optional()
         .describe("Comments. Dict keyed '1'..'9' or positional list (max 9)."),
     },
-    passthrough("set_title_block_info"),
+    async (args) => {
+      const isWrite = Object.values(args).some((v) => v !== undefined);
+      const command = isWrite ? "set_title_block_info" : "get_title_block_info";
+      return formatKicadResult(await callKicadScript(command, isWrite ? args : {}));
+    },
   );
 }

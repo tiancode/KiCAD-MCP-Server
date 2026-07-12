@@ -4,6 +4,48 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Tool-Surface Consolidation: 163 → 125 Tools (2026-07-12)
+
+**BREAKING (MCP tool names only).** Isomorphic tool families were merged
+into single tools with a discriminator parameter, and read/write pairs
+into one read-write tool. The Python command layer is unchanged — every
+merged tool dispatches to the same underlying commands, so behavior is
+identical. The `tools/list` payload drops from ~40.5k to ~34.3k tokens.
+
+Migration map (old tool → new call):
+
+| Removed tool(s)                                                                                              | Replacement                                                            |
+| ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `add_segment` / `add_arc` / `add_circle` / `add_rectangle` / `add_polygon`                                   | `add_shape` (`kind=segment\|arc\|circle\|rectangle\|polygon`)          |
+| `list_schematic_components` / `_nets` / `_wires` / `_labels` / `_texts`                                      | `list_schematic_items` (`kind=components\|nets\|wires\|labels\|texts`) |
+| `find_overlapping_elements` / `find_wires_crossing_symbols` / `list_floating_labels` / `find_orphaned_wires` | `check_schematic_layout` (`checks=[…]`, default all)                   |
+| `move_schematic_net_label` / `delete_schematic_net_label`                                                    | `edit_schematic_net_label` (`action=edit\|move\|delete`)               |
+| `add_no_connect` / `delete_no_connect`                                                                       | `set_no_connect` (`remove=true` to delete)                             |
+| `set_schematic_component_property` / `remove_schematic_component_property`                                   | `edit_schematic_component` (`properties` / `removeProperties`)         |
+| `list_symbol_libraries`                                                                                      | `list_libraries` (`type=symbol`)                                       |
+| `search_footprints` / `search_symbols`                                                                       | `search_library_parts` (`type=footprint\|symbol`)                      |
+| `list_library_footprints` / `list_library_symbols`                                                           | `list_library_contents` (`type=…`)                                     |
+| `get_footprint_info` / `get_symbol_info`                                                                     | `get_library_part_info` (`type=…`)                                     |
+| `register_footprint_library` / `register_symbol_library`                                                     | `register_library` (`type=…`)                                          |
+| `get_design_rules` / `set_design_rules`                                                                      | `design_rules` (no params = read)                                      |
+| `get_origin` / `set_origin`                                                                                  | `board_origin` (`position` present = write)                            |
+| `get_title_block_info` / `set_title_block_info`                                                              | `title_block` (no params = read)                                       |
+| `get_layer_list` / `get_board_extents`                                                                       | `get_board_info` (now returns layers + extents)                        |
+| `get_pad_position`                                                                                           | `get_component_pads` (`pad=…`)                                         |
+| `get_schematic_view_region`                                                                                  | `get_schematic_view` (`region={x1,y1,x2,y2}`)                          |
+| `add_schematic_sheet`                                                                                        | `create_hierarchical_sheet` (`pageNumber` for explicit paging)         |
+| `route_arc_trace`                                                                                            | `route_trace` (optional `mid` point routes an arc)                     |
+| `route_pad_to_pad`                                                                                           | `route_smart` (`strategy=direct`)                                      |
+| `query_traces` / `query_zones`                                                                               | `query_copper` (`kind=traces\|zones`)                                  |
+| `add_copper_pour` / `edit_copper_pour` / `delete_copper_pour` / `refill_zones`                               | `copper_pour` (`action=add\|edit\|delete\|refill`)                     |
+| `check_kicad_ui` / `launch_kicad_ui`                                                                         | `manage_kicad_ui` (`action=status\|launch`)                            |
+| `import_jlcpcb_symbol`                                                                                       | `import_jlcpcb_symbols` (`lcscNumbers=[…]`, 1..n)                      |
+| `get_datasheet_url`                                                                                          | `get_jlcpcb_part` (datasheet field) or `enrich_datasheets`             |
+
+Also: tool annotations (read-only / idempotent / open-world hints) were
+re-classified for the merged names, and all cross-references in tool
+descriptions and prompts now point at the new names.
+
 ### Documentation Cleanup (2026-07-12)
 
 Removed docs that no longer help development and re-synced the rest with

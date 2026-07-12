@@ -219,13 +219,22 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "get_component_pads",
-    "Return all pads of a PCB component with their positions, net assignments and sizes.",
+    "Return all pads of a PCB component with their exact positions, net assignments and sizes. Use this before routing to get accurate pad coordinates; pass pad to return just that one pad.",
     {
       reference: z.string().describe("Reference designator of the component (e.g., 'U1')"),
+      pad: z
+        .string()
+        .optional()
+        .describe("Return only this pad number/name (e.g. '1', 'A1') instead of all pads"),
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for coordinates (default: mm)"),
     },
-    async ({ reference, unit }) => {
+    async ({ reference, pad, unit }) => {
       logger.debug(`Getting pads for component: ${reference}`);
+      if (pad !== undefined) {
+        return formatKicadResult(
+          await callKicadScript("get_pad_position", { reference, pad, unit: unit || "mm" }),
+        );
+      }
       const result = await callKicadScript("get_component_pads", {
         reference,
         unit: unit || "mm",
@@ -264,29 +273,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         unit: unit || "mm",
         limit,
         offset,
-      });
-
-      return formatKicadResult(result);
-    },
-  );
-
-  // ------------------------------------------------------
-  // Get Pad Position Tool
-  // ------------------------------------------------------
-  server.tool(
-    "get_pad_position",
-    "Return the exact XY position of a specific pad on a PCB component. Use this before routing to get accurate start/end coordinates.",
-    {
-      reference: z.string().describe("Component reference designator (e.g., 'U1')"),
-      pad: z.string().describe("Pad number or name (e.g., '1', 'A1')"),
-      unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for coordinates (default: mm)"),
-    },
-    async ({ reference, pad, unit }) => {
-      logger.debug(`Getting pad position for ${reference} pad ${pad}`);
-      const result = await callKicadScript("get_pad_position", {
-        reference,
-        pad,
-        unit: unit || "mm",
       });
 
       return formatKicadResult(result);

@@ -52,8 +52,16 @@ class TestMcpErrorWrapping:
             command_index = source.find(marker)
             assert command_index != -1, f"{command} wrapper not found"
 
+            # The call must be wrapped by formatKicadResult — either inline
+            # (`return formatKicadResult(await callKicadScript(...))`) or via
+            # an intermediate `result` variable followed by
+            # `return formatKicadResult(result);` before the next tool.
+            inline_start = source.rfind("return formatKicadResult(", 0, command_index)
+            inline_wrapped = inline_start != -1 and "\n" not in source[inline_start:command_index]
             next_tool_index = source.find("server.tool(", command_index + len(marker))
             wrapper_body = source[
                 command_index : next_tool_index if next_tool_index != -1 else None
             ]
-            assert "return formatKicadResult(result);" in wrapper_body
+            assert (
+                inline_wrapped or "return formatKicadResult(result);" in wrapper_body
+            ), f"{command} result is not wrapped by formatKicadResult"

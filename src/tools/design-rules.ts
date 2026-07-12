@@ -19,11 +19,11 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
   logger.info("Registering design rule tools");
 
   // ------------------------------------------------------
-  // Set Design Rules Tool
+  // Design Rules Tool (read + update)
   // ------------------------------------------------------
   server.tool(
-    "set_design_rules",
-    "Configure PCB design rules: clearance, track width, via dimensions and courtyard requirements.",
+    "design_rules",
+    "Read or update PCB design rules: call with no parameters to read the current rules; pass any parameter to update it. Rules cover clearance, track width, via/micro-via dimensions, minimums, hole diameter and courtyard requirements.",
     {
       clearance: z.number().optional().describe("Minimum clearance between copper items (mm)"),
       trackWidth: z.number().optional().describe("Default track width (mm)"),
@@ -47,25 +47,13 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
         .describe("Minimum clearance between courtyards (mm)"),
     },
     async (params) => {
-      logger.debug("Setting design rules");
-      const result = await callKicadScript("set_design_rules", params);
-
-      return formatKicadResult(result);
-    },
-  );
-
-  // ------------------------------------------------------
-  // Get Design Rules Tool
-  // ------------------------------------------------------
-  server.tool(
-    "get_design_rules",
-    "Return the current PCB design rules (clearance, track width, via sizes, courtyard settings).",
-    {},
-    async () => {
+      const hasWriteParams = Object.values(params).some((value) => value !== undefined);
+      if (hasWriteParams) {
+        logger.debug("Setting design rules");
+        return formatKicadResult(await callKicadScript("set_design_rules", params));
+      }
       logger.debug("Getting design rules");
-      const result = await callKicadScript("get_design_rules", {});
-
-      return formatKicadResult(result);
+      return formatKicadResult(await callKicadScript("get_design_rules", {}));
     },
   );
 

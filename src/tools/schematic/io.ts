@@ -222,7 +222,7 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
 
   server.tool(
     "sync_schematic_to_board",
-    "Import the schematic netlist into the PCB (= F8 / Tools → Update PCB from Schematic). Call after the schematic is complete and before placing/routing — without it the board has no footprints or net assignments and place_component/route_pad_to_pad produce an empty, unroutable board.",
+    "Import the schematic netlist into the PCB (= F8 / Tools → Update PCB from Schematic). Call after the schematic is complete and before placing/routing — without it the board has no footprints or net assignments and place_component/route_smart produce an empty, unroutable board.",
     {
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
       boardPath: z.string().describe("Absolute path to the .kicad_pcb board file"),

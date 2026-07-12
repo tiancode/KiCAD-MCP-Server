@@ -169,7 +169,7 @@ The KiCAD MCP Server is organized into several key components:
 - **Resource System** - Provides dynamic project/board state information
 - **Prompt System** - Offers context-aware design prompts
 
-**Current Tool Count:** 163 tools, all registered directly. The authoritative
+**Current Tool Count:** 125 tools, all registered directly. The authoritative
 source is the `server.tool(...)` registrations in `src/tools/`; the README's
 "Available Tools" section mirrors them.
 
