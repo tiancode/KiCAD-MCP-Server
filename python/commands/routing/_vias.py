@@ -12,6 +12,30 @@ from ._helpers import _point_to_segment_distance_nm
 logger = logging.getLogger("kicad_interface")
 
 
+def _zone_has_fill(zone: Any) -> bool:
+    """True when a zone actually carries filled copper on its layer.
+
+    The ``in_zones`` stitching strategy tests candidates against a zone's
+    *filled* polygons (``HitTestFilledArea``); an unfilled zone has none, so it
+    would silently place zero vias.  Conservative: any uncertainty (API quirk,
+    test stub) returns ``True`` so we never falsely refuse a genuinely filled
+    board.
+    """
+    try:
+        layer = zone.GetLayer()
+    except Exception:
+        layer = None
+    if layer is not None:
+        try:
+            return bool(zone.HasFilledPolysForLayer(layer))
+        except Exception:
+            pass
+    try:
+        return bool(zone.IsFilled())
+    except Exception:
+        return True
+
+
 class ViaMixin:
     def add_via(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Add a via at the specified location"""
@@ -316,6 +340,28 @@ class ViaMixin:
 
         # --- In-zone test (cached per call) ---
         gnd_zones = [z for z in self.board.Zones() if z.GetNetCode() == gnd_net_code]
+
+        # The in_zones strategy needs FILLED copper to test membership against.
+        # If the GND zones exist but none is filled, in_zones would silently
+        # place nothing — refuse with a structured needs_zone_fill so the caller
+        # knows to fill first (errorCode NEEDS_ZONE_FILL via enrich_failure)
+        # instead of getting a mystery zero-placement success.
+        if "in_zones" in strategies and gnd_zones and not any(_zone_has_fill(z) for z in gnd_zones):
+            return {
+                "success": False,
+                "needs_zone_fill": True,
+                "message": (
+                    f"The 'in_zones' strategy needs filled GND copper, but no "
+                    f"'{gnd_net_name}' zone is filled."
+                ),
+                "errorDetails": (
+                    "Fill the ground zone(s) before stitching in_zones vias — an "
+                    "unfilled zone has no copper for the vias to land on. Run "
+                    "copper_pour(action=refill, force=true), then retry."
+                ),
+                "gnd_net": gnd_net_name,
+                "unfilled_zone_count": len(gnd_zones),
+            }
 
         def in_any_gnd_zone(x_nm: int, y_nm: int) -> bool:
             pt = pcbnew.VECTOR2I(x_nm, y_nm)

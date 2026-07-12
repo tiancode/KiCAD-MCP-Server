@@ -431,6 +431,59 @@ def test_named_gnd_net_used_when_specified():
 
 
 # ---------------------------------------------------------------------------
+# needs_zone_fill refusal (in_zones on unfilled zones)
+# ---------------------------------------------------------------------------
+
+
+def _unfilled_zone(net_code=1, layer=0):
+    z = MagicMock()
+    z.GetNetCode.return_value = net_code
+    z.GetLayer.return_value = layer
+    z.HasFilledPolysForLayer.return_value = False
+    z.IsFilled.return_value = False
+    return z
+
+
+@pytest.mark.unit
+def test_in_zones_unfilled_zone_refuses_with_needs_zone_fill():
+    board = _board(width_mm=20, height_mm=20, zones=[_unfilled_zone()])
+    out = _cmd(board).add_gnd_stitching_vias(
+        {"strategies": ["in_zones"], "spacing": 5.0, "dryRun": True}
+    )
+    assert out["success"] is False
+    # Structured refusal → enrich_failure stamps errorCode NEEDS_ZONE_FILL.
+    assert out["needs_zone_fill"] is True
+    assert "GND" in out["message"]
+    board.Add.assert_not_called()
+
+
+@pytest.mark.unit
+def test_in_zones_filled_zone_not_refused():
+    """A filled GND zone must NOT trip the needs_zone_fill guard."""
+    zone = MagicMock()
+    zone.GetNetCode.return_value = 1
+    zone.GetLayer.return_value = 0
+    zone.HasFilledPolysForLayer.return_value = True
+    board = _board(width_mm=20, height_mm=20, zones=[zone])
+    out = _cmd(board).add_gnd_stitching_vias(
+        {"strategies": ["in_zones"], "spacing": 5.0, "dryRun": True}
+    )
+    assert out["success"] is True
+    assert out.get("needs_zone_fill") is None
+
+
+@pytest.mark.unit
+def test_grid_strategy_not_blocked_by_unfilled_zone():
+    """The fill guard is scoped to in_zones; grid runs even with unfilled zones."""
+    board = _board(width_mm=20, height_mm=20, zones=[_unfilled_zone()])
+    out = _cmd(board).add_gnd_stitching_vias(
+        {"strategies": ["grid"], "spacing": 5.0, "edgeMargin": 0.5, "dryRun": True}
+    )
+    assert out["success"] is True
+    assert out["summary"]["placed_count"] == 16
+
+
+# ---------------------------------------------------------------------------
 # Direct tests for the geometry helper
 # ---------------------------------------------------------------------------
 

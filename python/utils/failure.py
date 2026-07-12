@@ -94,6 +94,62 @@ def classify_failure(
     return ("INTERNAL_ERROR", None)
 
 
+def _hint_for_reconcile(result: "Dict[str, Any]") -> str:
+    """Hint naming the exact reconcile_backends call for a cross-backend conflict."""
+    direction = result.get("direction")
+    call = f'reconcile_backends(direction="{direction}")' if direction else "reconcile_backends"
+    return (
+        "Cross-backend conflict: the other backend has unflushed writes. "
+        f"Call {call} to sync the backends, then retry."
+    )
+
+
+# Structured refusal flags a handler may stamp on a ``success: False`` dict.
+# Each maps to a stable, truthful ``errorCode`` and a builder for a default
+# ``hint`` (some read sibling fields like ``direction``). These are known,
+# pre-classified recoverable states, so enrich_failure applies them BEFORE the
+# generic string-matching classifier — a needs_* refusal must never be
+# mislabeled ``INTERNAL_ERROR`` (the bug that motivated NEEDS_ZONE_FILL). The
+# first flag present on the result wins; flags are mutually exclusive in
+# practice (each gate sets exactly one).
+_NEEDS_FLAGS: "Tuple[Tuple[str, str, Any], ...]" = (
+    (
+        "needs_pcb_editor",
+        "PCB_EDITOR_REQUIRED",
+        lambda r: "Ask the user to open the board in KiCAD's PCB editor, then retry.",
+    ),
+    (
+        "needs_reconcile",
+        "NEEDS_RECONCILE",
+        _hint_for_reconcile,
+    ),
+    (
+        "needs_manual_action",
+        "MANUAL_ACTION_REQUIRED",
+        lambda r: (
+            "This can't be resolved automatically; follow the 'steps' in the "
+            "response, then retry."
+        ),
+    ),
+    (
+        "needs_unit_placement",
+        "NEEDS_UNIT_PLACEMENT",
+        lambda r: (
+            "Place the required symbol unit first (see the suggested "
+            "add_schematic_component call in the response), then retry."
+        ),
+    ),
+    (
+        "needs_zone_fill",
+        "NEEDS_ZONE_FILL",
+        lambda r: (
+            "Fill the copper zone(s) first: call "
+            "copper_pour(action=refill, force=true), then retry."
+        ),
+    ),
+)
+
+
 def enrich_failure(command: str, result: "Dict[str, Any]") -> "Dict[str, Any]":
     """Attach errorCode/hint to a handler's failure dict if it lacks them.
 
@@ -109,16 +165,19 @@ def enrich_failure(command: str, result: "Dict[str, Any]") -> "Dict[str, Any]":
     # constant isn't permanently mutated (which would then trip the
     # errorCode-present guard above on the next, unrelated failure).
     result = dict(result)
+
+    # Structured refusal flags are truthful, pre-classified recoverable states —
+    # prefer them over the generic string classifier so none is mislabeled
+    # INTERNAL_ERROR.
+    for flag, code, hint_fn in _NEEDS_FLAGS:
+        if result.get(flag):
+            result["errorCode"] = code
+            if not result.get("hint"):
+                result["hint"] = hint_fn(result)
+            return result
+
     message = str(result.get("message") or "")
     details = str(result.get("errorDetails") or result.get("errorDetail") or "")
-    # The PCB-editor gate is a known, pre-classified recoverable state.
-    if result.get("needs_pcb_editor"):
-        result["errorCode"] = "PCB_EDITOR_REQUIRED"
-        result.setdefault(
-            "hint", "Ask the user to open the board in KiCAD's PCB editor, then retry."
-        )
-        return result
-
     code, hint = classify_failure(message, details)
     result["errorCode"] = code
     if hint and not result.get("hint"):

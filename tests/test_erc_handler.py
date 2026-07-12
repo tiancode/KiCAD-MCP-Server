@@ -389,3 +389,214 @@ class TestPowerNotDrivenFalsePositiveDemotion:
 
         assert result["summary"]["likely_false_positives"] == 0
         assert result["summary"]["by_severity"]["error"] == 1
+
+
+# ===========================================================================
+# Locale normalization: kicad-cli must produce English violation text.
+#
+# kicad-cli reads its UI language from the KiCad config (kicad_common.json,
+# system.language), NOT from LC_ALL. A user with a Chinese UI otherwise gets
+# localized ERC descriptions the server's English-substring heuristics miss.
+# run_erc now points the subprocess at a derived config forcing English.
+# ===========================================================================
+
+
+def _fake_real_config(tmp_path, language="简体中文", extra_system=None, marker=True):
+    """Create a fake 'real' KiCad config home with a given UI language.
+
+    Returns (config_home, version). Includes an extra system key and a marker
+    sidecar file so tests can prove the derivation copies OTHER contents too.
+    """
+    version = "10.0"
+    ver_dir = tmp_path / "realcfg" / version
+    ver_dir.mkdir(parents=True)
+    system = {"language": language, "text_editor": "/usr/bin/vi"}
+    if extra_system:
+        system.update(extra_system)
+    (ver_dir / "kicad_common.json").write_text(
+        json.dumps({"system": system, "environment": {"vars": {"MYVAR": "keepme"}}})
+    )
+    if marker:
+        (ver_dir / "sym-lib-table").write_text("(sym_lib_table)")
+    return str(tmp_path / "realcfg"), version
+
+
+@pytest.mark.unit
+class TestERCLocaleNormalization:
+    def test_run_erc_points_subprocess_at_english_config(self, iface, tmp_path, monkeypatch):
+        import utils.kicad_cli as kc
+
+        real_home, version = _fake_real_config(tmp_path)
+        kc._en_config_cache.clear()
+        monkeypatch.setattr(kc, "_discover_real_config", lambda: (real_home, version))
+
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            out = cmd[cmd.index("--output") + 1]
+            with open(out, "w") as f:
+                json.dump({"violations": []}, f)
+            r = MagicMock()
+            r.returncode = 0
+            r.stderr = ""
+            return r
+
+        with patch("subprocess.run", side_effect=_capture):
+            result = iface._handle_run_erc(
+                {"schematicPath": str(sch), "autoRefreshLibSymbols": False}
+            )
+
+        assert result["success"] is True
+        env = captured["env"]
+        assert env is not None
+        # LC_ALL=C kept (harmless, normalizes non-config strings).
+        assert env["LC_ALL"] == "C"
+        # KICAD_CONFIG_HOME points at a config whose language forces English.
+        common = Path(env["KICAD_CONFIG_HOME"]) / version / "kicad_common.json"
+        data = json.loads(common.read_text())
+        assert data["system"]["language"] == "English"
+        # And it is NOT the user's real config (only read, never written).
+        assert Path(env["KICAD_CONFIG_HOME"]) != Path(real_home)
+
+    def test_derived_config_preserves_existing_config_contents(self, tmp_path, monkeypatch):
+        """The task requirement: an existing config's OTHER contents survive
+        the language override (env-var defs, other files, other keys)."""
+        import utils.kicad_cli as kc
+
+        real_home, version = _fake_real_config(tmp_path)
+        kc._en_config_cache.clear()
+        monkeypatch.setattr(kc, "_discover_real_config", lambda: (real_home, version))
+
+        env = kc.c_locale_env()
+        cfg = Path(env["KICAD_CONFIG_HOME"]) / version
+        data = json.loads((cfg / "kicad_common.json").read_text())
+        assert data["system"]["language"] == "English"
+        # Other keys + sidecar files copied verbatim.
+        assert data["system"]["text_editor"] == "/usr/bin/vi"
+        assert data["environment"]["vars"]["MYVAR"] == "keepme"
+        assert (cfg / "sym-lib-table").read_text() == "(sym_lib_table)"
+
+    def test_owned_config_home_language_overridden_in_place(self, tmp_path):
+        """When a merged config home (copy of the real config) is already being
+        passed for sym-lib-table reasons, override language IN PLACE and keep
+        every other file — do not build a second config."""
+        import utils.kicad_cli as kc
+
+        owned = tmp_path / "merged"
+        ver = owned / "10.0"
+        ver.mkdir(parents=True)
+        (ver / "kicad_common.json").write_text(
+            json.dumps({"system": {"language": "简体中文", "file_history_size": 9}})
+        )
+        (ver / "sym-lib-table").write_text("(sym_lib_table (lib (name PROJ)))")
+
+        base = {"KICAD_CONFIG_HOME": str(owned), "PATH": "/usr/bin"}
+        env = kc.c_locale_env(base_env=base, owned_config_home=str(owned))
+
+        assert env["LC_ALL"] == "C"
+        assert env["KICAD_CONFIG_HOME"] == str(owned)  # reused in place
+        data = json.loads((ver / "kicad_common.json").read_text())
+        assert data["system"]["language"] == "English"
+        assert data["system"]["file_history_size"] == 9  # untouched
+        # The merged sym-lib-table survives the override.
+        assert "PROJ" in (ver / "sym-lib-table").read_text()
+
+    def test_no_real_config_still_sets_lc_all(self, monkeypatch):
+        """Fresh machine: no config found → just LC_ALL=C, no KICAD_CONFIG_HOME."""
+        import utils.kicad_cli as kc
+
+        kc._en_config_cache.clear()
+        monkeypatch.setattr(kc, "_discover_real_config", lambda: None)
+        env = kc.c_locale_env(base_env={"PATH": "/usr/bin"})
+        assert env["LC_ALL"] == "C"
+        assert "KICAD_CONFIG_HOME" not in env
+
+
+# ---------------------------------------------------------------------------
+# Real kicad-cli integration: prove English output on a localized machine.
+# ---------------------------------------------------------------------------
+
+
+_ERC_LOCALE_SCH = """(kicad_sch (version 20250114) (generator "test")
+  (uuid a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Device:R" (pin_numbers hide) (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "R" (at 2.032 0 90) (effects (font (size 1.27 1.27))))
+      (property "Value" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+  )
+  (symbol (lib_id "Device:R") (at 100 100 0) (unit 1)
+    (in_bom yes) (on_board yes)
+    (uuid 00000000-0000-0000-0000-000000000001)
+    (property "Reference" "R1" (at 102 100 90) (effects (font (size 1.27 1.27))))
+    (property "Value" "1k" (at 98 100 90) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 00000000-0000-0000-0000-000000000010))
+    (pin "2" (uuid 00000000-0000-0000-0000-000000000011))
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+"""
+
+
+@pytest.mark.integration
+def test_run_erc_real_kicad_cli_forces_english(tmp_path):
+    """On a machine whose KiCad UI language is non-English, the ERC handler must
+    still return English violation text (config-language override + LC_ALL=C).
+
+    Skips when kicad-cli is absent or the real config is already English, since
+    the fix is only observable against a localized config.
+    """
+    import re as _re
+    import shutil as _shutil
+
+    import utils.kicad_cli as kc
+
+    cli = _shutil.which("kicad-cli")
+    if not cli:
+        pytest.skip("kicad-cli not on PATH")
+    disc = kc._discover_real_config()
+    if disc is None:
+        pytest.skip("no real KiCad config found on this machine")
+    real_home, version = disc
+    real_common = Path(real_home) / version / "kicad_common.json"
+    lang = json.loads(real_common.read_text()).get("system", {}).get("language")
+    if lang in (None, "", "Default", "English"):
+        pytest.skip(f"real config language is {lang!r}; English-forcing not observable")
+
+    sch = tmp_path / "erc_locale.kicad_sch"
+    sch.write_text(_ERC_LOCALE_SCH)
+
+    iface = _make_iface()
+    iface.design_rule_commands = MagicMock()
+    iface.design_rule_commands._find_kicad_cli.return_value = cli
+
+    # autoRefreshLibSymbols=False keeps the embedded Device:R differing from the
+    # stock library, which yields a `lib_symbol_mismatch` violation whose
+    # description kicad-cli DOES localize (unlike "Pin not connected").
+    result = iface._handle_run_erc({"schematicPath": str(sch), "autoRefreshLibSymbols": False})
+    assert result["success"] is True, result
+    messages = [v.get("message", "") for v in result["violations"]]
+
+    mismatch = [m for m in messages if "match" in m.lower() and "librar" in m.lower()]
+    assert mismatch, f"expected a localizable lib_symbol_mismatch violation; got {messages}"
+    # The whole point: no CJK (localized) text leaked into any violation.
+    for m in messages:
+        assert not _re.search(r"[一-鿿]", m), f"non-English violation text leaked: {m!r}"
+
+    # The user's real config must be untouched by the run.
+    assert json.loads(real_common.read_text()).get("system", {}).get("language") == lang
