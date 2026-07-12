@@ -389,3 +389,140 @@ class TestPowerNotDrivenFalsePositiveDemotion:
 
         assert result["summary"]["likely_false_positives"] == 0
         assert result["summary"]["by_severity"]["error"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Response ergonomics: explicit truncation, maxViolations, real_errors first,
+# and a stable-English (C) locale for the kicad-cli subprocess.
+# ---------------------------------------------------------------------------
+
+
+def _erc_many_errors(n: int) -> dict:
+    """N genuine (non-false-positive) pin_not_connected error violations."""
+    return {
+        "violations": [
+            {
+                "type": "pin_not_connected",
+                "severity": "error",
+                "description": f"Pin not connected #{i}",
+                "items": [{"pos": {"x": float(i), "y": float(i)}}],
+            }
+            for i in range(n)
+        ]
+    }
+
+
+@pytest.mark.unit
+class TestERCTruncationAndErgonomics:
+    """run_erc must cap the returned list explicitly (showing N of M), honor
+    a maxViolations param end-to-end, and surface real_errors first."""
+
+    def test_default_truncation_marks_showing_30_of_total(self, iface, tmp_path):
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_erc_many_errors(35))):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        s = result["summary"]
+        assert s["total"] == 35, "total must be the FULL count, not the page slice"
+        assert s["shown"] == 30, "default cap is 30"
+        assert s["truncated"] is True
+        assert len(result["violations"]) == 30, "returned list is capped to shown"
+
+    def test_max_violations_honored_smaller(self, iface, tmp_path):
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_erc_many_errors(35))):
+            result = iface._handle_run_erc({"schematicPath": str(sch), "maxViolations": 5})
+
+        s = result["summary"]
+        assert s["total"] == 35
+        assert s["shown"] == 5
+        assert s["truncated"] is True
+        assert s["max_violations"] == 5
+        assert len(result["violations"]) == 5
+
+    def test_max_violations_zero_returns_all(self, iface, tmp_path):
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_erc_many_errors(35))):
+            result = iface._handle_run_erc({"schematicPath": str(sch), "maxViolations": 0})
+
+        s = result["summary"]
+        assert s["total"] == 35
+        assert s["shown"] == 35
+        assert s["truncated"] is False
+        assert len(result["violations"]) == 35
+
+    def test_real_errors_is_first_summary_field(self, iface, tmp_path):
+        """real_errors is the single most important field — it must lead the
+        summary payload so a client scanning top-down sees it immediately."""
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_erc_many_errors(3))):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        keys = list(result["summary"].keys())
+        assert keys[0] == "real_errors", f"real_errors must lead summary, got {keys[:3]}"
+        assert result["summary"]["real_errors"] == 3
+        # errors/warnings totals sit right at the top too.
+        assert "errors" in keys[:5]
+        assert "warnings" in keys[:5]
+
+    def test_no_truncation_when_under_cap(self, iface, tmp_path):
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        with patch("subprocess.run", side_effect=_mock_erc_run(_erc_many_errors(4))):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        s = result["summary"]
+        assert s["total"] == 4
+        assert s["shown"] == 4
+        assert s["truncated"] is False
+
+    def test_kicad_cli_runs_under_c_locale(self, iface, tmp_path):
+        """kicad-cli ERC must run with LC_ALL=C / LANG=C so its violation
+        descriptions come back in stable English regardless of the user's UI
+        locale (else downstream pattern-matching breaks)."""
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)")
+        iface.design_rule_commands = MagicMock()
+        iface.design_rule_commands._find_kicad_cli.return_value = "/usr/bin/kicad-cli"
+
+        captured: dict = {}
+
+        def _capturing_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            output_path = cmd[cmd.index("--output") + 1]
+            with open(output_path, "w") as f:
+                json.dump({"violations": []}, f)
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = ""
+            return result
+
+        with patch("subprocess.run", side_effect=_capturing_run):
+            result = iface._handle_run_erc({"schematicPath": str(sch)})
+
+        assert result["success"] is True
+        env = captured["env"]
+        assert env is not None, "ERC subprocess must receive an explicit env"
+        assert env.get("LC_ALL") == "C"
+        assert env.get("LANG") == "C"
+        # The rest of the environment must survive intact.
+        assert "PATH" in env

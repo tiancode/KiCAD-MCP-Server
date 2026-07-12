@@ -56,16 +56,37 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
         .describe(
           "Re-inject lib_symbols from disk before ERC (default true), silencing format-drift lib_symbol_mismatch warnings. false keeps them.",
         ),
+      maxViolations: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "Max violations listed in the response (default 30; 0 = all). Totals in summary are unaffected; truncation is shown as 'showing N of M'.",
+        ),
     },
-    async (args: { schematicPath: string; autoRefreshLibSymbols?: boolean }) => {
+    async (args: {
+      schematicPath: string;
+      autoRefreshLibSymbols?: boolean;
+      maxViolations?: number;
+    }) => {
       const result = await callKicadScript("run_erc", args);
       if (result.success) {
         const violations: any[] = result.violations || [];
-        const lines: string[] = [`ERC result: ${violations.length} violation(s)`];
-        if (result.summary?.by_severity) {
-          const s = result.summary.by_severity;
+        const summary = result.summary || {};
+        const total: number = summary.total ?? violations.length;
+        const lines: string[] = [];
+        // Headline FIRST: real_errors (excludes PWR_FLAG false positives) is the
+        // number that actually matters, then the raw error/warning totals.
+        lines.push(
+          `ERC: ${summary.real_errors ?? 0} real error(s) — excludes PWR_FLAG/lib_symbol false positives`,
+        );
+        const raw = summary.raw_by_severity ?? summary.by_severity ?? {};
+        lines.push(
+          `  Totals: ${raw.error ?? 0} error(s), ${raw.warning ?? 0} warning(s), ${raw.info ?? 0} info — ${total} violation(s)`,
+        );
+        if (summary.likely_false_positives) {
           lines.push(
-            `  Errors: ${s.error ?? 0}  Warnings: ${s.warning ?? 0}  Info: ${s.info ?? 0}`,
+            `  Tagged likely false positives (excluded from real_errors): ${summary.likely_false_positives}`,
           );
         }
         const refresh = result.lib_symbols_refresh;
@@ -74,7 +95,7 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
             `  Pre-ERC refresh: ${refresh.refreshed.length} lib_symbols entry(ies) re-aligned with disk (${refresh.refreshed.join(", ")})`,
           );
         }
-        const recs: any[] = result.summary?.recommendations || [];
+        const recs: any[] = summary.recommendations || [];
         if (recs.length > 0) {
           lines.push("");
           lines.push("Recommendations:");
@@ -87,7 +108,9 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
         }
         if (violations.length > 0) {
           lines.push("");
-          violations.slice(0, 30).forEach((v: any, i: number) => {
+          const shown = summary.shown ?? violations.length;
+          lines.push(`Violations (showing ${shown} of ${total}):`);
+          violations.forEach((v: any, i: number) => {
             const loc =
               v.location && v.location.x !== undefined
                 ? ` @ (${v.location.x}, ${v.location.y})`
@@ -99,8 +122,10 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
               : "";
             lines.push(`${i + 1}. [${v.severity}]${fp} ${v.message}${loc}`);
           });
-          if (violations.length > 30) {
-            lines.push(`... and ${violations.length - 30} more`);
+          if (summary.truncated || total > shown) {
+            lines.push(
+              `... and ${total - shown} more (pass maxViolations=0 to list all, or a higher number)`,
+            );
           }
         }
         return { content: [{ type: "text", text: lines.join("\n") }] };

@@ -256,6 +256,8 @@ class DesignRuleCommands:
         import subprocess
         import tempfile
 
+        from utils.kicad_cli import c_locale_env
+
         try:
             if not self.board:
                 return {
@@ -312,12 +314,18 @@ class DesignRuleCommands:
 
                 logger.info(f"Running DRC command (timeout={timeout_sec}s): {' '.join(cmd)}")
 
+                # Force the C locale so kicad-cli's violation descriptions come
+                # back in stable English rather than the user's UI locale, which
+                # would otherwise break downstream pattern-matching.
+                drc_env = c_locale_env()
+
                 # Run DRC. subprocess.run kills the child on TimeoutExpired.
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=timeout_sec,
+                    env=drc_env,
                 )
 
                 if result.returncode != 0:
@@ -403,7 +411,12 @@ class DesignRuleCommands:
                         "mm",
                         board_file,
                     ]
-                    subprocess.run(cmd_report, capture_output=True, timeout=timeout_sec)
+                    subprocess.run(
+                        cmd_report,
+                        capture_output=True,
+                        timeout=timeout_sec,
+                        env=drc_env,
+                    )
 
                 # Return summary only (not full violations list)
                 return {

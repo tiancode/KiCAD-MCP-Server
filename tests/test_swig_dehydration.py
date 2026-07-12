@@ -386,3 +386,33 @@ def test_run_drc_clamps_extreme_timeout_values():
     assert captured["timeouts"][0] == 10  # clamped to min
     assert captured["timeouts"][1] == 1800  # clamped to max
     assert captured["timeouts"][2] == 600  # fallback default
+
+
+def test_run_drc_forces_c_locale():
+    """kicad-cli DRC must run with LC_ALL=C / LANG=C so its violation
+    descriptions come back in stable English regardless of UI locale."""
+    import subprocess as _sp
+
+    from commands.design_rules import DesignRuleCommands
+
+    cmds = DesignRuleCommands(board=_make_healthy_board())
+    cmds.board.GetFileName = MagicMock(return_value="/tmp/exists.kicad_pcb")
+
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        raise _sp.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("subprocess.run", side_effect=_fake_run),
+        patch.object(cmds, "_find_kicad_cli", return_value="/usr/bin/kicad-cli"),
+    ):
+        cmds.run_drc({})
+
+    env = captured["env"]
+    assert env is not None, "DRC subprocess must receive an explicit env"
+    assert env.get("LC_ALL") == "C"
+    assert env.get("LANG") == "C"
+    assert "PATH" in env, "the rest of the environment must survive intact"

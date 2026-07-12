@@ -16,7 +16,7 @@ inside ``KiCad.app/Contents/MacOS`` and is never on PATH by default.
 import os
 import platform
 import shutil
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 def _candidate_paths() -> List[str]:
@@ -65,3 +65,22 @@ def find_kicad_cli() -> Optional[str]:
             return path
 
     return None
+
+
+def c_locale_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Return an environment dict with the C locale forced (``LC_ALL``/``LANG``).
+
+    kicad-cli emits ERC/DRC violation *descriptions* in the user's UI locale, so
+    on a non-English desktop the messages come back translated (e.g. Chinese) —
+    which breaks any downstream tooling/agent that pattern-matches on the English
+    text.  Running the subprocess under the C locale pins that text to stable
+    English without disturbing anything else about the environment.
+
+    ``base`` defaults to a copy of the current process environment; pass a
+    pre-built env (e.g. one carrying a custom ``KICAD_CONFIG_HOME``) to layer the
+    locale override on top of it.  Every other variable is preserved verbatim.
+    """
+    env = dict(os.environ if base is None else base)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    return env
