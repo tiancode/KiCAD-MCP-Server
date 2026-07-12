@@ -324,9 +324,10 @@ class DesignRuleCommands:
 
                 logger.info(f"Running DRC command (timeout={timeout_sec}s): {' '.join(cmd)}")
 
-                # Force the C locale so kicad-cli's violation descriptions come
-                # back in stable English rather than the user's UI locale, which
-                # would otherwise break downstream pattern-matching.
+                # Force English violation text: kicad-cli reads its UI language
+                # from the KiCad config (kicad_common.json), not LC_ALL — see
+                # utils.kicad_cli.c_locale_env, which builds a derived English
+                # config and keeps LC_ALL=C.
                 drc_env = c_locale_env()
 
                 # Run DRC. subprocess.run kills the child on TimeoutExpired.

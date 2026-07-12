@@ -642,16 +642,21 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     schematic_path,
                 ]
                 logger.info(f"Running ERC command: {' '.join(cmd)}")
-                # Force the C locale so kicad-cli's violation descriptions come
-                # back in stable English (they otherwise follow the user's UI
-                # locale, breaking downstream pattern-matching). Layer it on top
-                # of erc_env so the merged KICAD_CONFIG_HOME, if any, survives.
+                # Force English violation text: kicad-cli takes its language
+                # from the KiCad config, not LC_ALL. When the sym-lib-table
+                # merge already built a config home (a temp copy of the real
+                # config), override the language in place; otherwise build a
+                # derived English config. See utils.kicad_cli.c_locale_env.
+                run_env = c_locale_env(
+                    base_env=erc_env,
+                    owned_config_home=(erc_env or {}).get("KICAD_CONFIG_HOME"),
+                )
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=120,
-                    env=c_locale_env(erc_env),
+                    env=run_env,
                 )
 
             # kicad-cli returns non-zero when ERC violations are found —

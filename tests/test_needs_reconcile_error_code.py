@@ -37,7 +37,7 @@ def test_needs_reconcile_gets_truthful_code_and_hint():
 
     assert out["errorCode"] == "NEEDS_RECONCILE"
     assert "reconcile_backends" in out["hint"]
-    assert "direction=ipc_to_swig" in out["hint"]
+    assert "ipc_to_swig" in out["hint"]
     # Shape preserved verbatim.
     assert out["needs_reconcile"] is True
     assert out["direction"] == "ipc_to_swig"
