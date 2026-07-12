@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 125 tools with JSON Schema validation, each registered directly as an MCP tool
+- 126 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 34 tools, hierarchical sheets, and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -24,7 +24,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ## Available Tools
 
-The server provides 125 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
+The server provides 126 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
 
 ### Project Management (5 tools)
 
@@ -162,9 +162,10 @@ The server provides 125 tools, each registered directly as an MCP tool -- just a
 - `delete_symbol` - Remove a symbol from a .kicad_sym library file
 - `list_symbols_in_library` - List symbol names in a .kicad_sym file given its path
 
-### Datasheets (1 tools)
+### Datasheets (2 tools)
 
 - `enrich_datasheets` - Fill in missing Datasheet URLs from LCSC part numbers
+- `get_datasheet_url` - Return the canonical LCSC datasheet + product URLs for a single LCSC part number
 
 ### JLCPCB Integration (8 tools)
 
@@ -892,7 +893,7 @@ How many Basic parts are available?
 
 - **JSON-RPC 2.0 Transport:** Bi-directional communication via STDIO
 - **Protocol Version:** MCP 2025-06-18
-- **Capabilities:** Tools (125), Resources (8)
+- **Capabilities:** Tools (126), Resources (8)
 - **Error Handling:** Standard JSON-RPC error codes
 
 ### TypeScript Server (`src/`)
@@ -1032,7 +1033,7 @@ npm run format
 
 **Current Version:** 2.2.3
 
-**Working Features (125 tools):**
+**Working Features (126 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)
