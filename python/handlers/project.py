@@ -151,8 +151,23 @@ def _autolaunch_for_project(
         return base
 
     base["attempted"] = True
+    # Prefer launching the standalone PCB editor (pcbnew <board>) over the bare
+    # project manager (kicad <pro>) when the project actually has a board file.
+    # This launch exists solely to let the IPC backend attach for board ops, and
+    # a bare project manager can't serve them: it owns the IPC socket but has no
+    # editor frame, so every board request comes back "KiCad is not ready to
+    # reply" and the next IPC tool has to spawn pcbnew itself (ensure_ipc's
+    # running-but-unusable self-heal).  Opening pcbnew here surfaces the board
+    # over IPC immediately and mirrors ensure_ipc's own cold-launch (which also
+    # passes the .kicad_pcb to KiCADProcessManager.launch).  A project with no
+    # board still lands in the project manager, which is the sane place for it.
+    launch_target = project_file
+    if project_file is not None:
+        board = _expected_board_path(project_file)
+        if board is not None and board.is_file():
+            launch_target = board
     try:
-        launch_info = check_and_launch_kicad(project_file, auto_launch=True)
+        launch_info = check_and_launch_kicad(launch_target, auto_launch=True)
     except Exception as exc:  # pragma: no cover - never fail the parent op
         logger.warning("Auto-launch of KiCAD failed: %s", exc)
         base["error"] = str(exc)

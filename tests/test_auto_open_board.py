@@ -297,3 +297,188 @@ def test_ensure_ipc_cold_launch_passes_board_path(monkeypatch, tmp_path):
 
     assert ok is False
     assert launch_args["project_path"] == board
+
+
+# ---------------------------------------------------------------------------
+# ensure_ipc "running but IPC not usable" branch — the bare project-manager
+# "not ready to reply" state.  KiCad is up and owns the socket, but the
+# reachable IPC serves no board, so ensure_ipc must NOT sit on the cold-launch
+# poll loop; it goes straight to the bounded board auto-open self-heal.
+# ---------------------------------------------------------------------------
+def _no_cold_launch(monkeypatch):
+    """Fail the test if ensure_ipc ever reaches the cold-launch poll loop —
+    that path is only valid when KiCAD is NOT already running."""
+    from utils.kicad_process import KiCADProcessManager
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not cold-launch when KiCAD is already running")
+
+    monkeypatch.setattr(KiCADProcessManager, "launch", staticmethod(_boom))
+
+
+def test_ensure_ipc_bare_pm_not_ready_self_heals_via_spawn(monkeypatch):
+    """KiCad is up as a bare project manager: the reachable IPC answers 'not
+    ready to reply', so the initial attach never connects.  ensure_ipc must
+    classify this as reachable-but-no-board, run the board auto-open self-heal
+    (pcbnew spawn), and return success once the board lands — all bounded, no
+    30 s poll."""
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.setattr(KiCADProcessManager, "is_running", staticmethod(lambda: True))
+    _no_cold_launch(monkeypatch)
+
+    iface = _bare_iface()
+    state = {"connected": False, "board_open": False}
+    # Initial attach against the bare PM fails; the post-self-heal attach
+    # (against the spawned pcbnew) reflects the flipped state.
+    iface._try_enable_ipc_backend = lambda force=False: state["connected"]
+    iface._ipc_has_open_board_document = lambda: state["board_open"]
+
+    heal_calls = {"n": 0}
+
+    def _fake_auto_open(timeout_s=15.0):
+        heal_calls["n"] += 1
+        # pcbnew spawn landed the board and a live connection.
+        state["connected"] = True
+        state["board_open"] = True
+        iface.use_ipc = True
+        iface.ipc_board_api = MagicMock()
+        return True
+
+    iface._try_auto_open_board = _fake_auto_open
+
+    started = time.monotonic()
+    ok, reason = iface.ensure_ipc(timeout_s=30.0)
+
+    assert ok is True
+    assert reason == ""
+    assert heal_calls["n"] == 1
+    # Bounded: nowhere near the 30 s poll budget.
+    assert time.monotonic() - started < 1.0
+
+
+def test_ensure_ipc_bare_pm_gate_when_self_heal_cannot_open_board(monkeypatch):
+    """When the self-heal can't open the board (no board path, spawn failed,
+    board never appeared), a running-but-unusable KiCad yields the structured
+    needs_pcb_editor gate — not a generic timeout."""
+    from kicad_interface import KiCADInterface
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.setattr(KiCADProcessManager, "is_running", staticmethod(lambda: True))
+    _no_cold_launch(monkeypatch)
+
+    iface = _bare_iface()
+    iface._try_enable_ipc_backend = lambda force=False: False
+    iface._ipc_has_open_board_document = lambda: False
+    iface._try_auto_open_board = lambda timeout_s=15.0: False
+
+    started = time.monotonic()
+    ok, reason = iface.ensure_ipc(timeout_s=30.0)
+
+    assert ok is False
+    assert reason == KiCADInterface._pcb_editor_gate_reason()
+    # Bounded: no cold-launch poll loop.
+    assert time.monotonic() - started < 1.0
+    # require_ipc_board_op keys on the reason to emit needs_pcb_editor.
+    out = iface.require_ipc_board_op()
+    assert out["needs_pcb_editor"] is True
+
+
+def test_ensure_ipc_bare_pm_respects_auto_open_cooldown(monkeypatch):
+    """With the auto-open cooldown armed (a prior failed spawn), a gated call
+    must fail fast with the gate — never re-forward a file-open / re-spawn, and
+    never poll the launch loop."""
+    import handlers.ui as ui_handler
+    from kicad_interface import KiCADInterface
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.setattr(KiCADProcessManager, "is_running", staticmethod(lambda: True))
+    _no_cold_launch(monkeypatch)
+    # Prove the real _try_auto_open_board bails on the cooldown before it would
+    # ever forward a file-open.
+    monkeypatch.setattr(
+        ui_handler,
+        "_forward_file_open_to_running_kicad",
+        MagicMock(side_effect=AssertionError("must not forward during cooldown")),
+    )
+
+    iface = _bare_iface()
+    iface._try_enable_ipc_backend = lambda force=False: False
+    iface._ipc_has_open_board_document = lambda: False
+    iface._current_board_path = lambda: None
+    # Arm the cooldown as if a spawn just failed.
+    iface._auto_open_cooldown_until = time.monotonic() + 60.0
+
+    started = time.monotonic()
+    ok, reason = iface.ensure_ipc(timeout_s=30.0)
+
+    assert ok is False
+    assert reason == KiCADInterface._pcb_editor_gate_reason()
+    assert time.monotonic() - started < 0.5
+
+
+def test_ensure_ipc_bare_pm_no_self_heal_when_autolaunch_disabled(monkeypatch):
+    """KICAD_AUTO_LAUNCH=false disables the self-heal spawn entirely: a
+    running-but-unusable KiCad yields the 'enable IPC / open editor' message
+    and never attempts to open a board."""
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.setenv("KICAD_AUTO_LAUNCH", "false")
+    monkeypatch.setattr(KiCADProcessManager, "is_running", staticmethod(lambda: True))
+
+    iface = _bare_iface()
+    iface._try_enable_ipc_backend = lambda force=False: False
+    iface._try_auto_open_board = MagicMock(side_effect=AssertionError("must not self-heal"))
+
+    ok, reason = iface.ensure_ipc(timeout_s=30.0)
+
+    assert ok is False
+    assert "not reachable" in reason
+    iface._try_auto_open_board.assert_not_called()
+
+
+def test_ensure_ipc_no_self_heal_when_board_already_open(monkeypatch):
+    """A live IPC connection with a board already open returns success on the
+    fast path — it must never spawn a duplicate pcbnew via the self-heal."""
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.setattr(KiCADProcessManager, "is_running", staticmethod(lambda: True))
+
+    iface = _connected_iface()
+    iface._ipc_has_open_board_document = lambda: True
+    iface._try_auto_open_board = MagicMock(side_effect=AssertionError("must not spawn"))
+
+    ok, reason = iface.ensure_ipc()
+
+    assert ok is True
+    assert reason == ""
+    iface._try_auto_open_board.assert_not_called()
+
+
+def test_ensure_ipc_bare_pm_run_action_bounded_without_spawn(monkeypatch):
+    """A frame-agnostic caller (require_pcb_editor=False, e.g. run_action)
+    against a bare not-ready PM must fail fast with a clear message and must
+    NOT spawn a board editor (it doesn't need one) or poll the launch loop."""
+    from utils.kicad_process import KiCADProcessManager
+
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.setattr(KiCADProcessManager, "is_running", staticmethod(lambda: True))
+    _no_cold_launch(monkeypatch)
+
+    iface = _bare_iface()
+    iface._try_enable_ipc_backend = lambda force=False: False
+    iface._try_auto_open_board = MagicMock(
+        side_effect=AssertionError("must not spawn for run_action")
+    )
+
+    started = time.monotonic()
+    ok, reason = iface.ensure_ipc(timeout_s=30.0, require_pcb_editor=False)
+
+    assert ok is False
+    assert "not ready to reply" in reason
+    assert time.monotonic() - started < 0.5
+    iface._try_auto_open_board.assert_not_called()

@@ -23,6 +23,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _board_lock_present(path: Path) -> bool:
+    """True when KiCad's per-file lock exists next to ``path``.
+
+    KiCad writes ``~<name>.<ext>.lck`` (e.g. ``~board.kicad_pcb.lck``) in the
+    board's directory while it holds the file open.  Its presence means some
+    KiCad instance already has the board — opening a second editor on it would
+    only get a read-locked duplicate (worse than the gate), so the spawn
+    fallback skips it.
+    """
+    try:
+        lock = path.with_name("~" + path.name + ".lck")
+        return lock.exists()
+    except Exception:
+        return False
+
+
 def handle_check_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Check if KiCAD UI is running.
 
@@ -68,9 +84,11 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
          releases; we try a small set ("open file" / "open project"
          family) and stop on the first ``RAS_OK`` whose effect we can
          verify via ``get_open_documents()``.
-      2. Spawn ``kicad <path>`` — KiCad's single-instance protocol
-         (wxSingleInstanceChecker) makes the new process hand the
-         file-open off to the running instance, then exit.
+      2. Spawn an editor for ``path`` — a ``.kicad_pcb`` opens the
+         standalone PCB editor (``pcbnew <board>``) so the board is
+         served over IPC; other paths go to ``kicad <path>``, whose
+         single-instance protocol hands the open off to the running
+         instance, then exits.
 
     The response surfaces ``fileOpenForwarded: bool`` and
     ``fileOpenMethod: "ipc_action" | "spawn" | "none"`` so the agent
@@ -153,8 +171,11 @@ def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> 
     Tries IPC ``run_action`` first (action names are KiCad-internal and
     unstable, so we walk a candidate list).  If verification via
     ``get_open_documents()`` still doesn't show the path, falls back to
-    spawning ``kicad <path>`` and relying on KiCad's single-instance
-    protocol to hand the open request to the existing process.
+    spawning an editor: a ``.kicad_pcb`` is opened with the standalone PCB
+    editor (``pcbnew <board>``) — which surfaces the board over IPC even when
+    a project manager is already running — while other paths go to the
+    project manager, whose single-instance protocol hands the open off to the
+    existing process.
 
     Never raises; the return dict is merged into the
     ``launch_kicad_ui`` response.
@@ -198,37 +219,59 @@ def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> 
                 out["fileOpenAction"] = action
                 return out
 
-    # Path 2: spawn ``kicad <path>`` so KiCad's wxSingleInstanceChecker
-    # forwards the open request to the running process.  The new
-    # process exits after handing off; no second window appears on
-    # builds that have single-instance enabled.
-    exe = KiCADProcessManager.get_executable_path()
-    if exe is None:
-        out["fileOpenAttempts"].append({"method": "spawn", "error": "kicad executable not found"})
+    # Path 2: spawn the editor that will actually open ``path`` as a document
+    # KiCad serves over IPC.  A .kicad_pcb needs the *standalone PCB editor*
+    # (pcbnew): ``kicad <board>`` only raises the project manager with no board
+    # document open over IPC (verified on KiCad 10.x), so it never lifts the
+    # PCB-editor gate — even alongside a running project manager, a standalone
+    # ``pcbnew <board>`` makes get_open_documents report the board.  A project
+    # (or other) file still goes to the project manager, whose single-instance
+    # handshake hands the open off to the running process.
+    is_board = path.suffix == ".kicad_pcb"
+    if is_board:
+        # Don't open a second editor on a board another KiCad instance already
+        # holds — that yields a read-locked duplicate, worse than the gate.
+        if _board_lock_present(path):
+            out["fileOpenAttempts"].append({"method": "spawn", "skipped": "board lockfile present"})
+            out["warning"] = (
+                f"KiCad is running and '{path.name}' is locked by another "
+                "instance (lock file present); not opening a second, "
+                "read-locked editor.  Bring that KiCad window forward, or "
+                "close it and call launch_kicad_ui again."
+            )
+            return out
+        argv = KiCADProcessManager.get_pcb_editor_command(path)
+    else:
+        exe = KiCADProcessManager.get_executable_path()
+        argv = [str(exe), str(path)] if exe is not None else None
+
+    if not argv:
+        out["fileOpenAttempts"].append(
+            {"method": "spawn", "error": "KiCad PCB editor / project manager executable not found"}
+        )
         out["warning"] = (
             "KiCad is running but the MCP couldn't open the file: "
-            "neither IPC's run_action nor the kicad CLI is reachable.  "
-            "Open the file manually in KiCad (File → Open, or drag-drop "
-            "the path) or close KiCad and call launch_kicad_ui again."
+            "neither IPC's run_action nor a pcbnew/kicad executable is "
+            "reachable.  Open the file manually in KiCad (File → Open, or "
+            "drag-drop the path) or close KiCad and call launch_kicad_ui again."
         )
         return out
 
     try:
-        # Detach the child so it doesn't tie its lifetime to the MCP
-        # server.  KiCad's single-instance handshake exits the child
-        # quickly; we don't wait on it.
-        creationflags = 0
+        # Detach the child so it doesn't tie its lifetime to the MCP server.
+        # For a board this is a genuine standalone PCB-editor process that
+        # keeps running; for the project manager the single-instance handshake
+        # exits it quickly.  Either way we don't wait on it.
         kwargs: Dict[str, Any] = {
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
         }
         if platform.system() == "Windows":
-            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            kwargs["creationflags"] = creationflags
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             kwargs["start_new_session"] = True
-        subprocess.Popen([str(exe), str(path)], **kwargs)
-        out["fileOpenAttempts"].append({"method": "spawn", "argv": [str(exe), str(path)]})
+        subprocess.Popen(argv, **kwargs)
+        out["fileOpenAttempts"].append({"method": "spawn", "argv": list(argv)})
         out["fileOpenForwarded"] = True
         out["fileOpenMethod"] = "spawn"
     except Exception as exc:
