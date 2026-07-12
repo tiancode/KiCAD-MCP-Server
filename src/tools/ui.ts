@@ -20,30 +20,27 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
     passthrough("get_backend_info"),
   );
 
-  // Check if KiCAD UI is running
+  // Check / launch the KiCAD UI
   server.tool(
-    "check_kicad_ui",
-    "Check if KiCAD UI is currently running. Board/IPC operations need the PCB editor open with the board loaded; the server first tries to heal that itself (auto-launch KiCAD / auto-open the board — opt out with KICAD_AUTO_LAUNCH=false). If a call still returns needs_pcb_editor, ask the user to open the board and wait — do not fall back to file-only edits.",
-    {},
-    passthrough("check_kicad_ui"),
-  );
-
-  // Launch KiCAD UI
-  server.tool(
-    "launch_kicad_ui",
-    "Launch KiCAD UI, optionally with a project file",
+    "manage_kicad_ui",
+    "Check ('status') or launch ('launch', optionally with a project file) the KiCAD UI. Board/IPC ops need the PCB editor open; the server auto-heals unless KICAD_AUTO_LAUNCH=false. On needs_pcb_editor, ask the user to open the board and wait — don't fall back to file-only edits.",
     {
-      projectPath: z.string().optional().describe("Optional path to .kicad_pcb file to open"),
+      action: z.enum(["status", "launch"]).describe("status | launch"),
+      projectPath: z.string().optional().describe("Path to .kicad_pcb file to open (launch only)"),
       autoLaunch: z
         .boolean()
         .optional()
-        .describe("Whether to launch KiCAD if not running (default: true)"),
+        .describe("Launch KiCAD if not running (default true; launch only)"),
     },
-    async (args: { projectPath?: string; autoLaunch?: boolean }) => {
-      logger.info(
-        `Launching KiCAD UI${args.projectPath ? " with project: " + args.projectPath : ""}`,
-      );
-      const result = await callKicadScript("launch_kicad_ui", args);
+    async (args: { action: "status" | "launch"; projectPath?: string; autoLaunch?: boolean }) => {
+      const { action, ...rest } = args;
+      if (action === "launch") {
+        logger.info(
+          `Launching KiCAD UI${rest.projectPath ? " with project: " + rest.projectPath : ""}`,
+        );
+      }
+      const command = action === "launch" ? "launch_kicad_ui" : "check_kicad_ui";
+      const result = await callKicadScript(command, rest);
       return formatKicadResult(result);
     },
   );
@@ -59,19 +56,13 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
   server.tool(
     "reconcile_backends",
     "Flush pending changes between the SWIG and IPC backends. " +
-      "Use direction='ipc_to_swig' after IPC mutations (the tool calls " +
-      "ipc_save_board and reloads the SWIG board from disk). " +
-      "Use direction='swig_to_ipc' after SWIG/file writes (e.g. " +
-      "sync_schematic_to_board) to reload KiCad's in-memory board from disk " +
-      "via board.revert(); it refuses only when IPC also has unsaved changes.",
+      "'ipc_to_swig' after IPC mutations (saves board, reloads SWIG from disk); " +
+      "'swig_to_ipc' after SWIG/file writes (reloads KiCad's in-memory board via revert; " +
+      "refuses only when IPC also has unsaved changes).",
     {
       direction: z
         .enum(["ipc_to_swig", "swig_to_ipc"])
-        .describe(
-          "Which side has pending changes that need to land on the other. " +
-            "Both directions are automatic; swig_to_ipc refuses only when IPC " +
-            "also has unsaved changes (a true two-sided conflict).",
-        ),
+        .describe("Which side has pending changes that need to land on the other"),
     },
     passthrough("reconcile_backends"),
   );
@@ -83,13 +74,9 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
   // -----------------------------------------------------------------
   server.tool(
     "run_action",
-    "Invoke any KiCad internal TOOL_ACTION by name (escape hatch via IPC). Action names are KiCad-internal and unstable across releases — use only when no dedicated tool exists. Returns {status, statusName} where statusName is RAS_OK / RAS_INVALID / RAS_FRAME_NOT_OPEN.",
+    "Invoke a KiCad internal TOOL_ACTION by name via IPC (escape hatch; names are unstable across releases — use only when no dedicated tool exists). Returns statusName RAS_OK / RAS_INVALID / RAS_FRAME_NOT_OPEN.",
     {
-      action: z
-        .string()
-        .describe(
-          "KiCad TOOL_ACTION name (e.g. 'pcbnew.EditorControl.zoomFitScreen'). Unstable API.",
-        ),
+      action: z.string().describe("TOOL_ACTION name, e.g. 'pcbnew.EditorControl.zoomFitScreen'"),
     },
     passthrough("run_action"),
   );
@@ -105,22 +92,18 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
     ids: z
       .array(z.string())
       .optional()
-      .describe("Board item KIIDs (preferred). Get them from get_component_list / query_traces."),
+      .describe("Board item KIIDs (preferred; from get_component_list / query_copper)"),
     references: z
       .array(z.string())
       .optional()
-      .describe(
-        "Footprint reference designators (e.g. ['R1','U2']). Resolved against the live board.",
-      ),
+      .describe("Footprint reference designators, e.g. ['R1','U2']"),
   };
 
   server.tool(
     "manage_selection",
-    "Manage the KiCAD board editor selection (IPC-only). 'get' returns selected items (id, type, optional reference/value/position/layer); 'clear' deselects all; 'add'/'remove' select/deselect by `ids` and/or footprint `references` (mixable, de-duplicated).",
+    "Manage the KiCAD board editor selection (IPC-only). 'get' returns selected items; 'clear' deselects all; 'add'/'remove' select/deselect by ids and/or references (mixable).",
     {
-      action: z
-        .enum(["get", "clear", "add", "remove"])
-        .describe("Selection operation: get | clear | add | remove."),
+      action: z.enum(["get", "clear", "add", "remove"]).describe("get | clear | add | remove"),
       ...itemRefSchema,
     },
     async (args: {
@@ -142,7 +125,7 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
 
   server.tool(
     "hit_test",
-    "Find board items at (x, y) (IPC-only). With no `id` / `reference`, sweeps all footprints / tracks / vias / zones / shapes and returns every item under the point. With an `id` or `reference`, tests just that item.",
+    "Find board items at (x, y) (IPC-only). Without id/reference, returns every footprint/track/via/zone/shape under the point; with one, tests just that item.",
     {
       position: z
         .object({
@@ -152,24 +135,18 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
         })
         .optional()
         .describe("Coordinate to test"),
-      x: z.number().optional().describe("Flat X (mm). Use `position` instead when possible."),
-      y: z.number().optional().describe("Flat Y (mm)."),
-      tolerance: z
-        .number()
-        .optional()
-        .describe("Hit tolerance in the same unit as the position (default 0)."),
-      id: z.string().optional().describe("Optional KIID — test only this specific item."),
-      reference: z
-        .string()
-        .optional()
-        .describe("Optional footprint reference — test only that footprint."),
+      x: z.number().optional().describe("Flat X (mm); prefer `position`"),
+      y: z.number().optional().describe("Flat Y (mm)"),
+      tolerance: z.number().optional().describe("Hit tolerance in the position's unit (default 0)"),
+      id: z.string().optional().describe("KIID — test only this item"),
+      reference: z.string().optional().describe("Footprint reference — test only that footprint"),
     },
     passthrough("hit_test"),
   );
 
   server.tool(
     "interactive_move",
-    "Start KiCad's interactive move tool on the supplied items (IPC-only). KiCad puts the items on the cursor; the user finishes positioning by hand. Blocking — further mutating API calls return AS_BUSY until the user clicks or presses Escape, so do NOT chain another tool call right after.",
+    "Start KiCad's interactive move on the given items (IPC-only); the user finishes placement by hand. Blocking — mutating calls return AS_BUSY until the user clicks or presses Escape, so do NOT chain another tool call right after.",
     itemRefSchema,
     passthrough("interactive_move"),
   );

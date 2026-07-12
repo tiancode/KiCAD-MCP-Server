@@ -54,8 +54,20 @@ const READ_ONLY_EXACT = new Set<string>([
  *     clobbers an existing board / sheet. (create_footprint / create_symbol
  *     are NOT here — they default overwrite=False and refuse if present.)
  *   - autoroute imports the SES and overwrites all existing routing.
+ *   - copper_pour / edit_schematic_net_label / set_no_connect /
+ *     edit_schematic_component are merged tools whose delete branch
+ *     (action="delete", remove=true, removeProperties) absorbed a former
+ *     delete-/remove-prefixed tool that carried the hint via its name.
  */
-const DESTRUCTIVE_EXACT = new Set<string>(["create_project", "create_schematic", "autoroute"]);
+const DESTRUCTIVE_EXACT = new Set<string>([
+  "create_project",
+  "create_schematic",
+  "autoroute",
+  "copper_pour",
+  "edit_schematic_net_label",
+  "set_no_connect",
+  "edit_schematic_component",
+]);
 
 /**
  * Mutating tools that converge to a fixed end state — calling twice with the
@@ -66,25 +78,22 @@ const IDEMPOTENT_EXACT = new Set<string>([
   // Project lifecycle
   "open_project",
   "save_project",
-  // Absolute-value setters
+  // Absolute-value setters (design_rules / board_origin / title_block are
+  // merged read-write tools: the read path is trivially idempotent and the
+  // write path assigns absolute values)
   "set_board_size",
   "set_active_layer",
-  "set_origin",
-  "set_title_block_info",
-  "set_design_rules",
-  "set_schematic_component_property",
+  "design_rules",
+  "board_origin",
+  "title_block",
   "auto_place_components",
   // Edits that assign fixed values
   "edit_component",
   "edit_footprint_pad",
-  "edit_schematic_component",
-  "edit_schematic_net_label",
   // Absolute-position moves
   "move_component",
   "move_schematic_component",
-  "move_schematic_net_label",
   // Converging operations
-  "refill_zones",
   "sync_schematic_to_board",
   "annotate_schematic",
   "snap_to_grid",
@@ -105,10 +114,8 @@ const OPEN_WORLD_EXACT = new Set<string>([
   "search_jlcpcb_parts",
   "get_jlcpcb_part",
   "suggest_jlcpcb_alternatives",
-  "import_jlcpcb_symbol",
   "import_jlcpcb_symbols",
   "enrich_datasheets",
-  "get_datasheet_url",
   // Freerouting in Docker mode runs `docker run eclipse-temurin:21-jre`,
   // which pulls the image from a remote registry when absent locally.
   "autoroute",

@@ -4,7 +4,9 @@
  * create_symbol              – add a new symbol to a .kicad_sym library
  * delete_symbol              – remove a symbol from a library
  * list_symbols_in_library    – list all symbols in a .kicad_sym file
- * register_symbol_library    – add library to sym-lib-table
+ *
+ * (Adding a library to the sym-lib-table is handled by the merged
+ * register_library tool in library.ts.)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,7 +14,7 @@ import { z } from "zod";
 import { CommandFunction, makePassthrough } from "./tool-response.js";
 
 const PinSchema = z.object({
-  name: z.string().describe("Pin name, e.g. 'VCC', 'GND', 'IN+', '~' for unnamed"),
+  name: z.string().describe("Pin name, e.g. 'VCC'; '~' for unnamed"),
   number: z.union([z.string(), z.number()]).describe("Pin number, e.g. '1', '2', 'A1'"),
   type: z
     .enum([
@@ -36,11 +38,9 @@ const PinSchema = z.object({
       y: z.number().describe("Y position in mm"),
       angle: z
         .number()
-        .describe(
-          "Direction the pin wire extends FROM the symbol body: 0=right, 90=up, 180=left, 270=down",
-        ),
+        .describe("Direction pin extends FROM body: 0=right, 90=up, 180=left, 270=down"),
     })
-    .describe("Pin endpoint position (where the wire connects)"),
+    .describe("Pin endpoint position (wire connection point)"),
   length: z.number().optional().describe("Pin length in mm (default 2.54)"),
   shape: z
     .enum([
@@ -81,20 +81,17 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
   // ── create_symbol ────────────────────────────────────────────────────── //
   server.tool(
     "create_symbol",
-    "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_symbol_library afterwards so KiCAD finds it. " +
-      "Pin positions are the wire endpoints; the body is drawn between them. " +
-      "Grid & pin length 2.54 mm; body ±2.54–5.08 mm: " +
+    "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_library (type=symbol) afterwards so KiCAD finds it. " +
+      "Pin positions are wire endpoints. Grid & pin length 2.54 mm; body ±2.54–5.08 mm: " +
       "left pins x=body_left−length angle=0; right x=body_right+length angle=180; " +
       "top y=body_top+length angle=270; bottom y=body_bottom−length angle=90.",
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file (created if missing)"),
-      name: z.string().describe("Symbol name, e.g. 'TMC2209', 'MyOpAmp'"),
+      name: z.string().describe("Symbol name, e.g. 'TMC2209'"),
       referencePrefix: z
         .string()
         .optional()
-        .describe(
-          "Schematic reference prefix: 'U' (IC), 'R' (resistor), 'J' (connector), etc. Default: 'U'",
-        ),
+        .describe("Reference prefix: 'U', 'R', 'J', etc. (default 'U')"),
       description: z.string().optional().describe("Human-readable description"),
       keywords: z.string().optional().describe("Space-separated search keywords"),
       datasheet: z.string().optional().describe("Datasheet URL or '~'"),
@@ -103,23 +100,20 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
         .optional()
         .describe("Default footprint, e.g. 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm'"),
       inBom: z.boolean().optional().describe("Include in BOM (default true)"),
-      onBoard: z.boolean().optional().describe("Include in netlist for PCB (default true)"),
-      pins: z
-        .array(PinSchema)
-        .optional()
-        .describe("List of pins (can be empty for graphical-only symbols)"),
+      onBoard: z.boolean().optional().describe("Include in PCB netlist (default true)"),
+      pins: z.array(PinSchema).optional().describe("Pins (empty for graphical-only symbols)"),
       rectangles: z
         .array(RectSchema)
         .optional()
-        .describe("Body rectangle(s). Typically one rectangle defining the IC body."),
+        .describe("Body rectangle(s), typically one for the IC body"),
       polylines: z
         .array(PolylineSchema)
         .optional()
-        .describe("Polyline graphics for custom body shapes (op-amp triangles, etc.)"),
+        .describe("Polylines for custom body shapes (op-amp triangles, etc.)"),
       overwrite: z
         .boolean()
         .optional()
-        .describe("Replace existing symbol with same name (default false)"),
+        .describe("Replace existing symbol of same name (default false)"),
     },
     passthrough("create_symbol"),
   );
@@ -138,34 +132,10 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
   // ── list_symbols_in_library ──────────────────────────────────────────── //
   server.tool(
     "list_symbols_in_library",
-    "List the SYMBOL names in a single .kicad_sym library FILE given its path (libraryPath). Use for an unregistered/standalone file (e.g. right after create_symbol); if the library is registered and you only have its nickname, use list_library_symbols instead.",
+    "List symbol names in a .kicad_sym file given its path. Works for unregistered files (e.g. right after create_symbol); for a registered library nickname use list_library_contents (type=symbol).",
     {
       libraryPath: z.string().describe("Path to the .kicad_sym file"),
     },
     passthrough("list_symbols_in_library"),
-  );
-
-  // ── register_symbol_library ──────────────────────────────────────────── //
-  server.tool(
-    "register_symbol_library",
-    "Register a .kicad_sym library in KiCAD's sym-lib-table so symbols can be used in schematics. " +
-      "Run this after create_symbol when KiCAD shows 'library not found'.",
-    {
-      libraryPath: z.string().describe("Full path to the .kicad_sym file"),
-      libraryName: z
-        .string()
-        .optional()
-        .describe("Nickname (default: file name without extension)"),
-      description: z.string().optional(),
-      scope: z
-        .enum(["project", "global"])
-        .optional()
-        .describe("project = writes sym-lib-table next to .kicad_pro; global = user config"),
-      projectPath: z
-        .string()
-        .optional()
-        .describe("Path to .kicad_pro or its directory (for scope=project)"),
-    },
-    passthrough("register_symbol_library"),
   );
 }

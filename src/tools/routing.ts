@@ -5,7 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { paginationParams } from "./pagination-params.js";
-import { CommandFunction, makePassthrough } from "./tool-response.js";
+import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
 export function registerRoutingTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
@@ -20,10 +20,10 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("add_net"),
   );
 
-  // Route trace tool
+  // Route trace tool (straight segment, or arc when mid is given)
   server.tool(
     "route_trace",
-    "Route a trace segment between two XY points on a fixed layer. WARNING: Does NOT handle layer changes — if start and end are on different copper layers, use route_pad_to_pad instead, which automatically inserts a via.",
+    "Route a copper trace between two points on one layer: straight, or an arc when mid is given. Does NOT change layers — for cross-layer routes use route_smart (inserts a via).",
     {
       start: z
         .object({
@@ -32,6 +32,14 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
           unit: z.string().optional(),
         })
         .describe("Start position"),
+      mid: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          unit: z.string().optional(),
+        })
+        .optional()
+        .describe("Arc midpoint — when given, routes an arc through it"),
       end: z
         .object({
           x: z.number(),
@@ -41,42 +49,18 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .describe("End position"),
       layer: z.string().describe("PCB layer"),
       width: z.number().describe("Trace width in mm"),
-      net: z.string().describe("Net name"),
+      net: z.string().optional().describe("Net name (required for straight segments)"),
     },
-    passthrough("route_trace"),
-  );
-
-  // Route arc trace tool
-  server.tool(
-    "route_arc_trace",
-    "Route a copper arc trace defined by start/mid/end points. Uses true PCB arc primitives when available.",
-    {
-      start: z
-        .object({
-          x: z.number(),
-          y: z.number(),
-          unit: z.string().optional(),
-        })
-        .describe("Arc start position"),
-      mid: z
-        .object({
-          x: z.number(),
-          y: z.number(),
-          unit: z.string().optional(),
-        })
-        .describe("A point on arc midpoint"),
-      end: z
-        .object({
-          x: z.number(),
-          y: z.number(),
-          unit: z.string().optional(),
-        })
-        .describe("Arc end position"),
-      layer: z.string().describe("PCB layer"),
-      width: z.number().describe("Trace width in mm"),
-      net: z.string().optional().describe("Net name"),
+    async (args) => {
+      if (!args.mid && !args.net) {
+        return formatKicadResult({
+          success: false,
+          message: "route_trace requires net for straight segments (omit only when mid is given)",
+        });
+      }
+      const command = args.mid ? "route_arc_trace" : "route_trace";
+      return formatKicadResult(await callKicadScript(command, args));
     },
-    passthrough("route_arc_trace"),
   );
 
   // Add via tool
@@ -97,75 +81,76 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("add_via"),
   );
 
-  // Add copper pour tool
+  // Copper pour tool (add / edit / delete / refill in one)
   server.tool(
-    "add_copper_pour",
-    "Add a copper pour (ground/power plane) to the PCB. By default refills zones immediately so gerber export captures the fill — pass autoRefill=false to skip and call refill_zones explicitly later.",
+    "copper_pour",
+    "Manage copper pours (zones). add: create a pour (layer+net required; auto-refills). " +
+      "edit: modify one zone selected by uuid or net/layer (fill marked stale — refill afterwards). " +
+      "delete: remove matching zone(s). " +
+      "refill: refill ALL zones via IPC; without IPC the SWIG fill is REFUSED by default " +
+      "(ZONE_FILLER can segfault/mis-fill outside KiCad — prefer letting KiCad refill on open); " +
+      "force=true opts into the subprocess-isolated SWIG fill anyway. Verify with run_drc.",
     {
-      layer: z.string().describe("PCB layer"),
-      net: z.string().describe("Net name"),
-      clearance: z.number().optional().describe("Clearance in mm"),
-      minWidth: z.number().optional().describe("Minimum fill width in mm (default 0.2)"),
+      action: z.enum(["add", "edit", "delete", "refill"]).describe("What to do"),
+      layer: z
+        .string()
+        .optional()
+        .describe("add: pour layer (required). edit/delete: zone selector"),
+      net: z.string().optional().describe("add: pour net (required). edit/delete: zone selector"),
+      uuid: z
+        .string()
+        .optional()
+        .describe("edit/delete: zone uuid from query_copper (preferred selector)"),
+      clearance: z.number().optional().describe("add/edit: clearance in mm"),
+      minWidth: z.number().optional().describe("add/edit: minimum fill width in mm (default 0.2)"),
       outline: z
         .array(z.object({ x: z.number(), y: z.number() }))
         .optional()
-        .describe(
-          "Array of {x, y} points defining the pour boundary. If omitted, the board outline is used.",
-        ),
+        .describe("add/edit: boundary points in mm (add default: board outline)"),
       autoRefill: z
         .boolean()
         .optional()
-        .describe(
-          "Run refill_zones after creating the pour (default true). Set false for batch mode — multiple add_copper_pour calls followed by a single refill_zones at the end.",
-        ),
-    },
-    passthrough("add_copper_pour"),
-  );
-
-  // Edit copper pour tool
-  server.tool(
-    "edit_copper_pour",
-    "Edit an existing copper pour (zone): pad connection style, clearance, outline, net, layer, priority, fill type, thermal relief settings. Select the zone by uuid (from query_zones) or by net/layer filters matching exactly one zone. The fill is marked stale — call refill_zones afterwards (or let KiCad refill on open).",
-    {
-      uuid: z.string().optional().describe("Zone uuid from query_zones (preferred selector)"),
-      net: z.string().optional().describe("Selector: match zones on this net"),
-      layer: z.string().optional().describe("Selector: match zones on this layer (e.g. F.Cu)"),
-      newNet: z.string().optional().describe("Reassign the zone to this net"),
-      newLayer: z.string().optional().describe("Move the zone to this layer"),
-      clearance: z.number().optional().describe("New clearance in mm"),
-      minWidth: z.number().optional().describe("New minimum fill width in mm"),
-      priority: z.number().optional().describe("New zone priority (higher fills first)"),
-      fillType: z.enum(["solid", "hatched"]).optional().describe("New fill style"),
+        .describe("add: refill after creating (default true); false for batch adds + one refill"),
+      newNet: z.string().optional().describe("edit: reassign the zone to this net"),
+      newLayer: z.string().optional().describe("edit: move the zone to this layer"),
+      priority: z.number().optional().describe("edit: zone priority (higher fills first)"),
+      fillType: z.enum(["solid", "hatched"]).optional().describe("edit: fill style"),
       padConnection: z
         .enum(["solid", "thermal", "none", "thru_hole_only"])
         .optional()
-        .describe(
-          "Pad connection style: solid (direct copper), thermal (relief spokes), none, or thru_hole_only (thermal on THT, solid on SMD)",
-        ),
-      thermalGap: z.number().optional().describe("Thermal relief gap in mm"),
-      thermalBridgeWidth: z.number().optional().describe("Thermal relief spoke width in mm"),
-      outline: z
-        .array(z.object({ x: z.number(), y: z.number() }))
-        .optional()
-        .describe("Replace the zone boundary with these {x, y} points (mm, min 3)"),
-    },
-    passthrough("edit_copper_pour"),
-  );
-
-  // Delete copper pour tool
-  server.tool(
-    "delete_copper_pour",
-    "Delete copper pour(s) from the PCB. Select by uuid (from query_zones) or by net/layer filters; when the filters match several zones, pass all=true to delete every match (otherwise the call is refused with the candidate list).",
-    {
-      uuid: z.string().optional().describe("Zone uuid from query_zones (preferred selector)"),
-      net: z.string().optional().describe("Selector: match zones on this net"),
-      layer: z.string().optional().describe("Selector: match zones on this layer (e.g. F.Cu)"),
+        .describe("edit: pad connection style (thermal = relief spokes)"),
+      thermalGap: z.number().optional().describe("edit: thermal relief gap in mm"),
+      thermalBridgeWidth: z.number().optional().describe("edit: thermal relief spoke width in mm"),
       all: z
         .boolean()
         .optional()
-        .describe("Delete every zone the selectors match (default false: refuse on multiple)"),
+        .describe("delete: remove every selector match (default false: refuse on multiple)"),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "refill: allow SWIG fill when IPC unavailable (default false: refused, requires_ipc:true)",
+        ),
     },
-    passthrough("delete_copper_pour"),
+    async (args) => {
+      const { action, ...params } = args;
+      // The python layer silently defaults a missing layer to F.Cu and a
+      // missing net to "no net" (floating pour) — enforce the pre-merge
+      // required fields for the add branch here.
+      if (action === "add" && (!params.layer || !params.net)) {
+        return formatKicadResult({
+          success: false,
+          message: "copper_pour action=add requires both layer and net",
+        });
+      }
+      const command = {
+        add: "add_copper_pour",
+        edit: "edit_copper_pour",
+        delete: "delete_copper_pour",
+        refill: "refill_zones",
+      }[action];
+      return formatKicadResult(await callKicadScript(command, params));
+    },
   );
 
   // Delete trace tool
@@ -189,13 +174,17 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("delete_trace"),
   );
 
-  // Query traces tool
+  // Query copper tool (traces or zones)
   server.tool(
-    "query_traces",
-    "Query traces on the board with optional filters by net, layer, or bounding box.",
+    "query_copper",
+    "Query copper: kind=traces returns trace segments (paginated, optionally vias); kind=zones returns zones/pours with net, layers, priority, fill state, bbox. Filter by net, layer, or boundingBox.",
     {
+      kind: z.enum(["traces", "zones"]).describe("What to query"),
       net: z.string().optional().describe("Filter by net name"),
-      layer: z.string().optional().describe("Filter by layer name"),
+      layer: z
+        .string()
+        .optional()
+        .describe("Filter by layer name (zones: matches zones that include this layer)"),
       boundingBox: z
         .object({
           x1: z.number(),
@@ -206,35 +195,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         })
         .optional()
         .describe("Filter by bounding box region"),
-      unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit for coordinates"),
-      includeVias: z.boolean().optional().describe("Also return vias (default false)"),
+      unit: z.enum(["mm", "inch", "mil"]).optional().describe("traces only: unit for coordinates"),
+      includeVias: z.boolean().optional().describe("traces only: also return vias (default false)"),
       ...paginationParams,
     },
-    passthrough("query_traces"),
-  );
-
-  // Query zones tool
-  server.tool(
-    "query_zones",
-    "Query copper zones (filled pours) on the board with optional filters by net, layer, or bounding box. Returns zone net, layers, priority, fill state, and bounding box. Useful for auditing power planes and GND pours that query_traces does not include.",
-    {
-      net: z.string().optional().describe("Filter by net name"),
-      layer: z
-        .string()
-        .optional()
-        .describe("Filter by layer name (matches zones that include this layer)"),
-      boundingBox: z
-        .object({
-          x1: z.number(),
-          y1: z.number(),
-          x2: z.number(),
-          y2: z.number(),
-          unit: z.enum(["mm", "inch"]).optional(),
-        })
-        .optional()
-        .describe("Filter to zones whose bounding box overlaps this region"),
+    async (args) => {
+      const { kind, ...params } = args;
+      const command = kind === "zones" ? "query_zones" : "query_traces";
+      return formatKicadResult(await callKicadScript(command, params));
     },
-    passthrough("query_zones"),
   );
 
   // ------------------------------------------------------
@@ -254,61 +223,47 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // ------------------------------------------------------
   server.tool(
     "add_gnd_stitching_vias",
-    "Drop GND stitching vias with collision checking against every non-GND segment/via/pad on all copper layers (PTH vias span the full stackup). Three combinable strategies: grid (regular interior grid), around_refs (densify around named ICs), in_zones (only inside a GND copper zone). dryRun previews placements without writing.",
+    "Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup). Combinable strategies: grid, around_refs (densify around named ICs), in_zones (only inside GND zones).",
     {
       gndNet: z
         .string()
         .optional()
-        .describe("Name of the ground net (default: auto-detect GND / GROUND / VSS / /GND)."),
+        .describe("Ground net name (default: auto-detect GND / GROUND / VSS / /GND)."),
       strategies: z
         .array(z.enum(["grid", "around_refs", "in_zones"]))
         .optional()
-        .describe(
-          "Which placement strategies to combine (default: ['grid']). Pass ['grid', 'around_refs', 'in_zones'] for full coverage.",
-        ),
+        .describe("Placement strategies to combine (default ['grid'])."),
       viaSize: z.number().optional().describe("Via pad diameter in mm (default 0.6)."),
       viaDrill: z
         .number()
         .optional()
-        .describe("Via drill diameter in mm (default 0.3). Must be smaller than viaSize."),
+        .describe("Drill diameter in mm (default 0.3); must be < viaSize."),
       clearance: z
         .number()
         .optional()
-        .describe(
-          "Extra clearance beyond required between each new via and existing copper, in mm (default 0.2).",
-        ),
+        .describe("Extra clearance to existing copper in mm (default 0.2)."),
       spacing: z
         .number()
         .optional()
-        .describe("Grid spacing in mm for `grid` and `around_refs` strategies (default 5.0)."),
+        .describe("Grid spacing in mm for grid/around_refs (default 5.0)."),
       densifyRefs: z
         .array(z.string())
         .optional()
-        .describe(
-          "Reference designators to densify ground around (used by `around_refs`). Targets: MCUs, switching regulators, RF parts.",
-        ),
+        .describe("around_refs: refs to densify around (e.g. MCUs, regulators, RF parts)."),
       densifyRadius: z
         .number()
         .int()
         .optional()
-        .describe(
-          "How many grid cells around each ref to try (default 2 = 5x5 candidate field per ref).",
-        ),
+        .describe("Grid cells around each ref (default 2 = 5x5 field per ref)."),
       edgeMargin: z
         .number()
         .optional()
         .describe("Keep-out from the board edge in mm (default 0.5)."),
-      maxVias: z
-        .number()
-        .int()
-        .optional()
-        .describe("Cap on total placements across all strategies (default unlimited)."),
+      maxVias: z.number().int().optional().describe("Cap on total placements (default unlimited)."),
       dryRun: z
         .boolean()
         .optional()
-        .describe(
-          "If true, return the placements that would be made but don't modify the board (default false).",
-        ),
+        .describe("Preview placements without modifying the board (default false)."),
     },
     passthrough("add_gnd_stitching_vias"),
   );
@@ -344,7 +299,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // Create netclass tool
   server.tool(
     "create_netclass",
-    "Create (or update) a net class with custom design rules and persist it to the .kicad_pro project file. In KiCad 9/10 net classes live in the project JSON, not the board, so this writes there. Optionally assign nets directly or by wildcard pattern.",
+    "Create or update a net class with custom design rules, persisted to the .kicad_pro (KiCad 9/10 store net classes in project JSON, not the board). Optionally assign nets by name or wildcard pattern.",
     {
       name: z.string().describe("Net class name"),
       traceWidth: z.number().optional().describe("Default trace width in mm"),
@@ -354,12 +309,12 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
       nets: z
         .array(z.string())
         .optional()
-        .describe("Exact net names to assign to this class (netclass_assignments)"),
+        .describe("Exact net names to assign (netclass_assignments)"),
       patterns: z
         .array(z.string())
         .optional()
         .describe(
-          "Wildcard membership patterns (netclass_patterns). '*' = any, '?' = one char. Matches the full hierarchical net name, so a leading '*' is often needed (e.g. '*VLV?_DRAIN').",
+          "Wildcard patterns ('*' any, '?' one char) vs full hierarchical net name — leading '*' often needed",
         ),
     },
     passthrough("create_netclass"),
@@ -368,7 +323,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // Assign netclass pattern tool
   server.tool(
     "assign_netclass_pattern",
-    "Append a wildcard pattern -> net-class rule to the .kicad_pro (net_settings.netclass_patterns). '*' = any, '?' = one char. Patterns match the full hierarchical net name (e.g. '/5_Valve_Drive/VLV1_DRAIN'), so a leading '*' is often needed.",
+    "Append a wildcard pattern -> net-class rule to the .kicad_pro (netclass_patterns). '*' = any, '?' = one char; matches the full hierarchical net name, so a leading '*' is often needed.",
     {
       netClass: z.string().describe("Name of the (existing) net class to assign nets to"),
       pattern: z.string().describe("Wildcard pattern, e.g. '+24V_*' or '*VLV?_DRAIN'"),
@@ -402,65 +357,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("route_differential_pair"),
   );
 
-  // Refill zones tool
-  server.tool(
-    "refill_zones",
-    "Refill all copper zones via the IPC fast-path when KiCad is running. Without IPC the SWIG path is REFUSED by default " +
-      "(pcbnew.ZONE_FILLER segfaults/mis-fills outside KiCad — let KiCad fill on open with B instead); " +
-      "force=true opts into the subprocess-isolated SWIG fill anyway (response carries a warning).",
-    {
-      force: z
-        .boolean()
-        .optional()
-        .describe(
-          "Opt into the SWIG fill when IPC isn't available (default false → refused with requires_ipc:true). Only for headless flows that need a filled .kicad_pcb on disk; verify the result with run_drc.",
-        ),
-    },
-    passthrough("refill_zones"),
-  );
-
-  // Route pad to pad tool
-  server.tool(
-    "route_pad_to_pad",
-    "Insert ONE STRAIGHT trace segment between two pads (auto-detects net; adds a via when layers differ). " +
-      "NOT an autorouter — no obstacle avoidance (use autoroute for that). " +
-      "REFUSES if the line would cross a third pad (hasObstacles: true + obstacle list); " +
-      "route around with route_trace segments, or pass force: true. " +
-      "The gate only checks other pads — still run_drc to catch trace/zone/edge crossings.",
-    {
-      fromRef: z.string().describe("Reference of the source component (e.g. 'U2')"),
-      fromPad: z
-        .union([z.string(), z.number()])
-        .describe("Pad number on the source component (e.g. '6' or 6)"),
-      toRef: z.string().describe("Reference of the target component (e.g. 'U1')"),
-      toPad: z
-        .union([z.string(), z.number()])
-        .describe("Pad number on the target component (e.g. '15' or 15)"),
-      layer: z.string().optional().describe("PCB layer (default: F.Cu)"),
-      width: z
-        .number()
-        .optional()
-        .describe(
-          "Trace width in mm (default: netclass of the source net's track width, then board default).",
-        ),
-      net: z.string().optional().describe("Net name override (default: auto-detected from pad)"),
-      force: z
-        .boolean()
-        .optional()
-        .describe(
-          "Insert the straight segment even when it crosses other pads (default false — the call refuses and returns obstaclesCrossed). Use only when you've decided to accept the resulting DRC errors.",
-        ),
-    },
-    passthrough("route_pad_to_pad"),
-  );
-
-  // Smart obstacle-avoiding router
+  // Smart router: A* obstacle avoidance, or a direct straight segment
   server.tool(
     "route_smart",
-    "Route between two pads (or two points) with grid A* OBSTACLE AVOIDANCE — routes around other pads/traces/vias and " +
-      "can change layers through a via when two copper layers are given. Slower than route_pad_to_pad but succeeds where " +
-      "a straight segment is blocked. Still run_drc afterwards; on dense boards increase gridMm if no path is found.",
+    "Route between two pads (or two points). strategy=astar (default): grid A* OBSTACLE AVOIDANCE around other " +
+      "pads/traces/vias. strategy=direct: ONE straight segment between two pads, no avoidance — refuses if it " +
+      "would cross a third pad unless force=true; that gate only checks pads, so still run_drc to catch " +
+      "trace/zone/edge crossings.",
     {
+      strategy: z.enum(["astar", "direct"]).optional().describe("Routing strategy (default astar)"),
       fromRef: z.string().optional().describe("Source component reference (e.g. 'U1')"),
       fromPad: z.union([z.string(), z.number()]).optional().describe("Source pad number"),
       toRef: z.string().optional().describe("Target component reference"),
@@ -468,18 +373,18 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
       start: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe("Alternative to fromRef/fromPad: start point in mm"),
+        .describe("astar: start point in mm (alternative to fromRef/fromPad)"),
       end: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe("Alternative to toRef/toPad: end point in mm"),
+        .describe("astar: end point in mm (alternative to toRef/toPad)"),
       layers: z
         .array(z.string())
         .min(1)
         .max(2)
         .optional()
         .describe(
-          "1 or 2 copper layers to route on (default ['F.Cu']); 2 layers enable via layer changes",
+          "1-2 copper layers (default ['F.Cu']); 2 enable via layer changes; direct uses the first",
         ),
       width: z.number().optional().describe("Trace width in mm (default: netclass width)"),
       net: z
@@ -489,30 +394,57 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
       gridMm: z
         .number()
         .optional()
-        .describe("Routing grid pitch in mm (default 0.25); coarser = faster"),
+        .describe("astar: grid pitch in mm (default 0.25); increase on dense boards if no path"),
       clearance: z
         .number()
         .optional()
-        .describe("Keep-out clearance around obstacles in mm (default 0.2)"),
+        .describe("astar: keep-out clearance around obstacles in mm (default 0.2)"),
       viaCost: z
         .number()
         .optional()
-        .describe("Extra cost per layer change, in grid steps (default 20)"),
+        .describe("astar: extra cost per layer change, in grid steps (default 20)"),
       maxNodes: z
         .number()
         .int()
         .optional()
-        .describe("Search budget before giving up (default 200000)"),
+        .describe("astar: search budget before giving up (default 200000)"),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "direct: route even across other pads (default false: refused with obstacle list)",
+        ),
     },
-    passthrough("route_smart"),
+    async (args) => {
+      const { strategy, ...params } = args;
+      if (strategy === "direct") {
+        const { fromRef, fromPad, toRef, toPad, width, net, force } = params;
+        const layer = params.layers?.[0];
+        return formatKicadResult(
+          await callKicadScript("route_pad_to_pad", {
+            fromRef,
+            fromPad,
+            toRef,
+            toPad,
+            width,
+            net,
+            force,
+            ...(layer ? { layer } : {}),
+          }),
+        );
+      }
+      const { force: _force, ...astar } = params;
+      void _force;
+      return formatKicadResult(await callKicadScript("route_smart", astar));
+    },
   );
 
   // Net length report tool
   server.tool(
     "report_net_lengths",
-    "Report total routed copper length per net (mm), segment/via counts and layers, plus max skew across the selected " +
-      "group — the read-only basis for length matching. Via barrel length is excluded (viaCount is returned so you can " +
-      "budget it). Select nets explicitly, by wildcard pattern, or omit both for all routed nets.",
+    "Report routed copper length per net (mm), segment/via counts, layers, and max skew across the selected group — " +
+      "read-only basis for length matching. Via barrel length excluded (viaCount returned). " +
+      "Omit nets and pattern for all routed nets.",
     {
       nets: z
         .array(z.string())
@@ -521,9 +453,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
       pattern: z
         .string()
         .optional()
-        .describe(
-          "Wildcard net-name pattern, e.g. 'DDR_DQ*' ('*' any, '?' one char); unioned with nets",
-        ),
+        .describe("Wildcard net-name pattern ('*' any, '?' one char); unioned with nets"),
     },
     passthrough("report_net_lengths"),
   );
@@ -531,21 +461,15 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // Copy routing pattern tool
   server.tool(
     "copy_routing_pattern",
-    "Copy routing pattern (traces and vias) from a group of source components to a matching group of target components. The offset is calculated automatically from the position difference between the first source and first target component. Useful for replicating routing between identical circuit blocks.",
+    "Copy routing (traces and vias) from a group of source components to a matching target group; offset is auto-computed from the first source/target pair. For replicating identical circuit blocks.",
     {
-      sourceRefs: z
-        .array(z.string())
-        .describe("References of the source components (e.g. ['U1', 'R1', 'C1'])"),
-      targetRefs: z
-        .array(z.string())
-        .describe(
-          "References of the target components in same order as sourceRefs (e.g. ['U2', 'R2', 'C2'])",
-        ),
+      sourceRefs: z.array(z.string()).describe("Source component references"),
+      targetRefs: z.array(z.string()).describe("Target references, same order as sourceRefs"),
       includeVias: z.boolean().optional().describe("Also copy vias (default: true)"),
       traceWidth: z
         .number()
         .optional()
-        .describe("Override trace width in mm (default: keep original width)"),
+        .describe("Override trace width in mm (default: keep original)"),
     },
     passthrough("copy_routing_pattern"),
   );

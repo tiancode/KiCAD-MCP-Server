@@ -21,7 +21,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
   // unrouted count to zero.
   server.tool(
     "autoroute",
-    "Run Freerouting autorouter on the current PCB: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES. Requires Java 11+ and freerouting.jar (see check_freerouting). attempts > 1 runs best-of-N (varied --max-passes, keeps the result that routes the most nets) and imports the winner; omit attempts for a single run.",
+    "Autoroute the current PCB with Freerouting: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES. Requires Java 11+ and freerouting.jar (see check_freerouting). attempts > 1 runs best-of-N with varied --max-passes and imports the result routing the most nets.",
     {
       boardPath: z.string().optional().describe("Path to .kicad_pcb file (default: current board)"),
       freeroutingJar: z
@@ -33,9 +33,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
       maxPasses: z
         .number()
         .optional()
-        .describe(
-          "Maximum routing passes for single-attempt mode (default: 20). Ignored when `attempts` > 1; use `passSchedule` instead.",
-        ),
+        .describe("Max passes in single-attempt mode (default 20); ignored when attempts > 1"),
       timeout: z.number().optional().describe("Per-attempt timeout in seconds (default: 300)"),
       attempts: z
         .number()
@@ -43,19 +41,19 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
         .min(1)
         .optional()
         .describe(
-          "Number of Freerouting runs to try (default: 1 — backward-compatible). When > 1, runs best-of-N: scores each attempt by routing completeness and keeps the SES with the highest score. Recommended: 3–5 for dense boards.",
+          "Runs to try (default 1). Best-of-N by routing completeness; 3–5 for dense boards",
         ),
       targetNets: z
         .array(z.string())
         .optional()
         .describe(
-          "Optional list of critical net names. An attempt that routes all of them earns a 50,000-point scoring bonus, breaking ties in favour of designs that include the must-have nets.",
+          "Critical net names; attempts routing all of them get a tie-breaking scoring bonus",
         ),
       passSchedule: z
         .array(z.number())
         .optional()
         .describe(
-          "Per-attempt `--max-passes` values to cycle through (default: [50, 60, 65, 70, 75, 80, 85, 90, 55, 95]). The list wraps if `attempts` exceeds its length.",
+          "Per-attempt --max-passes values (default [50,60,65,70,75,80,85,90,55,95]); wraps if attempts exceeds length",
         ),
     },
     passthrough("autoroute"),
@@ -64,7 +62,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
   // Check Freerouting dependencies
   server.tool(
     "check_freerouting",
-    "Check if Java and Freerouting JAR are available on the system. Run this before autoroute to verify prerequisites.  When something's missing the response carries an ``install`` section with concrete commands and the GitHub release URL — the human-readable output below prints them as a copy-pasteable block.",
+    "Check that Java (or Docker) and freerouting.jar are available; run before autoroute. When something's missing the response includes install steps with copy-pasteable commands and download URL.",
     {
       freeroutingJar: z.string().optional().describe("Path to freerouting.jar to check"),
     },

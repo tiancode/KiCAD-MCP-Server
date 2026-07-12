@@ -45,17 +45,16 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
   // Run Electrical Rules Check (ERC)
   server.tool(
     "run_erc",
-    "Run ERC on a schematic and return all violations. Gotcha: every power-input pin must be driven by a power-output " +
-      "pin or PWR_FLAG — labels alone aren't enough; summary.recommendations[] lists the 'add PWR_FLAG' fixes and " +
-      "summary.real_errors counts only non-PWR_FLAG issues. lib_symbols auto-refresh from disk first " +
-      "(opt out with autoRefreshLibSymbols=false).",
+    "Run ERC and return violations. Gotcha: every power-input pin needs a power-output pin or PWR_FLAG — " +
+      "labels alone aren't enough; summary.recommendations[] lists the PWR_FLAG fixes and " +
+      "summary.real_errors counts only non-PWR_FLAG issues. lib_symbols auto-refresh from disk first.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       autoRefreshLibSymbols: z
         .boolean()
         .optional()
         .describe(
-          "Re-inject lib_symbols from the on-disk .kicad_sym before ERC (default true) to silence lib_symbol_mismatch warnings from format drift. Pass false to keep those warnings (debugging library drift).",
+          "Re-inject lib_symbols from disk before ERC (default true), silencing format-drift lib_symbol_mismatch warnings. false keeps them.",
         ),
     },
     async (args: { schematicPath: string; autoRefreshLibSymbols?: boolean }) => {
@@ -122,7 +121,7 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
   // Generate netlist
   server.tool(
     "generate_netlist",
-    "Return a structured JSON netlist — components (reference, value, footprint) and nets (name + connected component/pin pairs). For inspecting connectivity inline; writes no file. To export a netlist file (Spice/KiCad XML/Cadstar/OrcadPCB2), use export_netlist.",
+    "Return a structured JSON netlist — components (reference, value, footprint) and nets with connected component/pin pairs. Writes no file; to export a netlist file (Spice/XML/etc.) use export_netlist.",
     {
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
     },
@@ -172,10 +171,9 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
   // SPICE simulation (ngspice batch mode)
   server.tool(
     "run_simulation",
-    "Run a SPICE analysis on the schematic via ngspice batch mode: exports the netlist with kicad-cli, runs op / tran / " +
-      "dc / ac, and returns structured data (node voltages for op; x + per-signal arrays otherwise, downsampled to " +
-      "maxPoints). Requires ngspice on PATH and simulation-ready symbols (SPICE model fields assigned). Use to verify " +
-      "circuit behaviour before layout.",
+    "Run a SPICE analysis (op/tran/dc/ac) via ngspice batch mode on the exported netlist. Returns node " +
+      "voltages (op) or x + per-signal arrays downsampled to maxPoints. Requires ngspice on PATH and " +
+      "symbols with SPICE model fields assigned.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       analysis: z.enum(["op", "tran", "dc", "ac"]).describe("Analysis type"),
@@ -222,7 +220,7 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
 
   server.tool(
     "sync_schematic_to_board",
-    "Import the schematic netlist into the PCB (= F8 / Tools → Update PCB from Schematic). Call after the schematic is complete and before placing/routing — without it the board has no footprints or net assignments and place_component/route_pad_to_pad produce an empty, unroutable board.",
+    "Import the schematic netlist into the PCB (= F8 / Update PCB from Schematic). Call after the schematic is complete and before placing/routing — without it the board has no footprints or net assignments.",
     {
       schematicPath: z.string().describe("Absolute path to the .kicad_sch schematic file"),
       boardPath: z.string().describe("Absolute path to the .kicad_pcb board file"),

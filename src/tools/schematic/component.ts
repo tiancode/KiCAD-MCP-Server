@@ -23,7 +23,7 @@ export function registerSchematicComponentTools(
         .boolean()
         .optional()
         .describe(
-          "Replace an existing schematic file. Defaults to false: if the target .kicad_sch already exists, the tool refuses (errorCode SCHEMATIC_EXISTS) instead of overwriting it. Set true only when you intend to replace it.",
+          "Replace an existing file. Default false: refuses (errorCode SCHEMATIC_EXISTS) if target exists.",
         ),
     },
     passthrough("create_schematic"),
@@ -33,14 +33,11 @@ export function registerSchematicComponentTools(
   server.tool(
     "add_schematic_component",
     "Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g. 'Device:R'). " +
-      "Coordinates SNAP to KiCad's 1.27 mm grid BY DEFAULT (off-grid pins trigger ERC alignment warnings); " +
-      "the response reports the landing position under .position plus a .snap delta when coordinates moved. " +
-      "Pass snapToGrid: false only to reproduce an existing sub-grid placement.",
+      "Coordinates snap to the 1.27 mm grid by default (off-grid pins trigger ERC warnings); " +
+      "response reports the landing position (.position) and a .snap delta when moved.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
-      symbol: z
-        .string()
-        .describe("Symbol library:name reference (e.g., Device:R, EDA-MCP:ESP32-C3)"),
+      symbol: z.string().describe("Symbol library:name reference (e.g. Device:R)"),
       reference: z.string().describe("Component reference (e.g., R1, U1)"),
       value: z.string().optional().describe("Component value"),
       footprint: z
@@ -59,20 +56,16 @@ export function registerSchematicComponentTools(
         .int()
         .min(1)
         .optional()
-        .describe("Unit number for multi-unit symbols (1=A, 2=B, 3=C, …). Defaults to 1."),
+        .describe("Unit number for multi-unit symbols (1=A, 2=B, …). Default 1."),
       snapToGrid: z
         .boolean()
         .optional()
-        .describe(
-          "Round the anchor onto the 1.27 mm schematic grid before placement. **Default true** — pass false only when sub-grid placement is intentional (the response surfaces the actual landing position either way).",
-        ),
+        .describe("Default true. Pass false only for intentional sub-grid placement."),
       snapGridMm: z
         .number()
         .positive()
         .optional()
-        .describe(
-          "Override the snap grid in mm. Default 1.27 mm matches KiCad's stock schematic grid; common alternatives are 2.54 mm (100 mil) for power rails.",
-        ),
+        .describe("Snap grid in mm (default 1.27; 2.54 = 100 mil is common for power rails)."),
     },
     async (args: {
       schematicPath: string;
@@ -134,13 +127,8 @@ export function registerSchematicComponentTools(
   // Delete component from schematic
   server.tool(
     "delete_schematic_component",
-    `Remove a placed symbol from a KiCAD schematic (.kicad_sch).
-
-This removes the symbol instance (the placed component) from the schematic.
-It does NOT remove the symbol definition from lib_symbols.
-
-Note: This tool operates on schematic files (.kicad_sch).
-To remove a footprint from a PCB, use delete_component instead.`,
+    "Remove a placed symbol from a .kicad_sch schematic (keeps its lib_symbols definition). " +
+      "To remove a PCB footprint use delete_component instead.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z
@@ -174,10 +162,9 @@ To remove a footprint from a PCB, use delete_component instead.`,
   // Edit component properties in schematic (footprint, value, reference, custom fields)
   server.tool(
     "edit_schematic_component",
-    "Update a placed schematic symbol in place (keeps position and UUID — better than delete + re-add): " +
-      "footprint, value, reference, field-label positions, and custom properties " +
-      "(MPN, LCSC, ... — exported by export_bom; new properties default to hidden). " +
-      "Batch footprint/value/newReference/fieldPositions/properties/removeProperties in one call. " +
+    "Update a placed schematic symbol in place (keeps position and UUID): footprint, value, " +
+      "reference, field-label positions, and custom properties (BOM/sourcing data like MPN, LCSC — " +
+      "exported by export_bom). Batch multiple changes in one call. " +
       ".kicad_sch only — for a PCB footprint use edit_component.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
@@ -215,9 +202,7 @@ To remove a footprint from a PCB, use delete_component instead.`,
               hide: z
                 .boolean()
                 .optional()
-                .describe(
-                  "Whether to hide the property text on the schematic. Defaults to true for newly-created custom properties (BOM/sourcing data is normally hidden).",
-                ),
+                .describe("Hide the label text (default true for new custom properties)"),
               fontSize: z
                 .number()
                 .optional()
@@ -227,20 +212,15 @@ To remove a footprint from a PCB, use delete_component instead.`,
         )
         .optional()
         .describe(
-          "Add or update component properties. Map of property name to either a string value (sensible defaults) " +
-            "or a full spec object {value, x?, y?, angle?, hide?, fontSize?}. Use this to attach BOM and sourcing " +
-            "metadata such as MPN, Manufacturer, Distributor, DigiKey, LCSC, JLCPCB_PN, Voltage, Tolerance, " +
-            "Dielectric, Power, etc. Built-in fields (Reference, Value, Footprint, Datasheet) can also be set " +
-            "this way but the dedicated parameters above are clearer. Example: " +
-            '{"MPN": "RC0603FR-0710KL", "Manufacturer": "Yageo", "Tolerance": "1%"}',
+          "Add/update properties: map of name → string value or {value, x?, y?, angle?, hide?, fontSize?} " +
+            'spec. E.g. {"MPN": "RC0603FR-0710KL", "Tolerance": "1%"}. Built-in fields work too.',
         ),
       removeProperties: z
         .array(z.string())
         .optional()
         .describe(
-          "List of custom property names to delete from this component. The built-in fields " +
-            "Reference, Value, Footprint, and Datasheet cannot be removed (clear them by setting " +
-            'value to "" instead). Example: ["OldMPN", "Distributor_PN"]',
+          "Custom property names to delete. Built-ins (Reference/Value/Footprint/Datasheet) " +
+            'cannot be removed — set their value to "" instead.',
         ),
     },
     async (args: {
@@ -301,130 +281,11 @@ To remove a footprint from a PCB, use delete_component instead.`,
     },
   );
 
-  // ------------------------------------------------------------------
-  // Single-property convenience tools (delegate to edit_schematic_component)
-  // ------------------------------------------------------------------
-
-  // Set a single custom property on a placed symbol
-  server.tool(
-    "set_schematic_component_property",
-    "Add or update ONE custom property on a placed schematic symbol (created if missing) — " +
-      "e.g. MPN, Manufacturer, LCSC, Voltage, or any BOM field. " +
-      "Written as a standard KiCad property record: survives ERC, exported by export_bom. " +
-      "New properties default to hidden (set hide=false to show on canvas). " +
-      "For several properties at once use edit_schematic_component with `properties`.",
-    {
-      schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      reference: z.string().describe("Reference designator of the component (e.g. R1, U3)"),
-      name: z
-        .string()
-        .describe(
-          "Property name (e.g. 'MPN', 'Manufacturer', 'DigiKey_PN', 'Voltage', 'Dielectric')",
-        ),
-      value: z.string().describe("Property value to write (use empty string to clear)"),
-      x: z.number().optional().describe("Label X position in mm (default: component X)"),
-      y: z.number().optional().describe("Label Y position in mm (default: component Y)"),
-      angle: z.number().optional().describe("Label rotation in degrees (default: 0)"),
-      hide: z
-        .boolean()
-        .optional()
-        .describe(
-          "Hide the property text on the schematic canvas. Defaults to true for newly-created custom properties.",
-        ),
-      fontSize: z.number().optional().describe("Font size in mm for the label (default: 1.27)"),
-    },
-    async (args: {
-      schematicPath: string;
-      reference: string;
-      name: string;
-      value: string;
-      x?: number;
-      y?: number;
-      angle?: number;
-      hide?: boolean;
-      fontSize?: number;
-    }) => {
-      const result = await callKicadScript("set_schematic_component_property", args);
-      if (result.success) {
-        const updated = result.updated ?? {};
-        const action = updated.propertiesAdded?.[args.name] !== undefined ? "added" : "updated";
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Successfully ${action} property ${args.name}="${args.value}" on ${args.reference}`,
-            },
-          ],
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Failed to set property '${args.name}' on ${args.reference}: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
-    },
-  );
-
-  // Remove a single custom property from a placed symbol
-  server.tool(
-    "remove_schematic_component_property",
-    `Remove a single custom property from a placed schematic symbol.
-
-Built-in fields (Reference, Value, Footprint, Datasheet) cannot be removed —
-KiCad requires them on every symbol. To clear a built-in field, use
-edit_schematic_component and set its value to an empty string.`,
-    {
-      schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      reference: z.string().describe("Reference designator of the component (e.g. R1, U3)"),
-      name: z
-        .string()
-        .describe("Custom property name to remove (e.g. 'MPN', 'Distributor_PN', 'OldField')"),
-    },
-    async (args: { schematicPath: string; reference: string; name: string }) => {
-      const result = await callKicadScript("remove_schematic_component_property", args);
-      if (result.success) {
-        const removed = result.updated?.propertiesRemoved ?? [];
-        if (removed.includes(args.name)) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Successfully removed property '${args.name}' from ${args.reference}`,
-              },
-            ],
-          };
-        }
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Property '${args.name}' was not present on ${args.reference} (no change made)`,
-            },
-          ],
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Failed to remove property '${args.name}' from ${args.reference}: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
-    },
-  );
-
   // Get component properties and field positions from schematic
   server.tool(
     "get_schematic_component",
-    "Get full component info from a schematic: position plus EVERY field's value and label position " +
-      "(built-in Reference/Value/Footprint/Datasheet and all custom BOM/sourcing properties). " +
-      "Use before edit_schematic_component / set_schematic_component_property to inspect current state.",
+    "Get a component's position plus every field's value and label position (built-in and " +
+      "custom properties). Use before edit_schematic_component to inspect current state.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Component reference designator (e.g. R1, U1)"),
@@ -463,7 +324,8 @@ edit_schematic_component and set its value to an empty string.`,
   // Move a placed symbol, dragging connected wires
   server.tool(
     "move_schematic_component",
-    "Move a placed symbol. preserveWires (default true) stretches wire endpoints touching its pins to follow. Coordinates snap to KiCad's 1.27 mm grid by default — off-grid placement triggers 'pin off-grid' ERC warnings; pass snapToGrid:false to keep exact coordinates.",
+    "Move a placed symbol. Wire endpoints touching its pins follow by default (preserveWires). " +
+      "Coordinates snap to the 1.27 mm grid by default — off-grid placement triggers 'pin off-grid' ERC warnings.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator (e.g., R1, U1)"),
@@ -477,16 +339,8 @@ edit_schematic_component and set its value to an empty string.`,
       snapToGrid: z
         .boolean()
         .optional()
-        .describe(
-          "Round the destination onto the 1.27 mm schematic grid before writing. **Default true** — pass false only when sub-grid placement is intentional.",
-        ),
-      snapGridMm: z
-        .number()
-        .positive()
-        .optional()
-        .describe(
-          "Override the snap grid in mm. Default 1.27 mm matches KiCad's stock schematic grid.",
-        ),
+        .describe("Default true. Pass false only for intentional sub-grid placement."),
+      snapGridMm: z.number().positive().optional().describe("Snap grid in mm (default 1.27)."),
     },
     async (args: {
       schematicPath: string;
@@ -567,8 +421,8 @@ edit_schematic_component and set its value to an empty string.`,
   // Annotate schematic
   server.tool(
     "annotate_schematic",
-    "Assign reference designators to UNANNOTATED components (placeholder refs ending in '?': R? → R1, R2, ...). " +
-      "No-op when every component already has a concrete reference (response: annotated: [], noop: true) — safe to call defensively.",
+    "Assign reference designators to unannotated components (R? → R1, R2, ...). " +
+      "No-op when all references are concrete (annotated: [], noop: true) — safe to call defensively.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
     },

@@ -241,15 +241,14 @@ Conventional property names (use these so downstream BOM tools recognise them):
 
 Tools to use, in this order:
 
-  1. \`list_schematic_components\` — confirm which components need updating.
+  1. \`list_schematic_items\` (kind=components) — confirm which components need updating.
   2. \`get_schematic_component\` — inspect what properties are already present
      (returns ALL property fields, including custom ones).
-  3. \`set_schematic_component_property\` — attach or update one property at a time
-     when working on a single component.
-  4. \`edit_schematic_component\` with the \`properties\` parameter — batch-update
-     many properties on the same component in a single call:
+  3. \`edit_schematic_component\` with the \`properties\` parameter — add or update
+     one or many properties on the same component in a single call:
        properties: { MPN: "RC0603FR-0710KL", Manufacturer: "Yageo", Tolerance: "1%" }
-  5. \`remove_schematic_component_property\` — delete an obsolete custom field.
+  4. \`edit_schematic_component\` with the \`removeProperties\` parameter — delete
+     obsolete custom fields.
 
 Hidden vs visible:
   • Newly-created custom properties default to hidden — they appear in BOM exports

@@ -11,7 +11,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Draw wire between coordinate waypoints with optional pin snapping
   server.tool(
     "add_schematic_wire",
-    "Draw a wire between two or more points. Call get_schematic_pin_locations first for pin coordinates, then pass them as the first/last waypoints. snapToPins (default on) snaps endpoints to the nearest exact pin coordinate. Add intermediate waypoints to route around parts, e.g. [[x1,y1],[xMid,y1],[xMid,y2],[x2,y2]] goes horizontal then vertical; intermediate waypoints are never snapped.",
+    "Draw a wire through 2+ waypoints. Get pin coordinates from get_schematic_pin_locations and use them as first/last waypoints. snapToPins (default on) snaps only endpoints to the nearest exact pin; intermediate waypoints route around parts (e.g. [[x1,y1],[xMid,y1],[xMid,y2],[x2,y2]]) and are never snapped.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       waypoints: z
@@ -58,10 +58,8 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   server.tool(
     "add_schematic_net_label",
     "Add a net label. KiCad connects a label to a pin ONLY at the exact pin endpoint (0.01 mm off breaks it). " +
-      "Modes: (1) PREFERRED componentRef + pinNumber — snaps to the pin; " +
-      "(2) position [x, y] — auto-snaps to any pin within snapTolerance mm (default 0.05); " +
-      "(3) snapTolerance: 0 — no snapping (labels between pins). " +
-      "Response reports connected_to_pin = {ref, pin} | null; auto-snap adds snapped_to_pin.",
+      "Prefer componentRef + pinNumber (snaps to the pin); or position [x, y], auto-snapped to a pin " +
+      "within snapTolerance. Response reports connected_to_pin = {ref, pin} | null.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
@@ -90,9 +88,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       snapTolerance: z
         .number()
         .optional()
-        .describe(
-          "Auto-snap radius in mm when a raw position is given (default 0.05 — only catches float near-misses). Pass 0 to disable.",
-        ),
+        .describe("Auto-snap radius in mm for raw positions (default 0.05). 0 disables snapping."),
     },
     async (args: {
       schematicPath: string;
@@ -121,13 +117,12 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Add no-connect flag
+  // Add or remove a no-connect flag — replaces add_no_connect and
+  // delete_no_connect. Dispatches to the original python commands.
   server.tool(
-    "add_no_connect",
-    "Add a no-connect flag (X marker) to a pin that is intentionally left unconnected. " +
-      "This suppresses ERC 'Pin not connected' errors for unused pins. " +
-      "PREFERRED: supply componentRef + pinNumber to snap to the exact pin endpoint. " +
-      "Alternatively supply position [x, y] in mm matching the pin endpoint exactly.",
+    "set_no_connect",
+    "Add a no-connect flag (X) to an intentionally unconnected pin, suppressing ERC 'Pin not connected' errors; remove=true deletes an existing flag. " +
+      "Prefer componentRef + pinNumber; a raw position [x, y] (mm) must match the pin endpoint exactly.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       position: z
@@ -143,82 +138,34 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         .union([z.string(), z.number()])
         .optional()
         .describe("Pin number or name on componentRef (e.g. '1', 'GND'). Use with componentRef."),
+      remove: z
+        .boolean()
+        .optional()
+        .describe("true removes an existing no-connect flag instead of adding one."),
+      tolerance: z
+        .number()
+        .optional()
+        .describe("Only with remove=true: coordinate match tolerance in mm (default 0.5)."),
     },
     async (args: {
       schematicPath: string;
       position?: number[];
       componentRef?: string;
       pinNumber?: string | number;
-    }) => {
-      const result = await callKicadScript("add_no_connect", args);
-      if (result.success) {
-        return formatKicadResult(result);
-      } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to add no-connect: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // Delete no-connect flag
-  server.tool(
-    "delete_no_connect",
-    "Remove a no-connect (X) flag from a pin — the inverse of add_no_connect, matched by position (NC flags have no name). " +
-      "PREFERRED: componentRef + pinNumber; alternatively position [x, y] in mm. Use when an NC flag landed on the wrong pin.",
-    {
-      schematicPath: z.string().describe("Path to the schematic file"),
-      position: z
-        .array(z.number())
-        .length(2)
-        .optional()
-        .describe("Position [x, y] in mm. Required when componentRef/pinNumber are not given."),
-      componentRef: z
-        .string()
-        .optional()
-        .describe("Component reference to target (e.g. U1, R1). Use with pinNumber."),
-      pinNumber: z
-        .union([z.string(), z.number()])
-        .optional()
-        .describe("Pin number or name on componentRef (e.g. '1', 'GND'). Use with componentRef."),
-      tolerance: z.number().optional().describe("Coordinate match tolerance in mm (default 0.5)."),
-    },
-    async (args: {
-      schematicPath: string;
-      position?: number[];
-      componentRef?: string;
-      pinNumber?: string | number;
+      remove?: boolean;
       tolerance?: number;
     }) => {
-      const result = await callKicadScript("delete_no_connect", args);
-      if (result.success) {
-        return formatKicadResult(result);
-      } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to delete no-connect: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
+      const { remove, ...params } = args;
+      const command = remove === true ? "delete_no_connect" : "add_no_connect";
+      return formatKicadResult(await callKicadScript(command, params));
     },
   );
 
   // Connect pin to net
   server.tool(
     "connect_to_net",
-    "Connect a component pin to a named net by adding a wire stub and net label at the exact pin endpoint. " +
-      "The response includes pin_location (exact pin coords), label_location (where the label was placed), " +
-      "and wire_stub (the wire segment added) so you can confirm the placement.",
+    "Connect a component pin to a named net via a wire stub and net label at the exact pin endpoint. " +
+      "Response includes pin_location, label_location, and wire_stub to confirm placement.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       componentRef: z.string().describe("Component reference (e.g., U1, R1)"),
@@ -287,9 +234,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Get wire connections
   server.tool(
     "get_wire_connections",
-    "Return the net name plus all wires and pins connected at a point, given reference + pin OR x/y in mm. " +
-      "net=null means an unnamed net. The point must be a wire endpoint or junction (midpoints don't match) — " +
-      "get exact coordinates from get_schematic_pin_locations or list_schematic_wires.",
+    "Return the net name plus all wires and pins connected at a point (reference + pin, OR x/y in mm). " +
+      "net=null means unnamed. The point must be an exact wire endpoint or junction (midpoints don't match) — " +
+      "get coordinates from get_schematic_pin_locations.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       reference: z
@@ -348,7 +295,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Get pin locations for a schematic component
   server.tool(
     "get_schematic_pin_locations",
-    "Returns the exact x/y coordinates of every pin on a schematic component. Use this before add_schematic_net_label to place labels correctly on pin endpoints.",
+    "Return the exact x/y coordinates of every pin on a schematic component. Use before add_schematic_net_label or add_schematic_wire.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       reference: z.string().describe("Component reference designator (e.g. U1, R1, J2)"),
@@ -388,7 +335,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Connect all pins of source connector to matching pins of target connector (passthrough)
   server.tool(
     "connect_passthrough",
-    "Connects all pins of a source connector (e.g. J1) to matching pins of a target connector (e.g. J2) via shared net labels — pin N gets net '{netPrefix}_{N}'. Use this for FFC/ribbon cable passthrough adapters instead of calling connect_to_net for every pin.",
+    "Connect all pins of a source connector to matching pins of a target connector via shared net labels — pin N gets net '{netPrefix}_{N}'. For FFC/ribbon passthrough adapters, instead of per-pin connect_to_net.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       sourceRef: z.string().describe("Source connector reference (e.g. J1)"),
@@ -472,152 +419,73 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Delete net label from schematic
-  server.tool(
-    "delete_schematic_net_label",
-    "Remove a net label from the schematic.",
-    {
-      schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      netName: z.string().describe("Name of the net label to remove"),
-      position: z
-        .object({ x: z.number(), y: z.number() })
-        .optional()
-        .describe("Position to disambiguate if multiple labels with same name"),
-    },
-    async (args: {
-      schematicPath: string;
-      netName: string;
-      position?: { x: number; y: number };
-    }) => {
-      const result = await callKicadScript("delete_schematic_net_label", args);
-      if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Deleted net label '${args.netName}'`,
-            },
-          ],
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to delete label: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
-    },
-  );
+  // Edit, move, or delete an existing net label — replaces the former
+  // edit_schematic_net_label / move_schematic_net_label /
+  // delete_schematic_net_label tools. Dispatches to the original python
+  // commands based on `action`.
+  const LABEL_COMMANDS = {
+    edit: "edit_schematic_net_label",
+    move: "move_schematic_net_label",
+    delete: "delete_schematic_net_label",
+  } as const;
 
-  // Move net label to a new position in the schematic
-  server.tool(
-    "move_schematic_net_label",
-    "Move a net label (local, global, or hierarchical) to a new position in the schematic. Use currentPosition to disambiguate when multiple labels share the same name.",
-    {
-      schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      netName: z.string().describe("Name of the net label to move"),
-      newPosition: z.object({ x: z.number(), y: z.number() }).describe("Target position in mm"),
-      currentPosition: z
-        .object({ x: z.number(), y: z.number() })
-        .optional()
-        .describe("Current position to disambiguate when multiple labels share the same name"),
-      labelType: z
-        .enum(["label", "global_label", "hierarchical_label"])
-        .optional()
-        .describe("Restrict search to a specific label type"),
-    },
-    async (args: {
-      schematicPath: string;
-      netName: string;
-      newPosition: { x: number; y: number };
-      currentPosition?: { x: number; y: number };
-      labelType?: "label" | "global_label" | "hierarchical_label";
-    }) => {
-      const result = await callKicadScript("move_schematic_net_label", args);
-      if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Moved net label '${args.netName}' from (${result.oldPosition?.x}, ${result.oldPosition?.y}) to (${result.newPosition?.x}, ${result.newPosition?.y})`,
-            },
-          ],
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to move label: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
-    },
-  );
-
-  // Change a net label's type and/or text
   server.tool(
     "edit_schematic_net_label",
-    "Change an existing net label's type (label <-> global_label <-> hierarchical_label) and/or text, in place — " +
-      "keeps uuid and position, so no wire/junction rework. Pass at least one of newLabelType or newName; " +
-      "disambiguate duplicates with currentPosition and/or labelType.",
+    "Edit, move, or delete an existing net label. edit: change type and/or text (newLabelType/newName); move: reposition (newPosition); delete: remove. Disambiguate duplicate names with currentPosition (edit/move), position (delete), or labelType.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      netName: z.string().describe("Current text of the label to edit"),
+      action: z
+        .enum(["edit", "move", "delete"])
+        .describe("What to do with the label: edit its type/text, move it, or delete it"),
+      netName: z.string().describe("Current text of the net label to target"),
       newLabelType: z
         .enum(["label", "global_label", "hierarchical_label"])
         .optional()
         .describe(
-          "New label type. 'label' = page-local, 'global_label' = cross-page, 'hierarchical_label' = sheet boundary. Omit to keep the current type (rename only).",
+          "edit only: new type — label=page-local, global_label=cross-page, hierarchical_label=sheet boundary. Omit to keep.",
         ),
-      newName: z.string().optional().describe("New label text. Omit to keep the current text."),
+      newName: z.string().optional().describe("edit only: new label text. Omit to keep."),
+      newPosition: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("Required for action='move': target position in mm."),
       currentPosition: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe("Current position to disambiguate when multiple labels share the same name"),
+        .describe("edit/move: current position, to disambiguate same-named labels."),
+      position: z
+        .object({ x: z.number(), y: z.number() })
+        .optional()
+        .describe("delete: position, to disambiguate same-named labels."),
       labelType: z
         .enum(["label", "global_label", "hierarchical_label"])
         .optional()
-        .describe("Restrict the search to a specific current label type"),
+        .describe("edit/move: restrict the search to a specific label type."),
     },
     async (args: {
       schematicPath: string;
+      action: "edit" | "move" | "delete";
       netName: string;
       newLabelType?: "label" | "global_label" | "hierarchical_label";
       newName?: string;
+      newPosition?: { x: number; y: number };
       currentPosition?: { x: number; y: number };
+      position?: { x: number; y: number };
       labelType?: "label" | "global_label" | "hierarchical_label";
     }) => {
-      const result = await callKicadScript("edit_schematic_net_label", args);
-      if (result.success) {
-        return formatKicadResult(result);
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to edit label: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      const { action, ...params } = args;
+      return formatKicadResult(await callKicadScript(LABEL_COMMANDS[action], params));
     },
   );
 
   // Add hierarchical label to a sub-sheet
   server.tool(
     "add_schematic_hierarchical_label",
-    "Add a hierarchical label (sheet interface port) to a sub-sheet schematic. " +
-      "Hierarchical labels are the connection points that link a sub-sheet to its " +
-      "parent via sheet pins. The label text must exactly match the corresponding " +
-      "sheet pin name.",
+    "Add a hierarchical label (sheet interface port) to a sub-sheet schematic; it links " +
+      "the sub-sheet to its parent via a sheet pin whose name must exactly match the label text.",
     {
       schematicPath: z.string().describe("Path to the sub-sheet .kicad_sch file"),
-      text: z.string().describe("Label text (e.g. 'SD_CLK') — must match the sheet pin name"),
+      text: z.string().describe("Label text (e.g. 'SD_CLK')"),
       position: z.array(z.number()).length(2).describe("Position [x, y] in mm"),
       shape: z
         .enum(["input", "output", "bidirectional"])
