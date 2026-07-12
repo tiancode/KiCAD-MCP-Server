@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 126 tools with JSON Schema validation, each registered directly as an MCP tool
+- 127 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 34 tools, hierarchical sheets, and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -24,7 +24,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ## Available Tools
 
-The server provides 126 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
+The server provides 127 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
 
 ### Project Management (5 tools)
 
@@ -49,7 +49,7 @@ The server provides 126 tools, each registered directly as an MCP tool -- just a
 - `board_origin` - Read or move the board's grid or drill/place origin (IPC-only); pass position to write
 - `title_block` - Read or partial-update the board's title block (title, date, revision, company, comment slots; IPC-only)
 
-### Component Management (14 tools)
+### Component Management (15 tools)
 
 - `place_component` - Add a NEW footprint instance to the PCB
 - `move_component` - Move a PCB component to a new position
@@ -59,6 +59,7 @@ The server provides 126 tools, each registered directly as an MCP tool -- just a
 - `find_component` - Search for a PCB component by reference designator or value and return its position and properties
 - `get_component_properties` - Return all properties of a PCB component (position, rotation, layer, value, footprint)
 - `get_component_pads` - Return pads of a PCB component with exact positions, nets and sizes (pass pad for a single one)
+- `edit_component_pad` - Edit pads of a placed footprint (size/drill/shape/number/type) to repair broken library footprints; targets pads by number or zero-based index, refuses copper<=drill unless forced
 - `get_component_list` - Return a list of all components on the PCB, optionally filtered by layer or bounding box region
 - `place_component_array` - Place a rectangular grid array of identical components on the PCB with configurable row/column spacing
 - `align_components` - Align multiple PCB components horizontally, vertically or on a grid with optional spacing
@@ -74,7 +75,7 @@ The server provides 126 tools, each registered directly as an MCP tool -- just a
 - `copper_pour` - Manage copper pours (zones): action=add|edit|delete|refill
 - `delete_trace` - Delete traces from the PCB
 - `query_copper` - Query copper on the board: trace segments (kind=traces, optionally vias) or zones/pours (kind=zones), filtered by net/layer/region
-- `add_gnd_stitching_vias` - Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup)
+- `add_gnd_stitching_vias` - Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup); refuses unfilled GND zones and keeps via copper clear of the board edge (edgeClearance)
 - `get_nets_list` - Get a list of all nets in the PCB with optional statistics
 - `modify_trace` - Modify an existing trace (change width, layer, or net)
 - `create_netclass` - Create or update a net class with custom design rules, persisted to the .kicad_pro project file
@@ -131,7 +132,7 @@ The server provides 126 tools, each registered directly as an MCP tool -- just a
 ### Design Rules / DRC (3 tools)
 
 - `design_rules` - Read or update PCB design rules: call with no parameters to read; pass any parameter to update
-- `run_drc` - Run KiCAD Design Rule Check (DRC) on the current PCB and return violations
+- `run_drc` - Run KiCAD Design Rule Check (DRC) on the current PCB and return violations with per-item offender locations (maxViolations caps the inline list)
 - `assign_net_to_class` - Assign a net to an existing net class to apply its specific design rules
 
 ### Export (6 tools)
@@ -893,7 +894,7 @@ How many Basic parts are available?
 
 - **JSON-RPC 2.0 Transport:** Bi-directional communication via STDIO
 - **Protocol Version:** MCP 2025-06-18
-- **Capabilities:** Tools (126), Resources (8)
+- **Capabilities:** Tools (127), Resources (8)
 - **Error Handling:** Standard JSON-RPC error codes
 
 ### TypeScript Server (`src/`)
@@ -1033,7 +1034,7 @@ npm run format
 
 **Current Version:** 2.2.3
 
-**Working Features (126 tools):**
+**Working Features (127 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)

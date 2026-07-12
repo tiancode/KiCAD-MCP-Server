@@ -628,6 +628,7 @@ class KiCADInterface(BoardPersistenceMixin):
                     "find_component",
                     "get_component_pads",
                     "get_pad_position",
+                    "edit_component_pad",
                     "place_component_array",
                     "align_components",
                     "check_courtyard_overlaps",
@@ -1941,6 +1942,9 @@ class KiCADInterface(BoardPersistenceMixin):
         "auto_place_components",
         "set_board_size",
         "set_design_rules",
+        # Mutates pads of a placed footprint via SWIG (repairs broken
+        # library footprints, e.g. empty pad numbers / copper == drill).
+        "edit_component_pad",
     }
 
     # IPC commands that only read the board.  Used by the cross-backend

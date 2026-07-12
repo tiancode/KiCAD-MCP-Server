@@ -275,6 +275,16 @@ class DesignRuleCommands:
                 timeout_sec = 600
             timeout_sec = max(10, min(timeout_sec, 1800))  # clamp to [10, 1800]
 
+            # Cap on the violations returned inline (mirrors run_erc's
+            # maxViolations contract: default 30, 0 = all).  The full list —
+            # items included — is always written to the violations file.
+            try:
+                max_violations = int(params.get("maxViolations", 30))
+            except (TypeError, ValueError):
+                max_violations = 30
+            if max_violations <= 0:
+                max_violations = 0
+
             # Get the board file path
             board_file = self.board.GetFileName()
             if not board_file or not os.path.exists(board_file):
@@ -349,12 +359,38 @@ class DesignRuleCommands:
                     vtype = violation.get("type", "unknown")
                     vseverity = violation.get("severity", "error")
 
-                    # Extract location from first item's pos (kicad-cli JSON format)
+                    # Preserve per-violation items — each carries the offending
+                    # object's description and pos.  Without them callers had to
+                    # grep the .kicad_pcb to locate offenders.  kicad-cli was
+                    # invoked with --units mm, so items[].pos is already mm (the
+                    # ERC-side IU/10000 bug does not apply to pcb drc output).
                     items = violation.get("items", [])
+                    parsed_items = []
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        entry: Dict[str, Any] = {"description": item.get("description", "")}
+                        pos = item.get("pos")
+                        if isinstance(pos, dict):
+                            entry["pos"] = {
+                                "x": pos.get("x", 0),
+                                "y": pos.get("y", 0),
+                                "unit": "mm",
+                            }
+                        # Layer info when the report provides it (some KiCad
+                        # versions omit it; it then only appears inside the
+                        # description text).
+                        if "layer" in item:
+                            entry["layer"] = item["layer"]
+                        elif "layers" in item:
+                            entry["layers"] = item["layers"]
+                        parsed_items.append(entry)
+
+                    # Location = first item's pos (kicad-cli JSON format)
                     loc_x, loc_y = 0, 0
-                    if items and "pos" in items[0]:
-                        loc_x = items[0]["pos"].get("x", 0)
-                        loc_y = items[0]["pos"].get("y", 0)
+                    if parsed_items and "pos" in parsed_items[0]:
+                        loc_x = parsed_items[0]["pos"]["x"]
+                        loc_y = parsed_items[0]["pos"]["y"]
 
                     violations.append(
                         {
@@ -366,6 +402,7 @@ class DesignRuleCommands:
                                 "y": loc_y,
                                 "unit": "mm",
                             },
+                            "items": parsed_items,
                         }
                     )
 
@@ -418,15 +455,34 @@ class DesignRuleCommands:
                         env=drc_env,
                     )
 
-                # Return summary only (not full violations list)
+                # Return the violations inline (capped) so callers can locate
+                # offenders without opening the violations file.  Explicit
+                # truncation contract mirrors run_erc: summary reports
+                # total vs shown + a truncated flag; maxViolations (0 = all)
+                # controls the cap; the file always has the full list.
+                total_violations = len(violations)
+                if max_violations and total_violations > max_violations:
+                    shown_violations = violations[:max_violations]
+                else:
+                    shown_violations = violations
+                truncated = len(shown_violations) < total_violations
+
+                message = f"Found {total_violations} DRC violations"
+                if truncated:
+                    message += f" (showing {len(shown_violations)} of {total_violations})"
+
                 return {
                     "success": True,
-                    "message": f"Found {len(violations)} DRC violations",
+                    "message": message,
                     "summary": {
-                        "total": len(violations),
+                        "total": total_violations,
+                        "shown": len(shown_violations),
+                        "truncated": truncated,
+                        "max_violations": max_violations,
                         "by_severity": severity_counts,
                         "by_type": violation_counts,
                     },
+                    "violations": shown_violations,
                     "violationsFile": violations_file,
                     "reportPath": report_path if report_path else None,
                 }

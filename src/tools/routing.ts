@@ -238,7 +238,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // ------------------------------------------------------
   server.tool(
     "add_gnd_stitching_vias",
-    "Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup). Combinable strategies: grid, around_refs (densify around named ICs), in_zones (only inside GND zones).",
+    "Drop GND stitching vias with collision checks against all non-GND copper on every layer (PTH vias span the stackup). Strategies: grid, around_refs (densify around named ICs), in_zones. Refuses unfilled GND zones (needs_zone_fill — fill first or force=true); with filled zones, vias land only inside the fill.",
     {
       gndNet: z
         .string()
@@ -270,10 +270,17 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .int()
         .optional()
         .describe("Grid cells around each ref (default 2 = 5x5 field per ref)."),
-      edgeMargin: z
+      edgeClearance: z
         .number()
         .optional()
-        .describe("Keep-out from the board edge in mm (default 0.5)."),
+        .describe(
+          "Copper-to-edge clearance in mm (default 0.5); via copper keeps this from Edge.Cuts (center keep-out adds the via radius). Alias: edgeMargin.",
+        ),
+      edgeMargin: z.number().optional().describe("Deprecated alias for edgeClearance."),
+      force: z
+        .boolean()
+        .optional()
+        .describe("Place vias even when GND zones are unfilled (they will dangle). Default false."),
       maxVias: z.number().int().optional().describe("Cap on total placements (default unlimited)."),
       dryRun: z
         .boolean()

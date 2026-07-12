@@ -102,6 +102,9 @@ EXPECTED_COMPONENT_COMMANDS = {
     "delete_component",
     "duplicate_component",
     "edit_component",
+    # 2026-07: pad repair on placed footprints (broken library footprints,
+    # e.g. empty pad numbers / copper == drill annular_width errors).
+    "edit_component_pad",
     "find_component",
     "get_component_list",
     "get_component_pads",
