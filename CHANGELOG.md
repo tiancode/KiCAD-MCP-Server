@@ -4,6 +4,20 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Tool-Description Slimming (2026-07-12)
+
+String-only pass over every tool registration in `src/tools/`: tool
+descriptions compressed toward ≤300 chars, param `.describe()` texts
+toward ≤90 chars, and guidance that was repeated between a tool's
+description and its param describes deduplicated to a single place.
+Refusal conditions, safety warnings, "IPC-only" markers, defaults, unit
+conventions, and dryRun semantics were kept (reworded, not removed).
+The largest offender, `search_jlcpcb_parts`, went from a 2,096-char
+description to 727 chars with each behavioral fact stated exactly once.
+Combined with the tool consolidation below, the `tools/list` payload
+every MCP session pays up front drops from ~40.5k to ~30.3k tokens
+(−25%). No names, types, defaults, or handler logic changed.
+
 ### Tool-Surface Consolidation: 163 → 125 Tools (2026-07-12)
 
 **BREAKING (MCP tool names only).** Isomorphic tool families were merged
