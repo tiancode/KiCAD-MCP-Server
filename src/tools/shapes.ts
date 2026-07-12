@@ -93,12 +93,12 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
     .describe("Bounding box in mm — matches shapes whose extents overlap it");
 
   const kindSchema = z
-    .enum(["segment", "arc", "circle", "rectangle", "polygon"])
-    .describe("Shape kind filter");
+    .enum(["segment", "arc", "circle", "rectangle", "polygon", "text", "textbox"])
+    .describe("Shape/text kind filter");
 
   server.tool(
     "list_shapes",
-    "List graphic shapes (id, kind, layer, width, filled, bbox) with optional layer/kind/boundingBox filters — source of ids for delete_shape/edit_shape. IPC-only.",
+    "List graphic shapes AND board text (id, kind, layer; text items add text/position/size) with optional layer/kind/boundingBox filters — source of ids for delete_shape/edit_shape. IPC-only.",
     {
       layer: z.string().optional().describe("Filter by layer name (e.g. F.SilkS)"),
       kind: kindSchema.optional(),
@@ -109,7 +109,7 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
 
   server.tool(
     "delete_shape",
-    "Delete graphic shape(s) by id/ids (from list_shapes) or by layer/kind/boundingBox filters. IPC-only.",
+    "Delete graphic shape(s) or board text by id/ids (from list_shapes) or by layer/kind/boundingBox filters. IPC-only.",
     {
       id: z.string().optional().describe("Single shape id (from list_shapes)"),
       ids: z.array(z.string()).optional().describe("Multiple shape ids"),
@@ -126,16 +126,18 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
 
   server.tool(
     "edit_shape",
-    "Edit one graphic shape (by id from list_shapes): move it by dx/dy, change layer, stroke width, or fill. IPC-only.",
+    "Edit one graphic shape or board text (by id from list_shapes): move by dx/dy, change layer; shapes: stroke width/fill; text: content/size. Inapplicable properties come back in `unsupported`. IPC-only.",
     {
       id: z.string().describe("Shape id (from list_shapes)"),
       newLayer: z.string().optional().describe("Move the shape to this layer"),
       width: z.number().optional().describe("New stroke width in mm"),
-      filled: z.boolean().optional().describe("New fill state"),
+      filled: z.boolean().optional().describe("New fill state (shapes only)"),
       move: z
         .object({ dx: z.number(), dy: z.number() })
         .optional()
         .describe("Translate the shape by dx/dy mm"),
+      text: z.string().optional().describe("New text content (text items only)"),
+      size: z.number().optional().describe("New glyph size in mm (text items only)"),
     },
     passthrough("edit_shape"),
   );

@@ -70,9 +70,9 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
             "zoneCount": zone_count,
             "recommendation": (
                 "Most flows that need a filled board for gerber export "
-                "should call ``launch_kicad_ui`` (or call ipc_save_board "
-                "after opening KiCad) and re-run refill_zones — the IPC "
-                "path is reliable.  If running headless, ``force=true`` "
+                "should call ``manage_kicad_ui(action=launch)`` (or "
+                "save_project after opening KiCad) and re-run refill_zones "
+                "— the IPC path is reliable.  If running headless, ``force=true`` "
                 "uses subprocess isolation so the MCP won't crash, but "
                 "the resulting fill may be subtly wrong; verify with "
                 "run_drc or open the gerber to check."

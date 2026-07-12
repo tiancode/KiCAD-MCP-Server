@@ -119,6 +119,21 @@ def enrich_failure(command: str, result: "Dict[str, Any]") -> "Dict[str, Any]":
         )
         return result
 
+    # The cross-backend conflict gate is likewise pre-classified: the refusal
+    # already names the reconcile direction that heals it.  The old
+    # fall-through stamped the generic INTERNAL_ERROR, mislabeling a
+    # deliberate, recoverable refusal as a crash.  Only errorCode/hint are
+    # added — needs_reconcile / direction / message pass through verbatim.
+    if result.get("needs_reconcile"):
+        result["errorCode"] = "NEEDS_RECONCILE"
+        direction = result.get("direction")
+        suffix = f" (direction={direction})" if direction else ""
+        result.setdefault(
+            "hint",
+            f"Call reconcile_backends{suffix} to sync the backends, then retry.",
+        )
+        return result
+
     code, hint = classify_failure(message, details)
     result["errorCode"] = code
     if hint and not result.get("hint"):
