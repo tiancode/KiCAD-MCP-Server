@@ -102,13 +102,20 @@ export function registerSchematicComponentTools(
 
       const result = await callKicadScript("add_schematic_component", transformed);
       if (result.success) {
+        const pos = result.position;
+        let text = `Successfully added ${args.reference} (${args.symbol}) to schematic`;
+        if (pos) text += ` at (${pos.x}, ${pos.y})`;
+        // Contract: report the .snap delta whenever coordinates moved so an
+        // agent aiming at an exact point isn't silently relocated.
+        if (result.snap?.applied) {
+          const req = result.snap.requested;
+          text += ` [snapped to ${result.snap.gridMm} mm grid from (${req?.x}, ${req?.y})]`;
+        }
+        // Append the raw position/snap blocks so structured consumers get them.
+        text += `\n${JSON.stringify({ position: pos ?? null, snap: result.snap ?? null })}`;
         return {
-          content: [
-            {
-              type: "text",
-              text: `Successfully added ${args.reference} (${args.symbol}) to schematic`,
-            },
-          ],
+          content: [{ type: "text" as const, text }],
+          structuredContent: result,
         };
       } else {
         return {
@@ -354,17 +361,19 @@ export function registerSchematicComponentTools(
       if (result.success) {
         const moved = result.wiresMoved ?? 0;
         const removed = result.wiresRemoved ?? 0;
+        let text =
+          `Moved ${args.reference} from (${result.oldPosition.x}, ${result.oldPosition.y}) ` +
+          `to (${result.newPosition.x}, ${result.newPosition.y})` +
+          (moved > 0 ? `, ${moved} wire endpoint(s) updated` : "") +
+          (removed > 0 ? `, ${removed} zero-length wire(s) removed` : "");
+        // Contract: surface the .snap block when the target coordinates moved.
+        if (result.snap?.applied) {
+          const req = result.snap.requested;
+          text += ` [snapped to ${result.snap.gridMm} mm grid from (${req?.x}, ${req?.y})]`;
+        }
         return {
-          content: [
-            {
-              type: "text",
-              text:
-                `Moved ${args.reference} from (${result.oldPosition.x}, ${result.oldPosition.y}) ` +
-                `to (${result.newPosition.x}, ${result.newPosition.y})` +
-                (moved > 0 ? `, ${moved} wire endpoint(s) updated` : "") +
-                (removed > 0 ? `, ${removed} zero-length wire(s) removed` : ""),
-            },
-          ],
+          content: [{ type: "text" as const, text }],
+          structuredContent: result,
         };
       }
       return {
