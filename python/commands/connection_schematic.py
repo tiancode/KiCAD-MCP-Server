@@ -151,11 +151,24 @@ class ConnectionManager:
                                 f"connected, so no wire/label was added."
                             ),
                         }
-                    # Floating power pin → draw a stub wire, but no label.
+                    # Floating power pin. Prefer a REAL connecting wire to the
+                    # net's existing connectivity (a component pin already on the
+                    # net, else an existing net wire/label point). A bare outward
+                    # stub into empty space leaves a DANGLING endpoint that does
+                    # NOT electrically join the pin to the net — kicad-cli ERC
+                    # still flags it (pin_not_connected / unconnected_wire_endpoint).
+                    routed = ConnectionManager._connect_floating_power_pin(
+                        schematic_path, component_ref, net_name, pin_loc, value
+                    )
+                    if routed is not None:
+                        return routed
+                    # The net has no other member to attach to → fall back to a
+                    # plain outward stub (no label); best effort.
                     place_label = False
                     logger.info(
-                        f"Power symbol {component_ref} pin is floating; drawing a stub "
-                        f"wire so it has physical connectivity (net '{value}')"
+                        f"Power symbol {component_ref} pin is floating and net "
+                        f"'{value}' has no other connectivity; drawing an outward "
+                        f"stub wire (best effort)."
                     )
                 else:
                     power_warning = (
@@ -463,6 +476,291 @@ class ConnectionManager:
             except Exception:
                 continue
         return False
+
+    # --- F3 (round 2): route a floating power pin to REAL net connectivity ---
+    #
+    # The earlier F3 fix drew a fixed-length outward stub from the floating power
+    # pin into empty space. That stub's FAR end lands on nothing, so KiCad sees a
+    # dangling wire — the pin is not actually joined to the net's real elements
+    # (kicad-cli ERC leaves pin_not_connected / unconnected_wire_endpoint on it).
+    # These helpers instead run an L-shaped wire from the power pin all the way to
+    # a REAL component pin already on the net (preferred) or an existing net wire/
+    # label point, so BOTH endpoints terminate on real connectivity.
+
+    @staticmethod
+    def _connect_floating_power_pin(
+        schematic_path: Path,
+        power_ref: str,
+        net_name: str,
+        pin_loc: List[float],
+        value: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Wire a floating power-symbol pin to the net's existing connectivity.
+
+        Draws an L-shaped (H-then-V) wire from the power pin to a REAL component
+        pin already on ``net_name`` (preferred), else to an existing net wire/
+        label point, so both ends land on real connectivity — never a dangling
+        stub.
+
+        Returns:
+          * a ``success: True`` result dict when a wire was drawn,
+          * a ``success: False`` refusal dict when a target exists but every
+            route would cross a DIFFERENT net's label or another component pin
+            (never silently short two nets / two pins), or
+          * ``None`` when the net has NO other connectivity to attach to — the
+            caller then falls back to the plain outward stub.
+        """
+        target, kind, target_ref = ConnectionManager._net_anchor_target(
+            schematic_path, net_name, pin_loc, power_ref
+        )
+        if target is None:
+            return None  # nothing on the net — caller draws the outward stub
+
+        obstacles = ConnectionManager._component_pin_obstacles(
+            schematic_path, exclude=[pin_loc, target]
+        )
+        net_points = ConnectionManager._existing_net_points(schematic_path)
+        path, blocker = ConnectionManager._route_power_wire(
+            pin_loc, target, obstacles, net_name, net_points
+        )
+        if path is None:
+            pt = blocker.get("point") if blocker else target
+            if blocker and blocker.get("kind") == "label":
+                msg = (
+                    f"Cannot wire floating power pin {power_ref} to net '{net_name}': every "
+                    f"route to {target_ref or 'the net'} at {target} would cross a different "
+                    f"'{blocker.get('net')}' net element at {pt}. Move the symbol or wire it "
+                    f"manually."
+                )
+                logger.error(msg)
+                return {
+                    "success": False,
+                    "message": msg,
+                    "label_collision": {"point": pt, "existing_net": blocker.get("net")},
+                }
+            msg = (
+                f"Cannot wire floating power pin {power_ref} to net '{net_name}': every route "
+                f"to {target_ref or 'the net'} at {target} would pass through another "
+                f"component pin at {pt}. Move the symbol or wire it manually."
+            )
+            logger.error(msg)
+            return {"success": False, "message": msg, "route_obstructed": {"point": pt}}
+
+        if not WireManager.add_polyline_wire(schematic_path, path):
+            msg = f"Failed to draw connecting wire for floating power pin {power_ref}"
+            logger.error(msg)
+            return {"success": False, "message": msg}
+
+        logger.info(
+            f"Floating power pin {power_ref} wired to {target_ref or net_name} at {target} "
+            f"via a {len(path)}-point route (net '{net_name}')"
+        )
+        anchor_desc = f"{target_ref} " if target_ref else "existing net connectivity "
+        return {
+            "success": True,
+            "pin_location": pin_loc,
+            "label_location": None,
+            # Compat: keep the [start, end] shape earlier callers read.
+            "wire_stub": [list(pin_loc), list(target)],
+            "wire_path": path,
+            "drew_stub_wire": True,  # compat with the previous key
+            "drew_wire": True,
+            "connected_to": {"ref": target_ref, "point": target, "kind": kind},
+            "power_symbol": {"ref": power_ref, "value": value},
+            "message": (
+                f"{power_ref} power-symbol pin was floating; drew an L-shaped wire from the "
+                f"pin at {pin_loc} to {anchor_desc}at {target} so it has REAL connectivity on "
+                f"net '{net_name}' (both ends land on a pin/wire — no dangling endpoint, no "
+                f"duplicate label)."
+            ),
+        }
+
+    @staticmethod
+    def _net_anchor_target(
+        schematic_path: Path,
+        net_name: str,
+        pin_loc: List[float],
+        self_ref: str,
+        eps: float = 0.01,
+    ) -> Tuple[Optional[List[float]], Optional[str], Optional[str]]:
+        """Nearest REAL connectivity for ``net_name`` to wire a power pin to.
+
+        Prefers the closest real component pin already on the net (resolved via
+        :meth:`get_net_connections`), excluding the power symbol itself and any
+        other power/flag symbol (``#…``). Falls back to the closest existing
+        net-bearing wire/label point. Returns ``(target_xy, kind, ref)`` where
+        ``kind`` is ``"pin"`` or ``"wire"``, or ``(None, None, None)`` when the
+        net has no other member.
+        """
+        locator = ConnectionManager.get_pin_locator()
+        best: Optional[Tuple[float, List[float], str]] = None
+        if locator is not None:
+            try:
+                sch = Schematic(str(schematic_path))
+                conns = ConnectionManager.get_net_connections(sch, net_name, schematic_path)
+            except Exception as e:  # best-effort — fall through to the point scan
+                logger.debug(f"_net_anchor_target: get_net_connections failed: {e}")
+                conns = []
+            for c in conns:
+                ref = str(c.get("component", "")).rstrip("_")
+                pin = c.get("pin")
+                if not ref or ref == self_ref or ref.startswith("#") or ref.startswith("_TEMPLATE"):
+                    continue
+                if pin in (None, "", "unknown"):
+                    continue
+                loc = locator.get_pin_location(schematic_path, ref, str(pin))
+                if not loc:
+                    continue
+                d = math.hypot(loc[0] - pin_loc[0], loc[1] - pin_loc[1])
+                if d <= eps:
+                    continue  # already coincident (shouldn't happen for a floating pin)
+                if best is None or d < best[0]:
+                    best = (d, [round(loc[0], 4), round(loc[1], 4)], ref)
+        if best is not None:
+            return best[1], "pin", best[2]
+
+        # Fallback: nearest existing net-bearing wire/label point (not the self pin).
+        cand: Optional[Tuple[float, List[float]]] = None
+        for px, py, net in ConnectionManager._existing_net_points(schematic_path):
+            if net != net_name:
+                continue
+            if abs(px - pin_loc[0]) <= eps and abs(py - pin_loc[1]) <= eps:
+                continue
+            d = math.hypot(px - pin_loc[0], py - pin_loc[1])
+            if cand is None or d < cand[0]:
+                cand = (d, [round(px, 4), round(py, 4)])
+        if cand is not None:
+            return cand[1], "wire", None
+        return None, None, None
+
+    @staticmethod
+    def _component_pin_obstacles(
+        schematic_path: Path,
+        exclude: List[List[float]],
+        eps: float = 0.01,
+    ) -> List[Tuple[float, float]]:
+        """World (x, y) of every placed component pin, minus points in ``exclude``.
+
+        A routed power wire must never pass straight through another component's
+        pin (that silently shorts it onto the power net), so those pins are
+        obstacles the router avoids. The wire's own endpoints (the power pin and
+        the target pin) are passed in ``exclude`` so they are not treated as
+        obstacles.
+        """
+        import sexpdata as _sexpdata
+
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                sch_data = _sexpdata.loads(f.read())
+        except (OSError, ValueError) as e:
+            logger.debug(f"_component_pin_obstacles: could not read {schematic_path}: {e}")
+            return []
+        out: List[Tuple[float, float]] = []
+        for x, y in WireManager._collect_pin_positions(sch_data):
+            if any(abs(x - ex) <= eps and abs(y - ey) <= eps for ex, ey in exclude):
+                continue
+            out.append((x, y))
+        return out
+
+    @staticmethod
+    def _route_candidate_paths(
+        pin_loc: List[float], target: List[float]
+    ) -> List[List[List[float]]]:
+        """Ordered orthogonal route candidates from ``pin_loc`` to ``target``.
+
+        The two L-routes (horizontal-first, then vertical-first) come first — a
+        clean L is always preferred over a diagonal. Perpendicular doglegs follow
+        so the router can skirt a pin that sits collinear between the endpoints.
+        Degenerate (zero-length) segments are collapsed.
+        """
+        sx, sy = float(pin_loc[0]), float(pin_loc[1])
+        tx, ty = float(target[0]), float(target[1])
+        raw: List[List[List[float]]] = [
+            [[sx, sy], [tx, sy], [tx, ty]],  # horizontal then vertical (preferred)
+            [[sx, sy], [sx, ty], [tx, ty]],  # vertical then horizontal
+        ]
+        for off in (
+            ConnectionManager._STUB_LEN,
+            -ConnectionManager._STUB_LEN,
+            2 * ConnectionManager._STUB_LEN,
+            -2 * ConnectionManager._STUB_LEN,
+        ):
+            raw.append([[sx, sy], [sx + off, sy], [sx + off, ty], [tx, ty]])
+            raw.append([[sx, sy], [sx, sy + off], [tx, sy + off], [tx, ty]])
+        return [ConnectionManager._dedupe_path(p) for p in raw]
+
+    @staticmethod
+    def _dedupe_path(path: List[List[float]], eps: float = 1e-6) -> List[List[float]]:
+        """Drop consecutive duplicate vertices so no zero-length segment is drawn."""
+        out: List[List[float]] = []
+        for p in path:
+            px, py = round(float(p[0]), 4), round(float(p[1]), 4)
+            if not out or abs(px - out[-1][0]) > eps or abs(py - out[-1][1]) > eps:
+                out.append([px, py])
+        return out
+
+    @staticmethod
+    def _route_blocked(
+        path: List[List[float]],
+        pin_loc: List[float],
+        target: List[float],
+        obstacles: List[Tuple[float, float]],
+        net_name: str,
+        net_points: List[Tuple[float, float, str]],
+        eps: float = 0.01,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a blocker dict if a segment of ``path`` crosses a DIFFERENT net's
+        label or another component pin (excluding the two endpoints), else None."""
+
+        def _is_endpoint(px: float, py: float) -> bool:
+            return (abs(px - pin_loc[0]) <= eps and abs(py - pin_loc[1]) <= eps) or (
+                abs(px - target[0]) <= eps and abs(py - target[1]) <= eps
+            )
+
+        segs = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
+        # 1. A different-net label anywhere on the route would merge the two nets.
+        for px, py, net in net_points:
+            if net == net_name or _is_endpoint(px, py):
+                continue
+            if any(ConnectionManager._point_on_segment_mm((px, py), a, b) for a, b in segs):
+                return {"kind": "label", "net": net, "point": [round(px, 4), round(py, 4)]}
+        # 2. Another component pin on the route would be shorted onto the net.
+        for ox, oy in obstacles:
+            if _is_endpoint(ox, oy):
+                continue
+            if any(ConnectionManager._point_on_segment_mm((ox, oy), a, b) for a, b in segs):
+                return {"kind": "pin", "net": None, "point": [round(ox, 4), round(oy, 4)]}
+        return None
+
+    @staticmethod
+    def _route_power_wire(
+        pin_loc: List[float],
+        target: List[float],
+        obstacles: List[Tuple[float, float]],
+        net_name: str,
+        net_points: List[Tuple[float, float, str]],
+        eps: float = 0.01,
+    ) -> Tuple[Optional[List[List[float]]], Optional[Dict[str, Any]]]:
+        """Pick the first orthogonal route from ``pin_loc`` to ``target`` that
+        crosses no other component pin and no different-net label.
+
+        Returns ``(path, None)`` for the first clean candidate, or
+        ``(None, blocker)`` when every candidate is obstructed (``blocker`` names
+        the offending element; a label collision is reported in preference to a
+        pin collision, being the more actionable of the two).
+        """
+        first_blocker: Optional[Dict[str, Any]] = None
+        for path in ConnectionManager._route_candidate_paths(pin_loc, target):
+            blk = ConnectionManager._route_blocked(
+                path, pin_loc, target, obstacles, net_name, net_points, eps
+            )
+            if blk is None:
+                return path, None
+            if first_blocker is None or (
+                blk.get("kind") == "label" and first_blocker.get("kind") != "label"
+            ):
+                first_blocker = blk
+        return None, first_blocker
 
     @staticmethod
     def connect_passthrough(
