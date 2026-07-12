@@ -68,8 +68,11 @@ class ConnectionManager:
                 logger.error(msg)
                 return {"success": False, "message": msg}
 
-            # Add a small wire stub from the pin (2.54mm = 0.1 inch, standard grid spacing)
-            # Stub direction follows the pin's outward angle from the PinLocator
+            # Add a small wire stub from the pin (2.54mm = 0.1 inch, standard grid
+            # spacing). get_pin_angle returns the OUTWARD direction (away from the
+            # symbol body) in the (cos θ, -sin θ) screen convention used below, so
+            # the stub — and the label at its far end — always land clear of the
+            # symbol, for every pin orientation under any rotation/mirror.
             try:
                 pin_angle_deg = locator.get_pin_angle(schematic_path, component_ref, pin_name) or 0
             except Exception as e:
@@ -85,6 +88,12 @@ class ConnectionManager:
                 round(pin_loc[1] - 2.54 * _math.sin(angle_rad), 4),
             ]
 
+            # Orient the label text so it reads outward from the pin rather than
+            # back over the symbol body. The outward angle is already ~0/90/180/270
+            # for axis-aligned pins; snap to a KiCad label orientation (WireManager
+            # picks the matching horizontal justify from this).
+            label_orientation = int(round(pin_angle_deg / 90.0) * 90) % 360
+
             # Create wire stub using WireManager
             wire_success = WireManager.add_wire(schematic_path, pin_loc, stub_end)
             if not wire_success:
@@ -94,7 +103,11 @@ class ConnectionManager:
 
             # Add label at the end of the stub using WireManager
             label_success = WireManager.add_label(
-                schematic_path, net_name, stub_end, label_type="label"
+                schematic_path,
+                net_name,
+                stub_end,
+                label_type="label",
+                orientation=label_orientation,
             )
             if not label_success:
                 msg = f"Failed to add net label '{net_name}'"

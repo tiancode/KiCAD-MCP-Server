@@ -247,6 +247,100 @@ class KiCADProcessManager:
         logger.warning("Could not find KiCAD executable")
         return None
 
+    # KiCad's Flatpak application id (system-wide and user-local installs
+    # share it).  Used to build the ``flatpak run --command=pcbnew`` form
+    # when no native pcbnew binary is on disk.
+    _FLATPAK_APP_ID = "org.kicad.KiCad"
+
+    @staticmethod
+    def _flatpak_kicad_installed() -> bool:
+        """True when KiCad is present as a Flatpak (system or user scope)."""
+        app = KiCADProcessManager._FLATPAK_APP_ID
+        candidates = [
+            Path("/var/lib/flatpak/app") / app,
+            Path.home() / ".local/share/flatpak/app" / app,
+        ]
+        return any(p.exists() for p in candidates)
+
+    @staticmethod
+    def get_pcb_editor_path() -> Optional[Path]:
+        """Locate the standalone PCB editor (``pcbnew``) executable.
+
+        Opening a ``.kicad_pcb`` requires the *standalone PCB editor*, NOT the
+        ``kicad`` project manager: on KiCad 10.x ``kicad <board.kicad_pcb>``
+        only raises the project manager with no board document open over IPC
+        (so the PCB-editor gate never lifts), whereas ``pcbnew <board.kicad_pcb>``
+        opens the editor frame whose IPC server exposes the board.
+
+        Resolution order:
+          1. a ``pcbnew`` binary next to the resolved ``kicad``/``pcbnew``
+             executable (covers non-PATH installs found by
+             ``get_executable_path``);
+          2. ``pcbnew`` on PATH;
+          3. platform default install locations.
+
+        Returns None when only a Flatpak install is present (callers use
+        ``get_pcb_editor_command`` for the ``flatpak run`` form) or nothing is
+        found.
+        """
+        system = platform.system()
+        exe_name = "pcbnew.exe" if system == "Windows" else "pcbnew"
+
+        # 1. Sibling of the resolved project-manager/editor executable — so a
+        #    non-standard install picked up by get_executable_path yields the
+        #    matching pcbnew from the same bin dir.
+        base = KiCADProcessManager.get_executable_path()
+        if base is not None:
+            sibling = base.parent / exe_name
+            if sibling.exists():
+                return sibling
+
+        # 2. PATH.
+        which = shutil.which("pcbnew")
+        if which:
+            return Path(which)
+
+        # 3. Platform defaults.
+        if system == "Linux":
+            candidates = [Path("/usr/bin/pcbnew"), Path("/usr/local/bin/pcbnew")]
+        elif system == "Darwin":  # macOS
+            candidates = [
+                Path("/Applications/KiCad/KiCad.app/Contents/MacOS/pcbnew"),
+                Path("/Applications/KiCad/pcbnew.app/Contents/MacOS/pcbnew"),
+            ]
+        elif system == "Windows":
+            candidates = [
+                Path("C:/Program Files/KiCad/9.0/bin/pcbnew.exe"),
+                Path("C:/Program Files/KiCad/8.0/bin/pcbnew.exe"),
+                Path("C:/Program Files (x86)/KiCad/9.0/bin/pcbnew.exe"),
+            ]
+        else:
+            candidates = []
+        for path in candidates:
+            if path.exists():
+                logger.info(f"Found KiCAD PCB editor: {path}")
+                return path
+        return None
+
+    @staticmethod
+    def get_pcb_editor_command(board_path: Optional[Path] = None) -> Optional[List[str]]:
+        """Argv to launch the standalone PCB editor, optionally opening ``board_path``.
+
+        Prefers a native ``pcbnew`` binary (``get_pcb_editor_path``); falls back
+        to ``flatpak run --command=pcbnew org.kicad.KiCad`` when only a Flatpak
+        install is present.  Returns None when no PCB editor can be located.
+        """
+        exe = KiCADProcessManager.get_pcb_editor_path()
+        if exe is not None:
+            cmd = [str(exe)]
+        elif KiCADProcessManager._flatpak_kicad_installed():
+            cmd = ["flatpak", "run", "--command=pcbnew", KiCADProcessManager._FLATPAK_APP_ID]
+        else:
+            return None
+        if board_path is not None:
+            cmd.append(str(board_path))
+        return cmd
+
     @staticmethod
     def ensure_ipc_api_enabled() -> bool:
         """Flip ``api.enable_server`` to true in every kicad_common.json found.
@@ -316,16 +410,23 @@ class KiCADProcessManager:
             # IPC backend can attach without manual Preferences clicks.
             KiCADProcessManager.ensure_ipc_api_enabled()
 
-            # Find executable
-            exe_path = KiCADProcessManager.get_executable_path()
-            if not exe_path:
-                logger.error("Cannot launch KiCAD: executable not found")
-                return False
+            # Build command.  A .kicad_pcb must be opened with the standalone
+            # PCB editor (pcbnew): `kicad <board.kicad_pcb>` only raises the
+            # project manager with no board document open over IPC (verified on
+            # KiCad 10.x), which then keeps the PCB-editor gate closed.  A
+            # project file / no path goes to the project manager as before.
+            cmd: Optional[List[str]] = None
+            if project_path is not None and Path(project_path).suffix == ".kicad_pcb":
+                cmd = KiCADProcessManager.get_pcb_editor_command(Path(project_path))
 
-            # Build command
-            cmd = [str(exe_path)]
-            if project_path:
-                cmd.append(str(project_path))
+            if cmd is None:
+                exe_path = KiCADProcessManager.get_executable_path()
+                if not exe_path:
+                    logger.error("Cannot launch KiCAD: executable not found")
+                    return False
+                cmd = [str(exe_path)]
+                if project_path:
+                    cmd.append(str(project_path))
 
             logger.info(f"Launching KiCAD: {' '.join(cmd)}")
 

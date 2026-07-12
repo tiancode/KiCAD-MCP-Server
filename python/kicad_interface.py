@@ -1148,7 +1148,11 @@ class KiCADInterface(BoardPersistenceMixin):
         Sequence:
           1. Already connected → return immediately.
           2. KiCAD is running but we never connected → try to attach.
-          3. KiCAD not running and ``allow_launch`` (gated by KICAD_AUTO_LAUNCH
+          3. KiCAD running but the reachable IPC won't serve a board (the bare
+             project-manager "not ready to reply" state) → don't poll the
+             launch loop for the full timeout; go straight to the board
+             auto-open self-heal (spawn a standalone ``pcbnew <board>``).
+          4. KiCAD not running and ``allow_launch`` (gated by KICAD_AUTO_LAUNCH
              ≠ "false") → launch it (with the known board path, so the PCB
              editor opens directly) and poll for the socket.
 
@@ -1209,20 +1213,48 @@ class KiCADInterface(BoardPersistenceMixin):
                 "(KICAD_AUTO_LAUNCH=false). Start KiCAD manually or call launch_kicad_ui.",
             )
 
-        # Launch KiCAD and poll for the socket.  Pass the known board path
-        # so the cold start opens the PCB editor directly instead of a bare
-        # project manager that would then fail the editor gate.
-        if not KiCADProcessManager.is_running():
-            logger.info("Auto-launching KiCAD UI to satisfy IPC requirement")
-            launched = KiCADProcessManager.launch(
-                self._board_path_for_auto_open(), wait_for_start=True
+        # KiCAD is already running but we couldn't get a usable IPC board API.
+        # The classic cause is a bare *project manager*: it owns the IPC socket
+        # but has no editor frame, so every request comes back "KiCad is not
+        # ready to reply" (a fast error, not a hang) and NO amount of polling
+        # that socket will ever make it ready — it needs a board editor frame.
+        # Falling into the launch/poll loop below and waiting the full
+        # ``timeout_s`` here would just stall the gated call until the TS
+        # layer's 30 s tool timeout fires and restarts the worker.  Instead go
+        # straight to the board auto-open self-heal, which spawns a standalone
+        # ``pcbnew <board>`` (lockfile-guarded) alongside the project manager
+        # and polls get_open_documents() for the board to appear.
+        # ``_try_auto_open_board`` is itself time-bounded and arms a 60 s
+        # cooldown on failure, so the whole gated call stays well inside the
+        # tool timeout and, when it can't heal, falls back to the structured
+        # needs_pcb_editor gate.
+        if KiCADProcessManager.is_running():
+            if require_pcb_editor and self._try_auto_open_board():
+                self._try_enable_ipc_backend(force=True)
+                if _connected():
+                    return _check_editor_gate() or (True, "")
+            if require_pcb_editor:
+                return (False, self._pcb_editor_gate_reason())
+            return (
+                False,
+                "KiCAD is running but the IPC API server is not reachable "
+                "(the project manager answered 'KiCad is not ready to reply'; "
+                "no board editor frame is open). Open a board in KiCAD, or "
+                "enable Preferences > Plugins > Enable IPC API Server if it "
+                "is off.",
             )
-            if not launched:
-                return (
-                    False,
-                    "KiCAD executable not found or failed to launch. "
-                    "Install KiCAD or set its location on PATH.",
-                )
+
+        # KiCAD is NOT running → cold launch.  Pass the known board path so the
+        # cold start opens the PCB editor directly (pcbnew <board>) instead of a
+        # bare project manager that would then fail the editor gate.
+        logger.info("Auto-launching KiCAD UI to satisfy IPC requirement")
+        launched = KiCADProcessManager.launch(self._board_path_for_auto_open(), wait_for_start=True)
+        if not launched:
+            return (
+                False,
+                "KiCAD executable not found or failed to launch. "
+                "Install KiCAD or set its location on PATH.",
+            )
 
         deadline = time.monotonic() + max(1.0, timeout_s)
         while time.monotonic() < deadline:

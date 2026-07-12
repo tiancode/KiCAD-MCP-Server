@@ -19,6 +19,45 @@ if TYPE_CHECKING:
 logger = logging.getLogger("handlers.schematic_io")
 
 
+def _reload_swig_after_sync(iface: "KiCADInterface", board_path: str) -> bool:
+    """Reload the SWIG in-memory board from ``board_path`` after a sync wrote it.
+
+    ``sync_schematic_to_board`` mutates the long-lived process's
+    ``pcbnew.BOARD`` in place (adds footprints/nets, reassigns pad nets) and
+    saves it to disk.  Reloading from disk afterwards keeps the process holding
+    the *canonical* on-disk board rather than an in-place-mutated proxy:
+
+      * the in-memory board then matches exactly what was written, so a later
+        ``get_component_list`` / ``place_component`` / ``move_component`` can
+        never read a stale board;
+      * the recorded disk signature is re-aligned to the on-disk content, so
+        ``reconcile_backends`` doesn't misreport an external change and the
+        dispatcher's follow-up ``_auto_save_board`` is a harmless no-op re-save;
+      * it inherits ``_safe_load_board``'s SWIG-dehydration recovery.
+
+    Returns True if the reload succeeded.  On failure the in-place-mutated board
+    is left in place — it already matches disk (we just saved it) and its
+    recorded signature is still correct — so callers degrade gracefully instead
+    of dropping to a ``None`` board.
+    """
+    reloaded = iface._safe_load_board(board_path)
+    if reloaded is None:
+        logger.warning(
+            "sync_schematic_to_board: could not reload SWIG board from %s after "
+            "sync; keeping the in-place-mutated board (already saved to disk)",
+            board_path,
+        )
+        return False
+    iface.board = reloaded
+    iface._update_command_handlers()
+    # Re-record against the freshly-loaded board so the signature matches the
+    # on-disk content byte-for-byte (the in-place save above already recorded
+    # it; this keeps them aligned even if _safe_load_board recovered a
+    # dehydrated proxy via a pcbnew module reload).
+    iface._record_board_signature(board_path)
+    return True
+
+
 def handle_sync_schematic_to_board(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -126,6 +165,23 @@ def handle_sync_schematic_to_board(
             iface.board = board
             iface._update_command_handlers()
 
+        # The sync just rewrote the .kicad_pcb on disk.  Reload the SWIG board
+        # from disk so the long-lived process holds the canonical post-sync
+        # board — otherwise the next place/move/get_component_list would read
+        # the in-place-mutated proxy (and, worse, a later auto-save could
+        # round-trip that proxy).  On reload failure the in-place board stays
+        # (it already matches disk), so we never drop to a None board.
+        board_reloaded = _reload_swig_after_sync(iface, board_path)
+
+        # SWIG landed new content on disk that a running KiCad instance (if any)
+        # hasn't picked up.  Flag the SWIG->IPC divergence so get_backend_info /
+        # reconcile_backends report it truthfully and any later IPC save is
+        # gated (the dispatcher's post-handler auto-save sets this too; setting
+        # it here keeps the handler correct on its own regardless of the
+        # command's auto-save classification).
+        iface._swig_writes_landed = True
+        ipc_attached = getattr(iface, "ipc_board_api", None) is not None
+
         logger.info(
             f"sync_schematic_to_board: {len(added_nets)} nets added, "
             f"{len(added_footprints)} footprints added, {assigned_pads} pads assigned"
@@ -147,7 +203,7 @@ def handle_sync_schematic_to_board(
                     f"y in [{min(ys)}, {max(ys)}] mm. "
                     f"Call move_component on each ref to reposition."
                 )
-        return {
+        response: Dict[str, Any] = {
             "success": True,
             "message": (
                 f"PCB updated from schematic: {len(added_footprints)} footprints added, "
@@ -160,7 +216,23 @@ def handle_sync_schematic_to_board(
             "footprints_added": added_footprints,
             "footprints_skipped": skipped_footprints,
             "layout_note": layout_note,
+            # The in-memory SWIG board was reloaded from disk so subsequent
+            # place/move/get_component_list calls see the synced footprints.
+            "boardReloaded": board_reloaded,
         }
+        if ipc_attached:
+            # KiCad has the same board open over IPC; its live in-memory copy is
+            # now OLDER than disk and does NOT reflect this sync.
+            response["ipcStale"] = True
+            response["ipcStaleHint"] = (
+                "This sync wrote new content to the .kicad_pcb on disk via the "
+                "SWIG path. KiCad's live in-memory board (open over IPC) is now "
+                "OLDER than disk and does NOT show these changes. Call "
+                "`reconcile_backends` (direction=swig_to_ipc) to reload KiCad "
+                "from disk (via board.revert()), or reload manually in KiCad "
+                "(File -> Revert from saved)."
+            )
+        return response
 
     except Exception as e:
         logger.error(f"Error in sync_schematic_to_board: {e}")

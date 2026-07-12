@@ -125,22 +125,29 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
   // ------------------------------------------------------
   server.tool(
     "export_bom",
-    "Export a Bill of Materials (BOM) from the PCB.",
+    "Export a Bill of Materials (BOM) from the PCB. Mounting holes and board hardware " +
+      "(ref prefix MH or MountingHole footprint) are excluded by default — set " +
+      "includeMountingHoles to keep them; the response reports excludedMountingHoles.",
     {
       outputPath: z.string().describe("Path to save the BOM file"),
       format: z.enum(["CSV", "XML", "HTML", "JSON"]).describe("BOM file format"),
       groupByValue: z.boolean().optional().describe("Group components by value"),
+      includeMountingHoles: z
+        .boolean()
+        .optional()
+        .describe("Include mounting holes / board hardware (default false)"),
       includeAttributes: z
         .array(z.string())
         .optional()
         .describe("Additional attributes to include"),
     },
-    async ({ outputPath, format, groupByValue, includeAttributes }) => {
+    async ({ outputPath, format, groupByValue, includeMountingHoles, includeAttributes }) => {
       logger.debug(`Exporting BOM to: ${outputPath}`);
       const result = await callKicadScript("export_bom", {
         outputPath,
         format,
         groupByValue,
+        includeMountingHoles,
         includeAttributes,
       });
 

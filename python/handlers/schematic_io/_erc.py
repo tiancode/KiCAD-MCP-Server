@@ -169,6 +169,278 @@ def _violation_mentions_power_label(
     return False
 
 
+# ---------------------------------------------------------------------------
+# KiCad 10.x position-based net resolution.
+#
+# On KiCad 10.0.4 the ``power_pin_not_driven`` ERC JSON carries neither a net
+# name in the description nor a per-item ``net`` field — only the pin position
+# (``items[].pos``).  ``_violation_mentions_power_label`` therefore returns
+# False and the violation is never tagged, so a label-driven power rail with no
+# PWR_FLAG shows up as a hard error with no recommendation (the reported bug).
+#
+# To recover the tag we resolve the offending pin's net ourselves: walk the
+# wire network out from the (rescaled) pin position to the label that names the
+# net, then apply the same "labeled power net with no PWR_FLAG driver" rule the
+# 9.x path uses.  All coordinates are schematic millimetres.
+# ---------------------------------------------------------------------------
+
+# Direct pin<->label spatial match: a connect_to_net stub is one 0.1in grid
+# (2.54 mm); allow two so an off-by-a-grid label still resolves without jumping
+# to an unrelated net.
+_LABEL_MATCH_TOLERANCE_MM = 5.08
+# Coincident-point tolerance when following the wire graph / matching a label
+# that sits exactly on a wire vertex.
+_WIRE_JOIN_EPS_MM = 0.05
+
+
+def _is_power_ish_name(name: Optional[str]) -> bool:
+    """True when a net name looks like a power rail (VCC / GND / +3V3 ...)."""
+    if not name:
+        return False
+    upper = name.upper()
+    return any(pat in upper for pat in _COMMON_POWER_NET_PATTERNS)
+
+
+def _collect_net_label_geometry(schematic_path: str):
+    """Parse a .kicad_sch for the geometry needed to resolve a pin's net.
+
+    Returns ``(labels, wires, pwr_flag_positions)`` where
+
+    * ``labels`` is ``[(name, x, y), ...]`` for local / global / hierarchical
+      labels plus placed ``power:<NET>`` symbols (the symbol Value names the
+      net),
+    * ``wires`` is ``[(x1, y1, x2, y2), ...]`` segment endpoints, and
+    * ``pwr_flag_positions`` is ``[(x, y), ...]`` for every placed
+      ``power:PWR_FLAG`` symbol.
+
+    All coordinates are schematic millimetres (the same frame as the rescaled
+    ERC ``pos``).  Best-effort: returns empty lists on any parse failure.
+    """
+    labels: List = []
+    wires: List = []
+    pwr_flags: List = []
+    try:
+        with open(schematic_path, "r", encoding="utf-8") as f:
+            tree = sexpdata.loads(f.read())
+    except Exception as e:
+        logger.debug("Could not parse %s for net geometry: %s", schematic_path, e)
+        return labels, wires, pwr_flags
+
+    def _sym(x: Any) -> str:
+        try:
+            return x.value() if hasattr(x, "value") else str(x)
+        except Exception:
+            return ""
+
+    def _direct_at(node: Any):
+        # The instance/label placement is a *direct* child ``(at x y ...)``;
+        # nested property/pin ``at`` fields are ignored.
+        for child in node[1:]:
+            if isinstance(child, list) and child and _sym(child[0]) == "at" and len(child) >= 3:
+                try:
+                    return float(child[1]), float(child[2])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _walk(node: Any) -> None:
+        if not isinstance(node, list) or not node:
+            return
+        head = _sym(node[0])
+        if head in ("label", "global_label", "hierarchical_label"):
+            if len(node) >= 2 and isinstance(node[1], str):
+                at = _direct_at(node)
+                if at:
+                    labels.append((node[1], at[0], at[1]))
+        elif head == "wire":
+            pts = next(
+                (c for c in node[1:] if isinstance(c, list) and c and _sym(c[0]) == "pts"),
+                None,
+            )
+            if pts is not None:
+                xy = [
+                    c
+                    for c in pts[1:]
+                    if isinstance(c, list) and c and _sym(c[0]) == "xy" and len(c) >= 3
+                ]
+                if len(xy) >= 2:
+                    try:
+                        wires.append(
+                            (
+                                float(xy[0][1]),
+                                float(xy[0][2]),
+                                float(xy[1][1]),
+                                float(xy[1][2]),
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        pass
+        elif head == "symbol":
+            # Only *placed* symbols carry a direct ``lib_id`` child; lib_symbols
+            # definitions name themselves via node[1] and are skipped here.
+            lib_id_text = None
+            value_text = None
+            for child in node[1:]:
+                if isinstance(child, list) and child:
+                    chead = _sym(child[0])
+                    if chead == "lib_id" and len(child) >= 2 and isinstance(child[1], str):
+                        lib_id_text = child[1]
+                    elif (
+                        chead == "property"
+                        and len(child) >= 3
+                        and child[1] == "Value"
+                        and isinstance(child[2], str)
+                    ):
+                        value_text = child[2]
+            at = _direct_at(node)
+            if lib_id_text and at and lib_id_text.lower().startswith("power:"):
+                if lib_id_text.lower().endswith(":pwr_flag"):
+                    pwr_flags.append((at[0], at[1]))
+                elif value_text:
+                    labels.append((value_text, at[0], at[1]))
+        for child in node[1:]:
+            _walk(child)
+
+    _walk(tree)
+    return labels, wires, pwr_flags
+
+
+def _nearest_net_label(x: float, y: float, labels: List, tolerance: float) -> Optional[str]:
+    """Name of the label closest to (x, y) within ``tolerance`` mm, else None."""
+    best: Optional[str] = None
+    best_d: Optional[float] = None
+    for name, lx, ly in labels:
+        d = ((lx - x) ** 2 + (ly - y) ** 2) ** 0.5
+        if d <= tolerance and (best_d is None or d < best_d):
+            best_d = d
+            best = name
+    return best
+
+
+def _resolve_net_via_geometry(
+    x: Optional[float], y: Optional[float], labels: List, wires: List
+) -> Optional[str]:
+    """Net name for the pin at (x, y) mm, resolved from schematic geometry.
+
+    Walks the wire network out from the pin (each ``connect_to_net`` stub is a
+    ``wire pin -> label``) and returns the name of any label sitting on a
+    reachable vertex.  Falls back to the nearest label within a couple of grid
+    units when the pin is not on a traceable vertex.  Returns None when nothing
+    plausibly names the net (e.g. a genuinely floating pin).
+    """
+    if x is None or y is None:
+        return None
+    visited: set = set()
+    stack = [(x, y)]
+    while stack:
+        cx, cy = stack.pop()
+        key = (round(cx, 3), round(cy, 3))
+        if key in visited:
+            continue
+        visited.add(key)
+        hit = _nearest_net_label(cx, cy, labels, _WIRE_JOIN_EPS_MM)
+        if hit:
+            return hit
+        for x1, y1, x2, y2 in wires:
+            if abs(cx - x1) <= _WIRE_JOIN_EPS_MM and abs(cy - y1) <= _WIRE_JOIN_EPS_MM:
+                stack.append((x2, y2))
+            elif abs(cx - x2) <= _WIRE_JOIN_EPS_MM and abs(cy - y2) <= _WIRE_JOIN_EPS_MM:
+                stack.append((x1, y1))
+    return _nearest_net_label(x, y, labels, _LABEL_MATCH_TOLERANCE_MM)
+
+
+def _classify_power_pin_fp(
+    vtype: str,
+    vmsg: str,
+    items: Optional[list],
+    loc: Dict[str, Any],
+    power_label_names: set,
+    power_ish_labels: set,
+    net_labels: List,
+    wires: List,
+    nets_with_pwr_flag: set,
+    has_any_pwr_flag: bool,
+) -> Optional[Dict[str, Any]]:
+    """Decide whether a power-pin-not-driven violation is the PWR_FLAG
+    false-positive class.
+
+    Returns ``None`` when it is not (a genuine issue, or not this class), else
+    ``{"net": str | None, "reason": str, "rec_nets": [str, ...]}`` where
+    ``rec_nets`` are the nets to fold into the aggregate add_pwr_flag
+    recommendation.
+
+    Detection paths:
+
+    * **KiCad 9** — a net name / power label is present in the description or a
+      per-item field (``_violation_mentions_power_label``).  Unchanged.
+    * **KiCad 10** — the message is the generic "Input Power pin not driven by
+      any Output Power pins" with no net anywhere.  The pin position (``loc``,
+      already rescaled to mm) is walked out along the wires to the label that
+      names the net; a power-ish net with no PWR_FLAG driver is the FP.
+    * **Fallback** — the position could not be resolved, but the schematic has
+      power rails and zero PWR_FLAG symbols, so every power-input pin is
+      undriven for exactly the PWR_FLAG reason.
+    """
+    if not _is_power_not_driven(vtype, vmsg):
+        return None
+
+    if _violation_mentions_power_label(vmsg, power_label_names, items):
+        net = _extract_net_from_violation(vmsg, items)
+        return {
+            "net": net,
+            "reason": (
+                "A power label on this net is the only driver. "
+                "kicad-cli ERC expects a PWR_FLAG symbol on power "
+                "inputs even when labels make the netlist correct."
+            ),
+            "rec_nets": [net] if net else [],
+        }
+
+    # KiCad 10: no net name in the description or items — resolve it from the
+    # pin position via schematic geometry.
+    if loc:
+        net = _resolve_net_via_geometry(loc.get("x"), loc.get("y"), net_labels, wires)
+        if net and not _is_power_ish_name(net):
+            # A power-input pin wired onto a non-power (signal) net is a real
+            # design error, not the PWR_FLAG false positive — leave it counted.
+            return None
+        if net and net in nets_with_pwr_flag:
+            # The net already carries a PWR_FLAG yet ERC still complains: do not
+            # mask what is most likely a genuine wiring problem.
+            return None
+        if net:
+            return {
+                "net": net,
+                "reason": (
+                    "ERC reported no net name (KiCad 10.x). The flagged pin at "
+                    f"({loc.get('x'):.2f}, {loc.get('y'):.2f}) mm resolves to power "
+                    f"net '{net}', whose only driver is a label (no PWR_FLAG). "
+                    "kicad-cli ERC flags label-driven power inputs even when the "
+                    "netlist is correct; add a PWR_FLAG on this net to clear it."
+                ),
+                "rec_nets": [net],
+            }
+
+    # Fallback: position unresolved.  Only safe to tag when there is no PWR_FLAG
+    # anywhere AND the schematic actually has power rails — then this whole
+    # violation class is the PWR_FLAG false positive.  The named nets are a best
+    # guess, so the reason says so.
+    if not has_any_pwr_flag and power_ish_labels:
+        return {
+            "net": None,
+            "reason": (
+                "ERC reported no net name and the pin position could not be "
+                "matched to a wire/label, but the schematic has power rails ("
+                + ", ".join(sorted(power_ish_labels))
+                + ") and no PWR_FLAG symbols at all, so label-driven power "
+                "inputs are flagged for the PWR_FLAG reason. Heuristic: confirm "
+                "the pin is on a power rail before relying on this."
+            ),
+            "rec_nets": sorted(power_ish_labels),
+        }
+    return None
+
+
 def _sexp_head(node: Any) -> Optional[str]:
     """The leading symbol of an S-expression list (e.g. 'symbol'), else None."""
     if isinstance(node, list) and node and hasattr(node[0], "value"):
@@ -388,6 +660,31 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
             # though the netlist is correct.
             power_label_names = _collect_power_label_names(schematic_path)
 
+            # KiCad 10.x emits power_pin_not_driven with NO net name (only a pin
+            # position), so the 9.x message/items check can't tag it.  Parse the
+            # schematic geometry once — labels, wires and PWR_FLAG placements —
+            # so those violations can be resolved to a net by position below.
+            # Only pay for it when such a violation is actually present.
+            need_net_geometry = any(
+                _is_power_not_driven(v.get("type", ""), v.get("description", ""))
+                for v in all_violations
+            )
+            if need_net_geometry:
+                net_labels, net_wires, pwr_flag_positions = _collect_net_label_geometry(
+                    schematic_path
+                )
+            else:
+                net_labels, net_wires, pwr_flag_positions = [], [], []
+            power_ish_labels = {n for n in power_label_names if _is_power_ish_name(n)}
+            has_any_pwr_flag = bool(pwr_flag_positions)
+            # Nets that already carry a PWR_FLAG driver — a power_pin_not_driven
+            # on one of these is NOT the false positive (do not mask it).
+            nets_with_pwr_flag: set = set()
+            for _pfx, _pfy in pwr_flag_positions:
+                _pf_net = _resolve_net_via_geometry(_pfx, _pfy, net_labels, net_wires)
+                if _pf_net:
+                    nets_with_pwr_flag.add(_pf_net)
+
             # KiCad-CLI ERC JSON unit bug (observed on 10.0.3): the header
             # claims ``coordinate_units: "mm"`` but ``items[].pos`` is
             # actually serialised as schematic internal-units / 10000 — a
@@ -437,19 +734,26 @@ def handle_run_erc(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
                     "message": vmsg,
                     "location": loc,
                 }
-                if _is_power_not_driven(vtype, vmsg) and _violation_mentions_power_label(
-                    vmsg, power_label_names, items
-                ):
+                power_fp = _classify_power_pin_fp(
+                    vtype,
+                    vmsg,
+                    items,
+                    loc,
+                    power_label_names,
+                    power_ish_labels,
+                    net_labels,
+                    net_wires,
+                    nets_with_pwr_flag,
+                    has_any_pwr_flag,
+                )
+                if power_fp is not None:
                     annotated["likely_false_positive"] = True
-                    annotated["reason"] = (
-                        "A power label on this net is the only driver. "
-                        "kicad-cli ERC expects a PWR_FLAG symbol on power "
-                        "inputs even when labels make the netlist correct."
-                    )
-                    extracted_net = _extract_net_from_violation(vmsg, items)
-                    if extracted_net:
-                        annotated["net"] = extracted_net
-                        pwrflag_target_nets.add(extracted_net)
+                    annotated["reason"] = power_fp["reason"]
+                    if power_fp["net"]:
+                        annotated["net"] = power_fp["net"]
+                    for _net in power_fp["rec_nets"]:
+                        if _net:
+                            pwrflag_target_nets.add(_net)
                     pwrflag_fp_count += 1
                 elif vtype == "lib_symbol_mismatch":
                     if _mismatch_is_false_positive(vmsg, embedded_matches_disk):

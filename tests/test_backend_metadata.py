@@ -705,20 +705,25 @@ def test_create_project_default_auto_launches_kicad_ui(monkeypatch, tmp_path):
     this is the flip the user asked for.  Previously create_project was
     pure file I/O, which left the agent stuck on SWIG by default.
 
-    Critically: we must hand KiCAD the .kicad_pro FILE, not its parent
-    directory.  The previous version of this test stubbed
-    _project_path_from_filename with an identity lambda and masked the
-    fact that the real method returns p.parent — so production passed a
-    directory to `kicad <path>` and the project never actually opened.
-    This test now uses the real launch-file resolver and asserts on the
-    .kicad_pro path.
+    Critically: we must hand KiCAD a real FILE, not its parent directory.
+    The previous version of this test stubbed _project_path_from_filename
+    with an identity lambda and masked the fact that the real method returns
+    p.parent — so production passed a directory to `kicad <path>` and the
+    project never actually opened.  This test uses the real launch-file
+    resolver and asserts on the launched file.
+
+    Because the project has a .kicad_pcb, the launcher must prefer the
+    standalone PCB editor (pcbnew <board>) so the IPC backend can attach to
+    an actual board — a bare project manager owns the IPC socket but has no
+    editor frame and answers every board request "not ready to reply".
     """
     from handlers import project as project_handler
 
     calls: Dict[str, Any] = {}
     project_file = tmp_path / "demo.kicad_pro"
     project_file.write_text("(kicad_project)\n", encoding="utf-8")
-    (tmp_path / "demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
+    board_file = tmp_path / "demo.kicad_pcb"
+    board_file.write_text("(kicad_pcb)\n", encoding="utf-8")
 
     def fake_check_and_launch(project_path, auto_launch=True):
         calls["project_path"] = project_path
@@ -756,10 +761,11 @@ def test_create_project_default_auto_launches_kicad_ui(monkeypatch, tmp_path):
 
     assert result["success"] is True
     assert calls["auto_launch"] is True
-    # The .kicad_pro FILE must be passed to KiCAD, not the parent dir.
+    # A real FILE must be passed to KiCAD, not the parent dir; and because a
+    # board exists, it must be the .kicad_pcb (standalone PCB editor).
     assert (
-        calls["project_path"] == project_file
-    ), f"KiCAD should be launched with the .kicad_pro file, got {calls['project_path']}"
+        calls["project_path"] == board_file
+    ), f"KiCAD should be launched with the .kicad_pcb file, got {calls['project_path']}"
     assert result["kicadUi"]["attempted"] is True
     assert result["kicadUi"]["launched"] is True
     assert result["kicadUi"]["running"] is True
@@ -833,16 +839,19 @@ def test_open_project_launches_with_kicad_pro_file_not_parent_dir(monkeypatch, t
 
     open_project passes the value from the result/params through
     _project_path_from_filename (which returns the PARENT directory)
-    for symbol-library refresh, but the auto-launcher needs the
-    .kicad_pro FILE — otherwise KiCAD opens to a directory and the
-    project never actually loads in the UI.
+    for symbol-library refresh, but the auto-launcher needs a real FILE
+    — otherwise KiCAD opens to a directory and the project never actually
+    loads in the UI.  When the project has a board, that file is the
+    .kicad_pcb (standalone PCB editor) so the IPC backend can attach to a
+    real board instead of a bare, "not ready" project manager.
     """
     from handlers import project as project_handler
 
     calls: Dict[str, Any] = {}
     project_file = tmp_path / "demo.kicad_pro"
     project_file.write_text("(kicad_project)\n", encoding="utf-8")
-    (tmp_path / "demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
+    board_file = tmp_path / "demo.kicad_pcb"
+    board_file.write_text("(kicad_pcb)\n", encoding="utf-8")
 
     def fake_check_and_launch(project_path, auto_launch=True):
         calls["project_path"] = project_path
@@ -877,8 +886,54 @@ def test_open_project_launches_with_kicad_pro_file_not_parent_dir(monkeypatch, t
 
     assert result["success"] is True
     assert (
+        calls["project_path"] == board_file
+    ), f"open_project should launch the PCB editor with the .kicad_pcb, got {calls['project_path']}"
+
+
+def test_open_project_without_board_falls_back_to_project_manager(monkeypatch, tmp_path):
+    """A project with NO .kicad_pcb has nothing for the standalone PCB editor
+    to open, so the launcher must fall back to the project manager launched
+    with the .kicad_pro file (never a directory, never a nonexistent board)."""
+    from handlers import project as project_handler
+
+    calls: Dict[str, Any] = {}
+    project_file = tmp_path / "empty.kicad_pro"
+    project_file.write_text("(kicad_project)\n", encoding="utf-8")
+    # Deliberately no empty.kicad_pcb on disk.
+
+    def fake_check_and_launch(project_path, auto_launch=True):
+        calls["project_path"] = project_path
+        return {
+            "running": True,
+            "launched": True,
+            "processes": [],
+            "message": "KiCAD launched successfully",
+        }
+
+    monkeypatch.setattr(project_handler, "check_and_launch_kicad", fake_check_and_launch)
+    monkeypatch.delenv("KICAD_AUTO_LAUNCH", raising=False)
+    monkeypatch.delenv("KICAD_BACKEND", raising=False)
+
+    iface = _make_iface({}, use_ipc=False)
+    iface.project_commands = types.SimpleNamespace(
+        open_project=lambda params: {
+            "success": True,
+            "project": {"path": str(project_file)},
+        }
+    )
+    from kicad_interface import KiCADInterface
+
+    iface._project_path_from_filename = KiCADInterface._project_path_from_filename.__get__(iface)
+    iface._refresh_symbol_library_for_project = lambda p: None
+    iface._try_enable_ipc_backend = lambda force=False: False
+    monkeypatch.setattr(project_handler, "_AUTOLAUNCH_IPC_POLL_DEADLINE_S", 0.0)
+
+    result = project_handler.handle_open_project(iface, {"filename": str(project_file)})
+
+    assert result["success"] is True
+    assert (
         calls["project_path"] == project_file
-    ), f"open_project should launch with the .kicad_pro file, got {calls['project_path']}"
+    ), f"a boardless project should launch the PM with the .kicad_pro, got {calls['project_path']}"
 
 
 def test_autolaunch_detects_cross_project_ipc_mismatch_and_disengages(monkeypatch, tmp_path):

@@ -369,19 +369,45 @@ class PinLocator:
         self, schematic_path: Path, symbol_reference: str, pin_number: str
     ) -> Optional[float]:
         """
-        Get the outward angle of a pin endpoint in degrees (0=right, 90=up, 180=left, 270=down).
-        This is the direction a wire stub must extend to stay connected to the pin.
+        Get the OUTWARD angle of a pin endpoint in degrees
+        (0=right, 90=up, 180=left, 270=down): the direction a wire stub must
+        extend AWAY from the symbol body to stay connected to the pin.
+
+        The angle is returned in the convention the stub/label math in
+        ConnectionManager.connect_to_net consumes: a caller reaches the stub end
+        with ``(pin_x + d*cos(angle), pin_y - d*sin(angle))`` in screen (Y-down)
+        coordinates, so 0=+X (right) and 90=visual up.
+
+        KiCad pin-angle semantics: in a ``.kicad_sym`` a pin's ``(at x y angle)``
+        angle points from the electrical endpoint TOWARD the symbol body — a
+        left-side pin is stored with angle 0 (pointing right/inward), a top pin
+        with 270 (pointing down/inward). The OUTWARD direction is therefore the
+        opposite of the library angle (``+180``), then transformed by the
+        symbol's placement (rotation + mirror).
+
+        Rather than re-derive the reflection algebra (which was subtly wrong: the
+        old code negated the library angle for the Y-flip, which coincides with
+        the outward ``+180`` only for pins that end up vertical in world space —
+        so horizontal pins got an inward stub), the direction is measured the
+        same way pin positions are: extend the pin one unit outward in library
+        space and push both the endpoint and the extended point through
+        ``WireDragger.pin_world_xy``. Because the translation cancels in the
+        difference, the result is exactly the placement-transformed outward unit
+        vector — guaranteed consistent with where the pin is actually drawn under
+        every rotation (0/90/180/270) and mirror combination.
 
         Accounts for mirror flags read directly from the .kicad_sch file.
 
         Returns angle in degrees, or None if pin not found.
         """
+        from commands.wire_dragger import WireDragger
+
         try:
             transform = self._get_symbol_transform(schematic_path, symbol_reference)
             if transform is None:
                 return None
 
-            _, _, symbol_rotation, mirror_x, mirror_y, lib_id = transform
+            sym_x, sym_y, symbol_rotation, mirror_x, mirror_y, lib_id = transform
             if not lib_id:
                 return None
 
@@ -405,31 +431,32 @@ class PinLocator:
                 )
                 if unit_transform is None:
                     return None
-                _, _, symbol_rotation, mirror_x, mirror_y, _ = unit_transform
+                sym_x, sym_y, symbol_rotation, mirror_x, mirror_y, _ = unit_transform
 
-            pin_def_angle = pins[pin_number].get("angle", 0)
+            pin = pins[pin_number]
+            px, py = pin["x"], pin["y"]
 
-            # Mirror this exactly the way WireDragger.pin_world_xy does, in the
-            # same order: Y-flip (lib Y-up → screen Y-down) → mirror → rotate.
-            #
-            # Y-flip on an angle: negate it (reflects across X axis).
-            pin_def_angle = (-pin_def_angle) % 360
+            # Extend the pin one unit OUTWARD in library space (opposite of the
+            # library angle, which points inward toward the body). Length only
+            # scales the vector, so a zero-length pin still yields a direction.
+            out_rad = math.radians(pin.get("angle", 0) + 180.0)
+            unit = pin.get("length") or 1.0
+            ox = px + unit * math.cos(out_rad)
+            oy = py + unit * math.sin(out_rad)
 
-            # eeschema (symbol.h:43-44):
-            #   (mirror x) = SYM_MIRROR_X = TRANSFORM(1,0,0,-1) → negates Y →
-            #     reflect angle across X axis → -angle.
-            #   (mirror y) = SYM_MIRROR_Y = TRANSFORM(-1,0,0,1) → negates X →
-            #     reflect angle across Y axis → 180 - angle.
-            if mirror_x:
-                pin_def_angle = (-pin_def_angle) % 360
-            if mirror_y:
-                pin_def_angle = (180 - pin_def_angle) % 360
+            wx_pin, wy_pin = WireDragger.pin_world_xy(
+                px, py, sym_x, sym_y, symbol_rotation, mirror_x, mirror_y
+            )
+            wx_out, wy_out = WireDragger.pin_world_xy(
+                ox, oy, sym_x, sym_y, symbol_rotation, mirror_x, mirror_y
+            )
 
-            # eeschema's rotation TRANSFORM is screen-CCW in Y-down, which is
-            # math-CW in standard atan2 convention — so subtract the rotation
-            # to match `pin_world_xy`'s `_rotate(..., -rotation)` call.
-            absolute_angle = (pin_def_angle - symbol_rotation) % 360
-            return absolute_angle
+            dx = wx_out - wx_pin
+            dy = wy_out - wy_pin
+            # pin_world_xy returns screen coords (Y-down); the stub math reaches
+            # its target with (cos θ, -sin θ), so a screen displacement (dx, dy)
+            # maps back to θ = atan2(-dy, dx).
+            return math.degrees(math.atan2(-dy, dx)) % 360.0
 
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             # Pin missing from the symbol definition (KeyError), unexpected

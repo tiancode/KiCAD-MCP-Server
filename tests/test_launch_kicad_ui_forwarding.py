@@ -135,7 +135,12 @@ def test_run_action_opens_file_and_verifies(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Spawn fallback: run_action doesn't land, kicad <path> takes over
+# Spawn fallback: run_action doesn't land, pcbnew <board> takes over.
+# For a .kicad_pcb the spawn must be the STANDALONE PCB EDITOR — a bare
+# `kicad <board>` only raises the project manager with no board document open
+# over IPC (verified on KiCad 10.x), so it would never lift the PCB-editor
+# gate.  `pcbnew <board>` surfaces the board over IPC even alongside a
+# running project manager.
 # ---------------------------------------------------------------------------
 def test_spawn_fallback_when_run_action_fails(monkeypatch, tmp_path):
     from handlers import ui as ui_handler
@@ -151,8 +156,17 @@ def test_spawn_fallback_when_run_action_fails(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(ui_handler, "check_and_launch_kicad", _running_check_and_launch)
+    # For a board, the spawn goes through get_pcb_editor_command (standalone
+    # PCB editor), NOT get_executable_path (project manager).
     monkeypatch.setattr(
-        KiCADProcessManager, "get_executable_path", staticmethod(lambda: Path("/usr/bin/kicad"))
+        KiCADProcessManager,
+        "get_pcb_editor_command",
+        staticmethod(lambda board_path=None: ["/usr/bin/pcbnew", str(board_path)]),
+    )
+    monkeypatch.setattr(
+        KiCADProcessManager,
+        "get_executable_path",
+        staticmethod(lambda: (_ for _ in ()).throw(AssertionError("must spawn pcbnew, not kicad"))),
     )
     spawned = {}
 
@@ -167,10 +181,49 @@ def test_spawn_fallback_when_run_action_fails(monkeypatch, tmp_path):
 
     assert out["fileOpenForwarded"] is True
     assert out["fileOpenMethod"] == "spawn"
-    assert spawned["argv"] == ["/usr/bin/kicad", str(sch)]
+    assert spawned["argv"] == ["/usr/bin/pcbnew", str(sch)]
     # Multiple ipc_action attempts were logged before the fallback.
     actions_tried = [a for a in out["fileOpenAttempts"] if a.get("method") == "ipc_action"]
     assert len(actions_tried) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Spawn fallback skips when the board is already locked by another instance:
+# opening a second, read-locked editor is worse than the gate.
+# ---------------------------------------------------------------------------
+def test_spawn_fallback_skips_when_board_lock_present(monkeypatch, tmp_path):
+    from handlers import ui as ui_handler
+    from utils.kicad_process import KiCADProcessManager
+
+    board = tmp_path / "demo.kicad_pcb"
+    board.write_text("(kicad_pcb)\n", encoding="utf-8")
+    # KiCad's per-file lock: ~<name>.<ext>.lck next to the board.
+    (tmp_path / "~demo.kicad_pcb.lck").write_text(
+        '{"hostname":"h","username":"u"}', encoding="utf-8"
+    )
+
+    iface = _iface_with_running_kicad()
+    iface.ipc_backend.run_action = MagicMock(
+        return_value={"success": False, "statusName": "RAS_INVALID"}
+    )
+    monkeypatch.setattr(ui_handler, "check_and_launch_kicad", _running_check_and_launch)
+    # A spawn must NOT happen while the lock is present.
+    monkeypatch.setattr(
+        KiCADProcessManager,
+        "get_pcb_editor_command",
+        staticmethod(lambda board_path=None: ["/usr/bin/pcbnew", str(board_path)]),
+    )
+    spawn_spy = MagicMock(side_effect=AssertionError("must not spawn on a locked board"))
+    monkeypatch.setattr("subprocess.Popen", spawn_spy)
+
+    out = ui_handler.handle_launch_kicad_ui(iface, {"projectPath": str(board)})
+
+    assert out["fileOpenForwarded"] is False
+    assert "warning" in out
+    assert "locked" in out["warning"].lower()
+    spawn_spy.assert_not_called()
+    skipped = [a for a in out["fileOpenAttempts"] if a.get("skipped")]
+    assert skipped and "lockfile" in skipped[0]["skipped"]
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +243,9 @@ def test_spawn_failure_surfaces_warning(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ui_handler, "check_and_launch_kicad", _running_check_and_launch)
     monkeypatch.setattr(
-        KiCADProcessManager, "get_executable_path", staticmethod(lambda: Path("/usr/bin/kicad"))
+        KiCADProcessManager,
+        "get_pcb_editor_command",
+        staticmethod(lambda board_path=None: ["/usr/bin/pcbnew", str(board_path)]),
     )
     monkeypatch.setattr(
         "subprocess.Popen",

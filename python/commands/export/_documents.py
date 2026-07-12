@@ -95,25 +95,35 @@ class DocumentMixin:
             # Close the plot file to finalize the PDF
             plotter.ClosePlot()
 
-            # KiCAD automatically prepends the board name to the output file
-            # Get the actual output filename that was created
+            # KiCAD's plotter prepends the board name to the requested base
+            # name (requesting "foo.pdf" yields "<board>-foo.pdf"). Locate the
+            # file KiCAD actually produced, then rename it to the exact
+            # requested path so the file lands where the caller asked —
+            # consistent with export_gerber / export_bom / export_position_file.
             board_name = os.path.splitext(os.path.basename(self.board.GetFileName()))[0]
-            actual_filename = f"{board_name}-{base_name}.pdf"
-            actual_output_path = os.path.join(os.path.dirname(output_path), actual_filename)
+            out_dir = os.path.dirname(output_path)
 
-            # Verify file actually landed on disk
-            if not os.path.exists(actual_output_path):
-                # Try the path KiCAD's plotter reports, in case naming changed
-                reported = plotter.GetPlotFileName() if hasattr(plotter, "GetPlotFileName") else ""
-                if reported and os.path.exists(reported):
-                    actual_output_path = reported
-                else:
-                    return {
-                        "success": False,
-                        "message": "PDF export reported success but no file on disk",
-                        "errorDetails": f"Expected file at {actual_output_path}",
-                        "requestedPath": output_path,
-                    }
+            produced_candidates = [os.path.join(out_dir, f"{board_name}-{base_name}.pdf")]
+            # Try the path KiCAD's plotter reports, in case naming changed.
+            reported = plotter.GetPlotFileName() if hasattr(plotter, "GetPlotFileName") else ""
+            if isinstance(reported, str) and reported:
+                produced_candidates.append(os.path.abspath(reported))
+            # KiCAD may already have honoured the requested name directly.
+            produced_candidates.append(output_path)
+
+            produced_path = next((p for p in produced_candidates if p and os.path.exists(p)), None)
+            if produced_path is None:
+                return {
+                    "success": False,
+                    "message": "PDF export reported success but no file on disk",
+                    "errorDetails": f"Expected file at {produced_candidates[0]}",
+                    "requestedPath": output_path,
+                }
+
+            # Rename the produced file to the literal requested path.
+            if os.path.abspath(produced_path) != os.path.abspath(output_path):
+                os.replace(produced_path, output_path)
+            actual_output_path = output_path
 
             try:
                 size_bytes = os.path.getsize(actual_output_path)

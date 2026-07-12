@@ -5,9 +5,24 @@ Split out of the former monolithic commands/export.py.
 
 import logging
 import os
+import re
 from typing import Any, Dict, List
 
 logger = logging.getLogger("kicad_interface")
+
+
+def _natural_ref_key(ref: str) -> List[Any]:
+    """Sort key so refs order naturally: MH1, MH2, MH10 (not MH1, MH10, MH2)."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", ref or "")]
+
+
+def _is_mounting_hole(reference: str, footprint: str) -> bool:
+    """Board hardware with nothing to purchase: reference prefix MH, or a
+    MountingHole footprint id."""
+    prefix = re.match(r"[A-Za-z]+", reference or "")
+    if prefix and prefix.group(0).upper() == "MH":
+        return True
+    return "mountinghole" in (footprint or "").lower()
 
 
 class BomMixin:
@@ -25,6 +40,7 @@ class BomMixin:
             format = params.get("format", "CSV")
             group_by_value = params.get("groupByValue", True)
             include_attributes = params.get("includeAttributes", [])
+            include_mounting_holes = params.get("includeMountingHoles", False)
 
             if not output_path:
                 return {
@@ -54,6 +70,19 @@ class BomMixin:
 
                 components.append(component)
 
+            # Drop board hardware (mounting holes, etc.) that has nothing to
+            # purchase — it otherwise pollutes the BOM. Opt back in with
+            # includeMountingHoles.
+            excluded_mounting_holes = 0
+            if not include_mounting_holes:
+                kept = []
+                for comp in components:
+                    if _is_mounting_hole(comp["reference"], comp["footprint"]):
+                        excluded_mounting_holes += 1
+                    else:
+                        kept.append(comp)
+                components = kept
+
             # Group by value if requested
             if group_by_value:
                 grouped = {}
@@ -70,6 +99,12 @@ class BomMixin:
                         grouped[key]["quantity"] += 1
                         grouped[key]["references"].append(comp["reference"])
                 components = list(grouped.values())
+                # Emit references as a clean, naturally-sorted string
+                # ("MH1, MH2, MH10") instead of a Python list repr.
+                for entry in components:
+                    entry["references"] = ", ".join(
+                        sorted(entry["references"], key=_natural_ref_key)
+                    )
 
             # Export based on format
             if format == "CSV":
@@ -87,14 +122,18 @@ class BomMixin:
                     "errorDetails": f"Format {format} is not supported",
                 }
 
+            message = f"Exported BOM to {format}"
+            if excluded_mounting_holes:
+                message += f" ({excluded_mounting_holes} mounting hole(s) excluded)"
             return {
                 "success": True,
-                "message": f"Exported BOM to {format}",
+                "message": message,
                 "file": {
                     "path": output_path,
                     "format": format,
                     "componentCount": len(components),
                 },
+                "excludedMountingHoles": excluded_mounting_holes,
             }
 
         except Exception as e:
@@ -109,8 +148,13 @@ class BomMixin:
         """Export BOM to CSV format"""
         import csv
 
+        fieldnames = (
+            list(components[0].keys())
+            if components
+            else ["value", "footprint", "quantity", "references"]
+        )
         with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=components[0].keys())
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(components)
 
@@ -132,7 +176,12 @@ class BomMixin:
         html = ["<html><head><title>Bill of Materials</title></head><body>"]
         html.append("<table border='1'><tr>")
         # Headers
-        for key in components[0].keys():
+        header_keys = (
+            list(components[0].keys())
+            if components
+            else ["value", "footprint", "quantity", "references"]
+        )
+        for key in header_keys:
             html.append(f"<th>{key}</th>")
         html.append("</tr>")
         # Data

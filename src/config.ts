@@ -52,7 +52,14 @@ export async function loadConfig(configPath?: string): Promise<Config> {
 
     // Check if file exists
     if (!existsSync(filePath)) {
-      logger.warn(`Configuration file not found: ${filePath}, using defaults`);
+      if (configPath) {
+        // The caller explicitly named this file — its absence is a real
+        // misconfiguration worth flagging.
+        logger.warn(`Configuration file not found: ${filePath}, using defaults`);
+      } else {
+        // No default config shipped is the normal case; don't cry wolf.
+        logger.debug(`No default config at ${filePath}; using built-in defaults`);
+      }
       return ConfigSchema.parse({});
     }
 
