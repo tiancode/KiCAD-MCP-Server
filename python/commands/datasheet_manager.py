@@ -1,9 +1,10 @@
 """
 Datasheet Manager for KiCAD MCP Server
 
-Enriches KiCAD schematic symbols with datasheet URLs derived from LCSC part numbers.
-Uses direct text manipulation (like dynamic_symbol_loader.py) to avoid
-skip-library-induced schematic corruption.
+Enriches KiCAD schematic symbols with datasheet URLs derived from LCSC part
+numbers (or the library symbol's own Datasheet). Uses direct text manipulation
+(like dynamic_symbol_loader.py) to avoid skip-library-induced schematic
+corruption.
 
 URL schema: https://www.lcsc.com/datasheet/{LCSC#}.pdf
 No API key required.
@@ -14,6 +15,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from utils.sexpr import escape_sexpr_string
+
 logger = logging.getLogger("kicad_interface")
 
 LCSC_DATASHEET_URL = "https://www.lcsc.com/datasheet/{lcsc}.pdf"
@@ -22,13 +25,68 @@ LCSC_PRODUCT_URL = "https://www.lcsc.com/product-detail/{lcsc}.html"
 # Values treated as "empty" datasheet
 EMPTY_DATASHEET_VALUES = {"~", "", "~{DATASHEET}"}
 
+# LCSC part number is stored under "LCSC Part" by easyeda2kicad imports and under
+# a plain "LCSC" by some hand-built libraries — accept both.
+_LCSC_PROPERTY_NAMES = ("LCSC Part", "LCSC")
+
+# References we never treat as BOM parts: offscreen placement templates and
+# power/flag symbols (#PWR0x, #FLG0x, PWR_FLAG).
+_NON_BOM_REF_PREFIXES = ("_TEMPLATE", "#")
+
+
+def _match_paren(text: str, start: int) -> int:
+    """Index just past the ``)`` closing the ``(`` at ``start`` — quote/escape aware.
+
+    Skips parentheses inside double-quoted strings (honouring ``\\`` escapes), so a
+    property value with literal parens ("GigaDevice(兆易创新)", "GPO(OD)") — which
+    easyeda2kicad emits unescaped — can't unbalance the scan. Falls back to
+    len(text) if unbalanced.
+    """
+    depth = 0
+    in_str = False
+    i = start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+        i += 1
+    return n
+
+
+def _property_value(block: str, name: str) -> Optional[str]:
+    """Raw (still-escaped) value of the first ``(property "name" "value" …)`` in
+    ``block``, or None. ``\\s+`` spans newlines so the easyeda2kicad layout —
+    where name/value sit on their own lines below ``(property`` — matches too.
+    """
+    m = re.search(
+        r'\(property\s+"' + re.escape(name) + r'"\s+"((?:[^"\\]|\\.)*)"',
+        block,
+    )
+    return m.group(1) if m else None
+
 
 class DatasheetManager:
     """
-    Enriches KiCAD schematics with LCSC datasheet URLs.
+    Enriches KiCAD schematics with datasheet URLs.
 
-    Reads .kicad_sch files, finds symbol instances that have an LCSC property
-    but an empty Datasheet property, and fills in the LCSC datasheet URL.
+    Reads .kicad_sch files, finds placed symbol instances whose Datasheet is
+    empty, and fills it from the symbol's LCSC part number (constructing the
+    LCSC datasheet URL) or, failing that, from the library symbol's own
+    Datasheet property.
     """
 
     @staticmethod
@@ -49,92 +107,85 @@ class DatasheetManager:
         return None
 
     @staticmethod
-    def _find_lib_symbols_range(lines: List[str]) -> Tuple[Optional[int], Optional[int]]:
+    def _find_lib_symbols_span(content: str) -> Tuple[int, int]:
+        """Char span ``[start, end)`` of the ``(lib_symbols …)`` block.
+
+        Returns ``(-1, -1)`` when absent. Quote/escape aware so it survives
+        library symbol property values that contain literal parens.
         """
-        Find the line range of the (lib_symbols ...) section.
-        Returns (start, end) line indices or (None, None) if not found.
-        These lines must be excluded from symbol-instance processing.
+        start = content.find("(lib_symbols")
+        if start == -1:
+            return -1, -1
+        return start, _match_paren(content, start)
+
+    @classmethod
+    def _lib_symbol_datasheets(cls, content: str, lib_start: int, lib_end: int) -> Dict[str, str]:
+        """Map ``lib_id`` (``"Lib:Name"``) → raw Datasheet value for every embedded
+        library symbol that carries a non-empty Datasheet.
+
+        Used as a secondary fill source: a placed instance with an empty
+        Datasheet but a resolvable ``lib_id`` inherits the library symbol's
+        Datasheet (this is what KiCad copies on placement).
         """
-        lib_sym_start = None
-        lib_sym_end = None
-        depth = 0
+        out: Dict[str, str] = {}
+        if lib_start < 0:
+            return out
+        body = content[lib_start:lib_end]
+        for m in re.finditer(r'\(symbol\s+"((?:[^"\\]|\\.)*)"', body):
+            name = m.group(1)
+            # Top-level library entries are "Lib:Name"; the nested unit/style
+            # sub-symbols ("Name_0_1") have no colon and no Datasheet.
+            if ":" not in name:
+                continue
+            sym_block = body[m.start() : _match_paren(body, m.start())]
+            ds = _property_value(sym_block, "Datasheet")
+            if ds is not None and ds not in EMPTY_DATASHEET_VALUES:
+                out[name] = ds
+        return out
 
-        for i, line in enumerate(lines):
-            if "(lib_symbols" in line and lib_sym_start is None:
-                lib_sym_start = i
-                depth = 0
-                for ch in line:
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        depth -= 1
-            elif lib_sym_start is not None and lib_sym_end is None:
-                for ch in line:
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        depth -= 1
-                if depth == 0:
-                    lib_sym_end = i
-                    break
+    @classmethod
+    def _iter_placed_symbol_blocks(cls, content: str) -> List[Tuple[int, int]]:
+        """Char spans ``[start, end)`` of every placed ``(symbol (…) …)`` instance.
 
-        return lib_sym_start, lib_sym_end
-
-    @staticmethod
-    def _process_symbol_block(lines: List[str], block_start: int, block_end: int) -> Optional[Dict]:
+        Placed instances open with ``(symbol`` followed by a nested s-expression
+        — ``(symbol (lib_id …)`` on one line OR ``(symbol\\n  (lib_id …)`` across
+        lines (how KiCad itself saves). Library-definition symbols use the
+        quoted ``(symbol "Lib:Name" …)`` form, so ``\\(symbol\\s+\\(`` matches only
+        placed instances; the lib_symbols span is skipped for defence in depth.
         """
-        Extract LCSC and Datasheet info from a placed symbol block.
-
-        Returns dict with:
-          - lcsc: normalized LCSC number or None
-          - datasheet_line: line index of Datasheet property or None
-          - datasheet_value: current Datasheet value or None
-        """
-        lcsc_value = None
-        datasheet_line_idx = None
-        datasheet_current = None
-
-        for k in range(block_start, block_end + 1):
-            line = lines[k]
-
-            lcsc_match = re.search(r'\(property\s+"LCSC"\s+"([^"]*)"', line)
-            if lcsc_match:
-                lcsc_value = lcsc_match.group(1)
-
-            ds_match = re.search(r'\(property\s+"Datasheet"\s+"([^"]*)"', line)
-            if ds_match:
-                datasheet_line_idx = k
-                datasheet_current = ds_match.group(1)
-
-        return {
-            "lcsc": lcsc_value,
-            "datasheet_line": datasheet_line_idx,
-            "datasheet_value": datasheet_current,
-        }
+        lib_start, lib_end = cls._find_lib_symbols_span(content)
+        blocks: List[Tuple[int, int]] = []
+        for m in re.finditer(r"\(symbol\s+\(", content):
+            pos = m.start()
+            if lib_start >= 0 and lib_start <= pos < lib_end:
+                continue
+            end = _match_paren(content, pos)
+            blocks.append((pos, end))
+        return blocks
 
     def enrich_schematic(self, schematic_path: Path, dry_run: bool = False) -> Dict:
         """
-        Scan a .kicad_sch file and fill in missing LCSC datasheet URLs.
+        Scan a .kicad_sch file and fill in missing datasheet URLs.
 
-        For each placed symbol that has:
-          - (property "LCSC" "C123456") set
-          - (property "Datasheet" "~") or empty
-
-        Sets:
-          - (property "Datasheet" "https://www.lcsc.com/datasheet/C123456.pdf")
+        For each placed symbol whose Datasheet is empty (``~`` / empty), fill it
+        from, in order of preference:
+          1. its LCSC part number ("LCSC Part" or "LCSC") → LCSC datasheet URL, or
+          2. its library symbol's Datasheet property (via lib_id).
 
         Args:
             schematic_path: Path to .kicad_sch file
-            dry_run: If True, return what would be changed without writing
+            dry_run: If True, report what would change without writing
 
         Returns:
             {
                 "success": True,
                 "updated": <count>,
                 "already_set": <count>,
-                "no_lcsc": <count>,
-                "no_datasheet_field": <count>,
-                "details": [{"reference": "...", "lcsc": "...", "url": "..."}]
+                "no_lcsc": <count>,            # empty Datasheet, no fill source
+                "no_datasheet_field": <count>, # placed symbol with no Datasheet field
+                "skipped": <count>,            # template / power / flag symbols
+                "total_symbols": <count>,
+                "details": [{"reference", "source", "lcsc"?, "url"}],
             }
         """
         schematic_path = Path(schematic_path)
@@ -147,117 +198,96 @@ class DatasheetManager:
         with open(schematic_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        lines = content.split("\n")
-        new_lines = list(lines)
-
-        lib_sym_start, lib_sym_end = self._find_lib_symbols_range(lines)
+        lib_start, lib_end = self._find_lib_symbols_span(content)
+        lib_datasheets = self._lib_symbol_datasheets(content, lib_start, lib_end)
 
         updated = 0
         already_set = 0
-        no_lcsc = 0
+        no_source = 0
         no_datasheet_field = 0
-        details = []
+        skipped = 0
+        total = 0
+        details: List[Dict] = []
 
-        i = 0
-        while i < len(new_lines):
-            line = new_lines[i]
+        # Process blocks back-to-front so in-place splices keep earlier offsets
+        # valid (spans were computed against the original content).
+        for block_start, block_end in sorted(
+            self._iter_placed_symbol_blocks(content), reverse=True
+        ):
+            block = content[block_start:block_end]
 
-            # Skip lib_symbols section
-            if lib_sym_start is not None and lib_sym_end is not None:
-                if lib_sym_start <= i <= lib_sym_end:
-                    i += 1
-                    continue
+            reference = _property_value(block, "Reference") or "?"
+            if reference.startswith(_NON_BOM_REF_PREFIXES):
+                skipped += 1
+                continue
+            total += 1
 
-            # Detect placed symbol: (symbol (lib_id "...")
-            if re.match(r"\s*\(symbol\s+\(lib_id\s+\"", line):
-                block_start = i
-                block_depth = 0
-                for ch in line:
-                    if ch == "(":
-                        block_depth += 1
-                    elif ch == ")":
-                        block_depth -= 1
-
-                j = i + 1
-                while j < len(new_lines) and block_depth > 0:
-                    for ch in new_lines[j]:
-                        if ch == "(":
-                            block_depth += 1
-                        elif ch == ")":
-                            block_depth -= 1
-                    if block_depth > 0:
-                        j += 1
-                    else:
-                        break
-
-                block_end = j
-                info = self._process_symbol_block(new_lines, block_start, block_end)
-
-                raw_lcsc = info["lcsc"]
-                ds_line = info["datasheet_line"]
-                ds_value = info["datasheet_value"]
-
-                # Extract reference for reporting
-                ref_match = None
-                for k in range(block_start, block_end + 1):
-                    m = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', new_lines[k])
-                    if m:
-                        ref_match = m.group(1)
-                        break
-                reference = ref_match or "?"
-
-                if not raw_lcsc:
-                    no_lcsc += 1
-                elif ds_line is None:
-                    no_datasheet_field += 1
-                    logger.warning(
-                        f"Symbol {reference} has LCSC={raw_lcsc} but no Datasheet property"
-                    )
-                else:
-                    lcsc_norm = self._normalize_lcsc(raw_lcsc)
-                    if not lcsc_norm:
-                        no_lcsc += 1
-                    elif ds_value not in EMPTY_DATASHEET_VALUES:
-                        already_set += 1
-                        logger.debug(f"Symbol {reference}: Datasheet already set to {ds_value!r}")
-                    else:
-                        url = LCSC_DATASHEET_URL.format(lcsc=lcsc_norm)
-                        if not dry_run:
-                            new_lines[ds_line] = re.sub(
-                                r'(property\s+"Datasheet"\s+)"[^"]*"',
-                                f'\\1"{url}"',
-                                new_lines[ds_line],
-                            )
-                        updated += 1
-                        details.append(
-                            {
-                                "reference": reference,
-                                "lcsc": lcsc_norm,
-                                "url": url,
-                                "dry_run": dry_run,
-                            }
-                        )
-                        logger.info(
-                            f"{'[DRY RUN] ' if dry_run else ''}Set Datasheet for "
-                            f"{reference} ({lcsc_norm}): {url}"
-                        )
-
-                i = block_end + 1
+            ds_value = _property_value(block, "Datasheet")
+            if ds_value is None:
+                # No Datasheet field at all — nothing to update in place.
+                no_datasheet_field += 1
+                logger.warning(f"Symbol {reference} has no Datasheet property field")
+                continue
+            if ds_value not in EMPTY_DATASHEET_VALUES:
+                already_set += 1
+                logger.debug(f"Symbol {reference}: Datasheet already set to {ds_value!r}")
                 continue
 
-            i += 1
+            # Empty Datasheet — find a fill source.
+            raw_lcsc = None
+            for prop in _LCSC_PROPERTY_NAMES:
+                raw_lcsc = _property_value(block, prop)
+                if raw_lcsc:
+                    break
+            lcsc_norm = self._normalize_lcsc(raw_lcsc) if raw_lcsc else None
+            lib_id_match = re.search(r'\(lib_id\s+"((?:[^"\\]|\\.)*)"', block)
+            lib_id = lib_id_match.group(1) if lib_id_match else None
+
+            fill_value: Optional[str] = None  # escaped, ready to emit
+            detail: Dict = {"reference": reference}
+            if lcsc_norm:
+                url = LCSC_DATASHEET_URL.format(lcsc=lcsc_norm)
+                fill_value = escape_sexpr_string(url)
+                detail.update({"source": "lcsc", "lcsc": lcsc_norm, "url": url})
+            elif lib_id and lib_id in lib_datasheets:
+                # lib_datasheets values are already escaped (copied verbatim).
+                fill_value = lib_datasheets[lib_id]
+                detail.update({"source": "lib_symbol", "url": lib_datasheets[lib_id]})
+            else:
+                no_source += 1
+                continue
+
+            new_block = re.sub(
+                r'(\(property\s+"Datasheet"\s+)"(?:[^"\\]|\\.)*"',
+                lambda mm: mm.group(1) + '"' + fill_value + '"',
+                block,
+                count=1,
+            )
+            if not dry_run:
+                content = content[:block_start] + new_block + content[block_end:]
+            updated += 1
+            detail["dry_run"] = dry_run
+            details.append(detail)
+            logger.info(
+                f"{'[DRY RUN] ' if dry_run else ''}Set Datasheet for "
+                f"{reference} from {detail['source']}: {detail['url']}"
+            )
 
         if not dry_run and updated > 0:
             with open(schematic_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(new_lines))
-            logger.info(f"Saved {schematic_path.name}: {updated} datasheet URLs written")
+                f.write(content)
+            logger.info(f"Saved {schematic_path.name}: {updated} datasheet URL(s) written")
 
+        # Details were gathered back-to-front; present them in schematic order.
+        details.reverse()
         return {
             "success": True,
             "updated": updated,
             "already_set": already_set,
-            "no_lcsc": no_lcsc,
+            "no_lcsc": no_source,
             "no_datasheet_field": no_datasheet_field,
+            "skipped": skipped,
+            "total_symbols": total,
             "dry_run": dry_run,
             "details": details,
             "schematic": str(schematic_path),

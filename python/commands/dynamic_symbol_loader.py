@@ -24,6 +24,20 @@ from utils.sexpr import escape_sexpr_string as _escape_sexpr_string
 
 logger = logging.getLogger("kicad_interface")
 
+# Properties the instance template writes explicitly; every OTHER library-symbol
+# property (Datasheet URL, LCSC Part, MPN, Manufacturer, Description, …) is copied
+# verbatim onto the placed instance — exactly as KiCad does on placement — EXCEPT
+# library-internal ``ki_*`` fields (ki_keywords / ki_description / ki_fp_filters),
+# which KiCad keeps in the lib symbol and never stamps onto an instance.
+_INSTANCE_HANDLED_PROPERTIES = {"Reference", "Value", "Footprint", "Datasheet"}
+
+# Quote/escape-aware property matcher. NAME and VALUE may sit on separate lines
+# from ``(property`` (easyeda2kicad's older format writes each token on its own
+# line), and a VALUE may contain literal parens ("ST(意法半导体)", "GPO(OD)") — the
+# quote delimiters, not parens, bound the value, so a paren-only matcher can't be
+# used here.
+_LIB_PROPERTY_RE = re.compile(r'\(property\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"')
+
 
 class DynamicSymbolLoader:
     """
@@ -667,6 +681,71 @@ class DynamicSymbolLoader:
                 "character; the file was left unchanged."
             ) from e
 
+    def _collect_library_properties(
+        self, library_name: str, symbol_name: str
+    ) -> List["tuple[str, str]"]:
+        """Ordered top-level properties of a library symbol as ``[(name, raw_value)]``.
+
+        ``raw_value`` is the value exactly as it appears in the ``.kicad_sym``
+        (already S-expression escaped), ready to re-emit verbatim.  Returns an
+        empty list when the symbol can't be located, so placement degrades to
+        the minimal Reference/Value/Footprint/Datasheet template instead of
+        failing.
+        """
+        try:
+            block = self.extract_symbol_from_library(library_name, symbol_name)
+        except Exception as e:  # a library read must never block placement
+            logger.warning(
+                f"Could not read library properties for {library_name}:{symbol_name}: {e}"
+            )
+            return []
+        if not block:
+            return []
+        props: List["tuple[str, str]"] = []
+        seen: set = set()
+        for m in _LIB_PROPERTY_RE.finditer(block):
+            name = m.group(1)
+            if name in seen:  # symbol property names are unique; guard anyway
+                continue
+            seen.add(name)
+            props.append((name, m.group(2)))
+        return props
+
+    def _build_instance_sourcing(
+        self, library_name: str, symbol_name: str, x: float, y: float
+    ) -> "tuple[str, str]":
+        """Fold a library symbol's sourcing metadata into a placed instance.
+
+        Returns ``(datasheet_value, extra_property_block)`` where
+        ``datasheet_value`` is the library's Datasheet (raw/escaped) or ``"~"``
+        when it has none, and ``extra_property_block`` is the text of every
+        other copied property (LCSC Part, MPN, Manufacturer, Description, …) as
+        hidden instance fields — or ``""`` when there is nothing extra to copy.
+
+        Without this, placed instances carried only Reference/Value/Footprint
+        and ``Datasheet="~"``: BOM sourcing fields were dropped and
+        ``enrich_datasheets`` had nothing to fill from.
+        """
+        datasheet_value = "~"
+        extra_lines: List[str] = []
+        for name, raw_value in self._collect_library_properties(library_name, symbol_name):
+            if name == "Datasheet":
+                if raw_value not in ("", "~"):
+                    datasheet_value = raw_value
+                continue
+            if name in _INSTANCE_HANDLED_PROPERTIES:
+                continue
+            if name.startswith("ki_"):
+                continue
+            name_esc = _escape_sexpr_string(name)
+            extra_lines.append(
+                f'    (property "{name_esc}" "{raw_value}" (at {x} {y} 0)\n'
+                f"      (effects (font (size 1.27 1.27)) (hide yes))\n"
+                f"    )"
+            )
+        extra_block = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
+        return datasheet_value, extra_block
+
     @serialize_on_path(1)
     def create_component_instance(
         self,
@@ -699,6 +778,14 @@ class DynamicSymbolLoader:
         footprint_esc = _escape_sexpr_string(str(footprint))
         lib_id_esc = _escape_sexpr_string(full_lib_id)
 
+        # Copy the library symbol's sourcing metadata (real Datasheet URL, LCSC
+        # Part, MPN, Manufacturer, Description, …) onto the instance, exactly as
+        # KiCad does on placement. Reference/Value/Footprint keep their explicit
+        # values; ki_* library-internal fields are excluded.
+        datasheet_value, extra_props_block = self._build_instance_sourcing(
+            library_name, symbol_name, x, y
+        )
+
         instance_block = f"""  (symbol (lib_id "{lib_id_esc}") (at {x} {y} 0) (unit {unit})
     (in_bom yes) (on_board yes) (dnp no)
     (uuid "{new_uuid}")
@@ -711,9 +798,9 @@ class DynamicSymbolLoader:
     (property "Footprint" "{footprint_esc}" (at {x} {y} 0)
       (effects (font (size 1.27 1.27)) (hide yes))
     )
-    (property "Datasheet" "~" (at {x} {y} 0)
+    (property "Datasheet" "{datasheet_value}" (at {x} {y} 0)
       (effects (font (size 1.27 1.27)) (hide yes))
-    )
+    ){extra_props_block}
     (instances
       (project "project"
         (path "/"
