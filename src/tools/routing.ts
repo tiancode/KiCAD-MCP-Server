@@ -85,6 +85,8 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   server.tool(
     "copper_pour",
     "Manage copper pours (zones). add: create a pour (layer+net required; auto-refills). " +
+      "net resolves to the board's real net (e.g. 'GND'→'/GND'); no match is REFUSED with " +
+      "candidates (never a dead net-0 plane) — allowUnconnected:true makes a deliberate no-net zone. " +
       "edit: modify one zone selected by uuid or net/layer (fill marked stale — refill afterwards). " +
       "delete: remove matching zone(s). " +
       "refill: refill ALL zones via IPC; without IPC the SWIG fill is REFUSED by default " +
@@ -111,6 +113,10 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .boolean()
         .optional()
         .describe("add: refill after creating (default true); false for batch adds + one refill"),
+      allowUnconnected: z
+        .boolean()
+        .optional()
+        .describe("add: create a deliberate no-net (net-0) zone; lets you omit net"),
       newNet: z.string().optional().describe("edit: reassign the zone to this net"),
       newLayer: z.string().optional().describe("edit: move the zone to this layer"),
       priority: z.number().optional().describe("edit: zone priority (higher fills first)"),
@@ -134,14 +140,23 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     },
     async (args) => {
       const { action, ...params } = args;
-      // The python layer silently defaults a missing layer to F.Cu and a
-      // missing net to "no net" (floating pour) — enforce the pre-merge
-      // required fields for the add branch here.
-      if (action === "add" && (!params.layer || !params.net)) {
-        return formatKicadResult({
-          success: false,
-          message: "copper_pour action=add requires both layer and net",
-        });
+      // The python layer defaults a missing layer to F.Cu — enforce the
+      // required fields for the add branch here.  A net is required unless
+      // the caller opts into a deliberate no-net zone via allowUnconnected.
+      if (action === "add") {
+        if (!params.layer) {
+          return formatKicadResult({
+            success: false,
+            message: "copper_pour action=add requires a layer",
+          });
+        }
+        if (!params.net && !params.allowUnconnected) {
+          return formatKicadResult({
+            success: false,
+            message:
+              "copper_pour action=add requires a net (or allowUnconnected:true for a deliberate no-net zone)",
+          });
+        }
       }
       const command = {
         add: "add_copper_pour",

@@ -169,7 +169,13 @@ class QueryMixin:
             }
 
     def find_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Find components matching search criteria (reference, value, or footprint pattern)"""
+        """Find components on the loaded PCB (board, not schematic).
+
+        Matches on any of: a free-text ``query`` (case-insensitive substring
+        checked across reference, value AND footprint-id), or the targeted
+        ``reference`` / ``value`` / ``footprint`` substring filters. All
+        supplied criteria combine with AND.
+        """
         try:
             if not self.board:
                 return {
@@ -178,16 +184,20 @@ class QueryMixin:
                     "errorDetails": "Load or create a board first",
                 }
 
-            # Get search parameters
-            reference_pattern = params.get("reference", "").lower()
-            value_pattern = params.get("value", "").lower()
-            footprint_pattern = params.get("footprint", "").lower()
+            # Get search parameters (tolerate explicit null / non-string).
+            query = str(params.get("query") or "").lower()
+            reference_pattern = str(params.get("reference") or "").lower()
+            value_pattern = str(params.get("value") or "").lower()
+            footprint_pattern = str(params.get("footprint") or "").lower()
 
-            if not reference_pattern and not value_pattern and not footprint_pattern:
+            if not query and not reference_pattern and not value_pattern and not footprint_pattern:
                 return {
                     "success": False,
                     "message": "Missing search criteria",
-                    "errorDetails": "At least one of reference, value, or footprint pattern is required",
+                    "errorDetails": (
+                        "Provide a free-text `query`, or at least one of "
+                        "reference / value / footprint."
+                    ),
                 }
 
             matches = []
@@ -196,8 +206,10 @@ class QueryMixin:
                 val = module.GetValue().lower()
                 fp = module.GetFPIDAsString().lower()
 
-                # Check if component matches all provided patterns
+                # Check if component matches all provided criteria (AND).
                 match = True
+                if query and query not in ref and query not in val and query not in fp:
+                    match = False
                 if reference_pattern and reference_pattern not in ref:
                     match = False
                 if value_pattern and value_pattern not in val:

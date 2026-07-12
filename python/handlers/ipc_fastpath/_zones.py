@@ -68,6 +68,24 @@ def _ipc_board_edge_rect(ipc_board_api: Any) -> Optional[List[Dict[str, float]]]
         return None
 
 
+def _ipc_available_net_names(iface: "KiCADInterface") -> Optional[List[str]]:
+    """Net names on the live IPC board, or None when they can't be enumerated.
+
+    Returning None (rather than an empty list) lets the caller fall back to
+    passing the requested net through unchanged instead of refusing — e.g. in
+    unit tests where ``ipc_board_api`` is a bare mock whose ``get_nets`` isn't
+    iterable.  A real board always yields a non-empty list.
+    """
+    try:
+        nets = iface.ipc_board_api.get_nets()
+        names = [n.get("name", "") for n in nets if isinstance(n, dict)]
+        names = [n for n in names if n]
+        return names or None
+    except Exception as e:
+        logger.debug(f"Could not enumerate IPC net names: {e}")
+        return None
+
+
 def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """IPC handler for add_copper_pour — adds zone with real-time UI update.
 
@@ -79,8 +97,11 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
     rejected every call that used the documented ``outline`` name.
     """
     try:
+        from commands.routing._zones import resolve_net_name
+
         layer = params.get("layer", "F.Cu")
         net = params.get("net")
+        allow_unconnected = bool(params.get("allowUnconnected", False))
         clearance = params.get("clearance", 0.5)
         min_width = params.get("minWidth", 0.25)
         # The MCP schema names this `outline`; some legacy callers pass
@@ -122,10 +143,49 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             {"x": p.get("x", 0) * _pt_scale(p), "y": p.get("y", 0) * _pt_scale(p)} for p in points
         ]
 
+        # Resolve the requested net against the board's real nets so a name
+        # mismatch (e.g. "GND" vs "/GND") never silently produces a net-0
+        # floating zone (finding F3).  A deliberate no-net zone is still
+        # possible via allowUnconnected=true (or net="").
+        resolved_net = net
+        net_was_resolved = False
+        if net:  # non-empty net requested
+            available = _ipc_available_net_names(iface)
+            if available is not None:
+                resolved, candidates = resolve_net_name(net, available)
+                if resolved is None:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Net '{net}' not found on the board. A copper pour "
+                            "must attach to a real net — a name mismatch would "
+                            "create an electrically-dead net-0 plane. Pass one of "
+                            "the candidate net names, or allowUnconnected=true "
+                            '(or net="") for a deliberate no-net zone.'
+                        ),
+                        "requestedNet": net,
+                        "candidates": candidates,
+                    }
+                resolved_net = resolved
+                net_was_resolved = resolved != net
+            # else: nets not enumerable (mock / no live board) — pass through.
+        elif net == "" or allow_unconnected:
+            resolved_net = None  # deliberate no-net zone
+        else:
+            return {
+                "success": False,
+                "message": (
+                    "Copper pour needs a net. Pass net=<name>, or "
+                    'allowUnconnected=true (or net="") to deliberately '
+                    "create an unconnected (net-0) zone."
+                ),
+                "requestedNet": net,
+            }
+
         success = iface.ipc_board_api.add_zone(
             points=formatted_points,
             layer=layer,
-            net_name=net,
+            net_name=resolved_net,
             clearance=clearance,
             min_thickness=min_width,
             priority=priority,
@@ -133,23 +193,34 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             name=name,
         )
 
-        return {
+        pour: Dict[str, Any] = {
+            "layer": layer,
+            "net": resolved_net if resolved_net is not None else "",
+            "clearance": clearance,
+            "minWidth": min_width,
+            "priority": priority,
+            "fillType": fill_type,
+            "pointCount": len(formatted_points),
+        }
+        if net_was_resolved:
+            pour["requestedNet"] = net
+            pour["resolvedNet"] = resolved_net
+        if resolved_net is None:
+            pour["unconnected"] = True
+
+        response: Dict[str, Any] = {
             "success": success,
             "message": (
                 "Added copper pour (visible in KiCAD UI)"
                 if success
                 else "Failed to add copper pour"
             ),
-            "pour": {
-                "layer": layer,
-                "net": net,
-                "clearance": clearance,
-                "minWidth": min_width,
-                "priority": priority,
-                "fillType": fill_type,
-                "pointCount": len(formatted_points),
-            },
+            "pour": pour,
         }
+        if success and net_was_resolved:
+            response["resolvedNet"] = resolved_net
+            response["warning"] = f"Requested net '{net}' resolved to board net '{resolved_net}'."
+        return response
     except Exception as e:
         logger.error(f"IPC add_copper_pour error: {e}")
         return {"success": False, "message": str(e)}

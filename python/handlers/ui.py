@@ -98,13 +98,24 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
     """
     logger.info("Launching KiCAD UI")
     try:
-        # Read AUTO_LAUNCH_KICAD lazily to avoid a hard import cycle with
-        # kicad_interface (which imports this module).
-        from kicad_interface import AUTO_LAUNCH_KICAD
-
         project_path = params.get("projectPath")
-        auto_launch = params.get("autoLaunch", AUTO_LAUNCH_KICAD)
         path_obj = Path(project_path) if project_path else None
+
+        # F7: an explicit ``launch`` request means launching IS the intent, so
+        # default autoLaunch ON — unlike the passive IPC-required auto-open
+        # (AUTO_LAUNCH_KICAD, which is opt-in via KICAD_AUTO_LAUNCH=true).
+        # Precedence:
+        #   * env KICAD_AUTO_LAUNCH=false is a HARD opt-out — never launch.
+        #   * an explicit ``autoLaunch`` param wins over the default.
+        #   * otherwise default ON.
+        env_hard_optout = os.environ.get("KICAD_AUTO_LAUNCH", "").strip().lower() == "false"
+        explicit_auto_launch = params.get("autoLaunch")
+        if env_hard_optout:
+            auto_launch = False
+        elif explicit_auto_launch is None:
+            auto_launch = True
+        else:
+            auto_launch = bool(explicit_auto_launch)
 
         result = check_and_launch_kicad(path_obj, auto_launch)
         if result.get("running"):
@@ -118,7 +129,30 @@ def handle_launch_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> D
             forwarded = _forward_file_open_to_running_kicad(iface, path_obj)
             result.update(forwarded)
 
-        return {"success": True, **result, **iface._backend_status()}
+        # F7: an explicit launch that did nothing must surface as
+        # success:false — not the old success:true masking a silent no-op.
+        # Two failure modes:
+        #   * auto-launch suppressed (env/param opt-out) and KiCad isn't up →
+        #     tell the caller exactly why and how to override.
+        #   * auto-launch attempted but the process didn't come up → keep
+        #     check_and_launch_kicad's "Failed to launch KiCAD" message.
+        success = True
+        if not result.get("running") and not result.get("launched"):
+            success = False
+            if not auto_launch:
+                if env_hard_optout:
+                    reason = "KICAD_AUTO_LAUNCH=false disables auto-launch"
+                elif explicit_auto_launch is False:
+                    reason = "autoLaunch:false was passed"
+                else:
+                    reason = "auto-launch is disabled"
+                result["message"] = (
+                    f"KiCAD is not running and was not launched ({reason}). "
+                    "Start KiCAD manually, or retry with autoLaunch:true "
+                    "(and without KICAD_AUTO_LAUNCH=false in the environment)."
+                )
+
+        return {"success": success, **result, **iface._backend_status()}
     except Exception as e:
         logger.error(f"Error launching KiCAD UI: {str(e)}")
         return {"success": False, "message": str(e)}
@@ -306,6 +340,12 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         "success": True,
         **status,
         "version": ipc_backend.get_version() if ipc_backend else "N/A",
+        # Cross-backend sync flags — documented as always present on
+        # get_backend_info so callers can pre-empt the needs_reconcile gate
+        # (finding F10).  Set before the ipc/swig branch split so BOTH return
+        # paths carry them.
+        "ipcWritesPending": bool(getattr(iface, "_ipc_writes_pending", False)),
+        "swigWritesLanded": bool(getattr(iface, "_swig_writes_landed", False)),
     }
     if status["backend"] == "ipc":
         response["message"] = "Using IPC backend with real-time UI sync"

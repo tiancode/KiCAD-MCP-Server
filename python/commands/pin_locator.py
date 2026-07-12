@@ -313,8 +313,24 @@ class PinLocator:
             logger.debug(f"_get_lib_id({symbol_reference}): {type(e).__name__}: {e}")
         return None
 
+    @staticmethod
+    def _is_multi_unit(defined_units: Optional[Any]) -> bool:
+        """True when the symbol genuinely spans more than one non-common unit.
+
+        ``defined_units`` is the set of ``unit`` values parsed off the pins.
+        Unit 0 is the common / graphic-only layer, so it is excluded: a part
+        is multi-unit only when two or more *numbered* units carry pins.
+        """
+        if not defined_units:
+            return False
+        return len({u for u in defined_units if u not in (0, None)}) > 1
+
     def _get_symbol_transform(
-        self, schematic_path: Path, symbol_reference: str, pin_unit: Optional[int] = None
+        self,
+        schematic_path: Path,
+        symbol_reference: str,
+        pin_unit: Optional[int] = None,
+        defined_units: Optional[Any] = None,
     ) -> Optional[Tuple[float, float, float, bool, bool, str]]:
         """
         Read symbol position, rotation, mirror flags, and lib_id directly from the
@@ -326,11 +342,20 @@ class PinLocator:
         ``pin_unit`` selects which unit's instance to read for a multi-unit part.
         Each unit is placed separately (own position/rotation/mirror), so a pin
         must be transformed by *its* unit's instance. When ``pin_unit`` is None,
-        or the part has a single placed instance, the first instance is used
-        (back-compatible). When the part has multiple instances and the
-        requested unit is not on the sheet, returns None rather than silently
-        mislocating the pin onto another unit — except unit 0 (common /
-        graphic-only pins), which falls back to the first instance.
+        the first instance is used (back-compatible). When a specific numbered
+        unit is requested but has **no placed instance**, this returns None —
+        never a fabricated coordinate on another unit's instance — UNLESS the
+        part is effectively single-unit (only one numbered unit defined) and a
+        single instance is present, in which case that lone instance owns the
+        pin even if its recorded ``(unit N)`` index differs from the pin's
+        parsed unit (some community symbols mis-number). Unit 0 (common /
+        graphic-only pins) always falls back to the first instance.
+
+        ``defined_units`` (the set of unit values across the symbol's pins) lets
+        this distinguish a genuinely multi-unit part with an unplaced unit — the
+        F1 bug, where only unit A of a 2-unit MCU is on the sheet yet unit-B pins
+        were being located on unit A's origin — from a single-unit part whose one
+        instance simply records a surprising unit index.
         """
         from commands.wire_dragger import WireDragger
 
@@ -346,7 +371,7 @@ class PinLocator:
         if not instances:
             return None
 
-        if pin_unit is None or len(instances) == 1:
+        if pin_unit is None:
             chosen = instances[0]
         else:
             chosen = next((inst for inst in instances if inst[7] == pin_unit), None)
@@ -355,7 +380,14 @@ class PinLocator:
                     # Common / graphic-only pins are drawn on every unit; there
                     # is no dedicated instance, so fall back to the first one.
                     chosen = instances[0]
+                elif not self._is_multi_unit(defined_units) and len(instances) == 1:
+                    # Effectively single-unit: the sole placed instance owns the
+                    # pin even if its recorded (unit N) differs from the pin's
+                    # parsed unit (regex mis-numbering on some community symbols).
+                    chosen = instances[0]
                 else:
+                    # Genuinely multi-unit AND this unit is not on the sheet —
+                    # refuse rather than mislocate the pin onto another unit.
                     logger.debug(
                         f"{symbol_reference}: unit {pin_unit} not placed "
                         f"(present units: {sorted(inst[7] for inst in instances)})"
@@ -426,8 +458,12 @@ class PinLocator:
             # — units can be placed with different rotations/mirrors.
             pin_unit = pins[pin_number].get("unit")
             if pin_unit is not None:
+                defined_units = {p.get("unit") for p in pins.values()}
                 unit_transform = self._get_symbol_transform(
-                    schematic_path, symbol_reference, pin_unit=pin_unit
+                    schematic_path,
+                    symbol_reference,
+                    pin_unit=pin_unit,
+                    defined_units=defined_units,
                 )
                 if unit_transform is None:
                     return None
@@ -552,8 +588,12 @@ class PinLocator:
             # shorting nets when a label snaps to the wrong pin).
             pin_unit = pin_data.get("unit")
             if pin_unit is not None:
+                defined_units = {p.get("unit") for p in pins.values()}
                 unit_transform = self._get_symbol_transform(
-                    schematic_path, symbol_reference, pin_unit=pin_unit
+                    schematic_path,
+                    symbol_reference,
+                    pin_unit=pin_unit,
+                    defined_units=defined_units,
                 )
                 if unit_transform is None:
                     logger.error(
@@ -637,6 +677,123 @@ class PinLocator:
             # this swallow.  Use logger.exception so the trace reaches the log.
             logger.exception(f"Error getting all symbol pins for {symbol_reference}: {e}")
             return {}
+
+    def get_unit_placement(
+        self, schematic_path: Path, symbol_reference: str
+    ) -> Optional[Dict[str, Any]]:
+        """Report the unit situation for a (possibly multi-unit) placed symbol.
+
+        A multi-unit part (op-amp, MCU split into GPIO + power banks, …) is
+        placed as one ``(symbol …)`` per unit, all sharing the reference. Pins
+        of a unit that is NOT on the sheet have no real location — locating them
+        fabricates coordinates (the F1 bug). Callers use this to warn about, and
+        refuse to target, unplaced units.
+
+        Returns, or None when the reference can't be read::
+
+            {
+              "lib_id": str | None,
+              "defined_units": [int, ...],   # numbered units the symbol defines
+              "total_units": int,            # len(defined_units), min 1
+              "placed_units": [int, ...],    # numbered units with an instance
+              "unplaced_units": [int, ...],  # defined but not placed
+              "is_multi_unit": bool,
+            }
+        """
+        from commands.wire_dragger import WireDragger
+
+        try:
+            sexp = self._load_sexp(schematic_path)
+        except (OSError, ValueError) as e:
+            logger.debug(f"get_unit_placement: failed to parse {schematic_path}: {e}")
+            return None
+
+        instances = WireDragger.find_symbol_instances(sexp, symbol_reference)
+        if not instances:
+            return None
+
+        lib_id = next((inst[4] for inst in instances if inst[4]), None)
+        placed_units: List[int] = sorted(
+            {int(inst[7]) for inst in instances if inst[7] not in (None, 0)}
+        )
+
+        defined_units: List[int] = []
+        if lib_id:
+            pins = self.get_symbol_pins(schematic_path, lib_id)
+            defined_units = sorted(
+                {int(p["unit"]) for p in pins.values() if p.get("unit") not in (None, 0)}
+            )
+        # A symbol whose pins are all common (unit 0) or that we couldn't read
+        # is effectively single-unit — normalise to [1] so callers see one unit.
+        if not defined_units:
+            defined_units = placed_units or [1]
+
+        unplaced_units = [u for u in defined_units if u not in placed_units]
+        return {
+            "lib_id": lib_id,
+            "defined_units": defined_units,
+            "total_units": len(defined_units),
+            "placed_units": placed_units,
+            "unplaced_units": unplaced_units,
+            "is_multi_unit": len(defined_units) > 1,
+        }
+
+    def diagnose_missing_pin(
+        self, schematic_path: Path, symbol_reference: str, pin_number: str
+    ) -> Dict[str, Any]:
+        """Explain why ``get_pin_location`` could not place a pin.
+
+        Returns a dict with ``reason`` one of:
+          * ``"no_symbol"``    — the reference isn't placed at all.
+          * ``"unplaced_unit"`` — the pin exists but its multi-unit part's unit
+            is not on the sheet (the F1 phantom-pin case). Carries ``pin_unit``,
+            ``resolved_pin``, ``lib_id`` and the unit lists so the caller can
+            tell the user exactly which ``add_schematic_component(..., unit=N)``
+            call fixes it.
+          * ``"not_found"``    — the pin number/name isn't in the symbol at all.
+        """
+        info = self.get_unit_placement(schematic_path, symbol_reference)
+        if info is None:
+            return {"reason": "no_symbol"}
+
+        lib_id = info.get("lib_id")
+        pins = self.get_symbol_pins(schematic_path, lib_id) if lib_id else {}
+        pin_key = str(pin_number)
+        if pin_key not in pins:
+            matched = next(
+                (num for num, d in pins.items() if d.get("name") == pin_key),
+                None,
+            )
+            if matched is None:
+                return {"reason": "not_found", **info}
+            pin_key = matched
+
+        pin_unit = pins[pin_key].get("unit")
+        if pin_unit not in (None, 0) and pin_unit in info.get("unplaced_units", []):
+            return {
+                "reason": "unplaced_unit",
+                "pin_unit": pin_unit,
+                "resolved_pin": pin_key,
+                **info,
+            }
+        return {"reason": "not_found", "resolved_pin": pin_key, **info}
+
+    @staticmethod
+    def format_unplaced_unit_error(symbol_reference: str, diag: Dict[str, Any]) -> str:
+        """Build the user-facing refusal message for a pin on an unplaced unit."""
+        unit = diag.get("pin_unit")
+        pin = diag.get("resolved_pin")
+        unplaced = diag.get("unplaced_units", [])
+        symbol_arg = diag.get("lib_id") or "<library>:<name>"
+        return (
+            f"Pin {pin} of {symbol_reference} belongs to unit {unit}, a unit of a "
+            f"multi-unit symbol that is NOT placed on the sheet — it has no real "
+            f"location, so it cannot be labeled or connected (labeling it would "
+            f"land in empty space). Place the missing unit first with: "
+            f'add_schematic_component(symbol="{symbol_arg}", '
+            f'reference="{symbol_reference}", unit={unit})  '
+            f"(unplaced unit(s): {unplaced}). Then retry this call."
+        )
 
 
 if __name__ == "__main__":

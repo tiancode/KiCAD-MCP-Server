@@ -30,7 +30,10 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
       autoLaunch: z
         .boolean()
         .optional()
-        .describe("Launch KiCAD if not running (default true; launch only)"),
+        .describe(
+          "Launch KiCAD if not running (launch action only; defaults to true — " +
+            "an explicit launch means to launch. KICAD_AUTO_LAUNCH=false forces off).",
+        ),
     },
     async (args: { action: "status" | "launch"; projectPath?: string; autoLaunch?: boolean }) => {
       const { action, ...rest } = args;

@@ -94,7 +94,9 @@ def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     bc = iface.board_commands
 
     components = _safe_call("components", cc.get_component_list, {})
-    tracks = _safe_call("tracks", rc.query_traces, {})
+    # includeVias so the summary can report a via_count (F5 audit): vias are
+    # returned unpaginated with a full ``viaCount`` alongside the track slice.
+    tracks = _safe_call("tracks", rc.query_traces, {"includeVias": True})
     zones = _safe_call("zones", rc.query_zones, {})
     nets = _safe_call("nets", rc.get_nets_list, {})
     layers: Dict[str, Any] = {"success": True}
@@ -115,7 +117,8 @@ def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> 
 
     summary = {
         "component_count": _count(components, "components"),
-        "track_count": _count(tracks, "tracks") or _count(tracks, "traces"),
+        "track_count": _count(tracks, "traces"),
+        "via_count": _via_count(tracks),
         "zone_count": _count(zones, "zones"),
         "net_count": _count(nets, "nets"),
         "failed_slices": failed,
@@ -136,12 +139,38 @@ def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> 
 
 
 def _count(result: Dict[str, Any], key: str) -> int:
-    """Best-effort count extraction from a sub-handler result."""
+    """Best-effort FULL-count extraction from a sub-handler result.
+
+    Prefer the paginated ``total`` (the whole-board count) over ``count`` (the
+    length of the returned page).  The query handlers spread ``utils.pagination``
+    metadata — ``total`` = full count, ``count`` = this page — into their
+    response, so reading ``count`` reported the page cap instead of the real
+    total (finding F5: track_count showed 100 while the board had 226 segments;
+    component_count / net_count shared the bug).  Fall back to an explicit
+    ``count`` field, then the array length, for handlers that don't paginate.
+    """
     if not isinstance(result, dict) or not result.get("success"):
         return 0
+    if isinstance(result.get("total"), int):
+        return result["total"]
     if isinstance(result.get("count"), int):
         return result["count"]
     arr = result.get(key)
     if isinstance(arr, list):
         return len(arr)
+    return 0
+
+
+def _via_count(result: Dict[str, Any]) -> int:
+    """Full via count from a ``query_traces(includeVias=True)`` result.
+
+    Vias are returned unpaginated with a ``viaCount`` = full count, so read that
+    directly; fall back to the ``vias`` list length if the field is absent."""
+    if not isinstance(result, dict) or not result.get("success"):
+        return 0
+    if isinstance(result.get("viaCount"), int):
+        return result["viaCount"]
+    vias = result.get("vias")
+    if isinstance(vias, list):
+        return len(vias)
     return 0

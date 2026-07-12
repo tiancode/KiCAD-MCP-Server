@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 def require_ipc(
     iface: "KiCADInterface",
     ipc_unavailable: Callable[[str], Dict[str, Any]],
+    *,
+    read_only: bool = False,
 ) -> Dict[str, Any]:
     """Gate a board op on IPC + an open PCB editor frame.
 
@@ -33,6 +35,18 @@ def require_ipc(
       rewrap, in the caller's domain envelope, so the message reads cleanly
       instead of nesting two "IPC backend not available" prefixes.
 
+    ``read_only=True`` is for READ handlers (list_shapes, get_origin,
+    get_title_block_info, get_selection, hit_test, get_transaction_status,
+    the ``ipc_get_*`` / ``ipc_list_*`` queries): it skips the cross-backend
+    ``needs_reconcile`` refusal, because reads can't lose data — the IPC
+    fast-path reads already pass that gate, and refusing the IPC-only reads
+    while their MUTATING siblings auto-reconciled (F11) was backwards.  A
+    read never triggers the auto-reconcile heal (a query must not revert
+    KiCad); the dispatcher instead annotates the successful result with
+    ``staleVsDisk`` / ``staleHint`` (commands listed in
+    ``_IPC_READ_ONLY_COMMANDS``).  The editor-frame gate and the raw-reason
+    rewrap are unchanged by this flag.
+
     Regression context (finding B2): this wrapper used to special-case only
     ``needs_pcb_editor`` and funnel *everything else* — including a
     ``needs_reconcile`` cross-backend conflict — through ``ipc_unavailable``.
@@ -42,7 +56,7 @@ def require_ipc(
     ``_ipc_reason`` (the raw-reason envelope) instead means every structured
     refusal shape — current or future — is forwarded untouched.
     """
-    gate = iface.require_ipc_board_op(allow_launch=True)
+    gate = iface.require_ipc_board_op(allow_launch=True, read_only=read_only)
     if not gate:
         return {}
     if "_ipc_reason" in gate:

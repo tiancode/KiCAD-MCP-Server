@@ -4,11 +4,119 @@ Board outline command implementations for KiCAD interface
 
 import logging
 import math
-from typing import Any, Dict, Optional
+import os
+import re
+from pathlib import Path
+from typing import Any, Dict, Optional, Set
 
 import pcbnew
 
 logger = logging.getLogger("kicad_interface")
+
+# Process-wide cache for the resolved MountingHole.pretty directory so we don't
+# hit the filesystem on every add_mounting_hole call.
+_MOUNTINGHOLE_DIR_CACHE: Dict[str, Optional[str]] = {}
+
+# Matches the "plain" MountingHole footprints — a bare diameter, optionally with
+# a screw-size suffix (…_M3, …_M2.5) but WITHOUT the _Pad / _DIN965 / _ISO7380 /
+# _Via / _TopOnly / _TopBottom variants. Capture group 1 is the diameter in mm.
+_PLAIN_MH_RE = re.compile(r"^MountingHole_(\d+(?:\.\d+)?)mm(?:_M\d+(?:\.\d+)?)?$")
+
+
+def _locate_mountinghole_pretty() -> Optional[str]:
+    """Return the path to the stock ``MountingHole.pretty`` dir, or None.
+
+    Mirrors LibraryManager's footprint-dir probing (env override → standard
+    install paths → Flatpak runtime glob) so the resolver works across installs
+    without a hard dependency on the library manager.
+    """
+    if "dir" in _MOUNTINGHOLE_DIR_CACHE:
+        return _MOUNTINGHOLE_DIR_CACHE["dir"]
+
+    candidates = []
+    for var in ("KICAD10_FOOTPRINT_DIR", "KICAD9_FOOTPRINT_DIR", "KICAD8_FOOTPRINT_DIR"):
+        val = os.environ.get(var)
+        if val:
+            candidates.append(val)
+    candidates += [
+        "/usr/share/kicad/footprints",
+        "/usr/local/share/kicad/footprints",
+        "C:/Program Files/KiCad/10.0/share/kicad/footprints",
+        "C:/Program Files/KiCad/9.0/share/kicad/footprints",
+        "C:/Program Files/KiCad/8.0/share/kicad/footprints",
+        "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints",
+    ]
+    try:
+        flatpak = sorted(
+            Path("/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints").glob(
+                "*/stable/*/files/footprints"
+            )
+        )
+        if flatpak:
+            candidates.append(str(flatpak[-1]))
+    except OSError:
+        pass
+
+    result = None
+    for base in candidates:
+        pretty = os.path.join(base, "MountingHole.pretty")
+        if os.path.isdir(pretty):
+            result = pretty
+            break
+    _MOUNTINGHOLE_DIR_CACHE["dir"] = result
+    return result
+
+
+def _list_mountinghole_footprints() -> Set[str]:
+    """Set of footprint names (without .kicad_mod) in the stock MountingHole lib."""
+    pretty = _locate_mountinghole_pretty()
+    if not pretty:
+        return set()
+    try:
+        return {fn[:-10] for fn in os.listdir(pretty) if fn.endswith(".kicad_mod")}
+    except OSError:
+        return set()
+
+
+def _resolve_mountinghole_footprint(diameter: float) -> Optional[str]:
+    """Map a hole diameter (mm) to an existing stock MountingHole footprint name.
+
+    Prefers the bare ``MountingHole_<d>mm``; otherwise the plain screw-size
+    variant for that exact diameter (e.g. 3.2 → ``MountingHole_3.2mm_M3``, which
+    is what the stock KiCAD 10 lib actually ships — there is no bare 3.2mm).
+    Falls back to the closest existing plain diameter. Returns None only when the
+    stock library can't be located at all, so the caller keeps the legacy
+    synthetic name.
+    """
+    names = _list_mountinghole_footprints()
+    if not names:
+        return None
+
+    d = f"{diameter:g}"  # 3.2 → "3.2", 3.0 → "3"
+    exact_plain = f"MountingHole_{d}mm"
+    if exact_plain in names:
+        return exact_plain
+
+    # Exact diameter but only a screw-size variant exists (3.2mm_M3, 4.3mm_M4…).
+    same_diameter = [
+        n for n in names if (m := _PLAIN_MH_RE.match(n)) and float(m.group(1)) == float(diameter)
+    ]
+    if same_diameter:
+        # Shortest = the plain screw variant (…_M3) over any longer relatives.
+        return min(same_diameter, key=len)
+
+    # No exact match — pick the closest existing plain diameter.
+    best: Optional[str] = None
+    best_delta: Optional[float] = None
+    for n in names:
+        m = _PLAIN_MH_RE.match(n)
+        if not m:
+            continue
+        delta = abs(float(m.group(1)) - float(diameter))
+        if best_delta is None or delta < best_delta or (delta == best_delta and len(n) < len(best)):
+            best_delta = delta
+            best = n
+    return best
 
 
 class BoardOutlineCommands:
@@ -267,8 +375,17 @@ class BoardOutlineCommands:
             # written as `(footprint "" ...)` and KiCad's GUI Move tool refuses
             # to select it (no library link → not draggable in the editor).
             if not footprint_lib_id:
-                # Strip trailing zeros so 3.2 → "3.2" not "3.20"
-                footprint_lib_id = f"MountingHole:MountingHole_{diameter:g}mm"
+                # Resolve to a footprint name that ACTUALLY exists in the stock
+                # MountingHole lib — the bare "MountingHole_<d>mm" is absent for
+                # several common sizes (3.2 / 4.3 / 5.3 / 6.4 ship only as
+                # …_M3 / _M4 / …), which otherwise trips DRC's lib_footprint_issues.
+                resolved = _resolve_mountinghole_footprint(diameter)
+                if resolved:
+                    footprint_lib_id = f"MountingHole:{resolved}"
+                else:
+                    # Stock lib not found at all → keep the legacy synthetic name.
+                    # Strip trailing zeros so 3.2 → "3.2" not "3.20".
+                    footprint_lib_id = f"MountingHole:MountingHole_{diameter:g}mm"
             if ":" in footprint_lib_id:
                 lib_name, fp_name = footprint_lib_id.split(":", 1)
             else:

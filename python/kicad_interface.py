@@ -1207,7 +1207,9 @@ class KiCADInterface(BoardPersistenceMixin):
             logger.debug(f"has_open_pcb_document failed: {e}")
             return False
 
-    def require_ipc_board_op(self, *, allow_launch: bool = True) -> Dict[str, Any]:
+    def require_ipc_board_op(
+        self, *, allow_launch: bool = True, read_only: bool = False
+    ) -> Dict[str, Any]:
         """Gate for handler-level IPC board ops.
 
         Returns one of four shapes:
@@ -1228,15 +1230,28 @@ class KiCADInterface(BoardPersistenceMixin):
             other IPC-unavailable cases.  Handlers wrap that raw reason
             with their own domain-specific envelope so error messages
             don't end up doubly-prefixed.
+
+        ``read_only=True`` (read-gate parity follow-up to F11): skip the
+        cross-backend conflict refusal.  Reads can't lose data, so the IPC
+        fast path already let its reads through during a ``swig_to_ipc``
+        conflict — refusing the IPC-ONLY reads (list_shapes, get_origin,
+        get_selection, …) while their MUTATING siblings auto-reconciled was
+        backwards.  A read must NOT trigger the auto-reconcile heal either
+        (a query shouldn't revert KiCad); instead the dispatcher stamps the
+        fast-path ``staleVsDisk`` / ``staleHint`` annotation on the
+        successful result (commands in ``_IPC_READ_ONLY_COMMANDS``).  The
+        editor-frame gate and the raw ``_ipc_reason`` envelope behave
+        identically in both modes.
         """
         ok, reason = self.ensure_ipc(allow_launch=allow_launch, require_pcb_editor=True)
         if not ok:
             if reason == self._pcb_editor_gate_reason():
                 return self._pcb_editor_gate_response()
             return {"success": False, "_ipc_reason": reason}
-        conflict = self._cross_backend_conflict(attempting="ipc")
-        if conflict is not None:
-            return conflict
+        if not read_only:
+            conflict = self._cross_backend_conflict(attempting="ipc")
+            if conflict is not None:
+                return conflict
         return {}
 
     def ensure_ipc(
@@ -1564,10 +1579,60 @@ class KiCADInterface(BoardPersistenceMixin):
                 if conflict is not None:
                     return conflict
 
+            # F11: IPC-ONLY mutating commands (set_origin / set_title_block_info /
+            # add_/edit_/delete_shape) have no SWIG fast-path, so they reach here
+            # via command_routes and gate themselves in-handler
+            # (handlers/ipc_gate.require_ipc), which returned a swig_to_ipc
+            # `needs_reconcile` refusal verbatim — with no chance for the
+            # dispatcher's lossless auto-heal to run.  That made them behave the
+            # OPPOSITE of IPC-capable mutations like move_component (which
+            # auto-reconcile) for the identical conflict.  Give them the same
+            # treatment: on a swig_to_ipc conflict with a CLEAN IPC side,
+            # reconcile here (revert KiCad from disk) and let the handler
+            # proceed — its own gate then passes and we merge the markers below.
+            # When auto-heal declines (two-sided conflict, KICAD_AUTO_RECONCILE=
+            # false, or the reconcile failed) we fall through WITHOUT returning
+            # the conflict, so the handler surfaces its own verbatim refusal —
+            # preserving the in-handler gate ordering (needs_pcb_editor wins when
+            # the closed editor frame is the real blocker).
+            ipc_only_reconcile_info: Optional[Dict[str, Any]] = None
+            if handler is not None and command in self._IPC_ONLY_MUTATING_COMMANDS:
+                conflict = self._cross_backend_conflict(attempting="ipc")
+                if conflict is not None:
+                    ipc_only_reconcile_info = self._auto_reconcile_swig_to_ipc(conflict)
+
             if handler:
                 # Execute the command
                 result = handler(params)
                 logger.debug(f"Command result: {result}")
+
+                # Surface a dispatcher-level self-heal (F11) with the same
+                # markers the IPC fast path attaches.  These commands aren't in
+                # _BOARD_MUTATING_COMMANDS, so the SWIG auto-save block below
+                # never runs for them.
+                if ipc_only_reconcile_info is not None and isinstance(result, dict):
+                    result.setdefault("auto_reconciled", True)
+                    if ipc_only_reconcile_info.get("stepsTaken"):
+                        result.setdefault("stepsTaken", ipc_only_reconcile_info["stepsTaken"])
+                    if ipc_only_reconcile_info.get("externalDiskChange"):
+                        result.setdefault("externalDiskChange", True)
+
+                # Read-gate parity (F11 follow-up): IPC-ONLY read commands
+                # (list_shapes, get_origin, get_selection, …) pass the
+                # in-handler conflict gate via read_only=True while SWIG has
+                # landed writes.  Like the fast-path reads, flag that the live
+                # KiCad memory they read lags disk.  Restricted to commands
+                # NOT in IPC_CAPABLE_COMMANDS: an IPC-capable read that fell
+                # back to SWIG here reads the on-disk file — which INCLUDES
+                # the landed writes — so stamping it stale would be wrong.
+                if (
+                    command in self._IPC_READ_ONLY_COMMANDS
+                    and command not in self.IPC_CAPABLE_COMMANDS
+                    and getattr(self, "_swig_writes_landed", False)
+                    and isinstance(result, dict)
+                    and result.get("success")
+                ):
+                    self._annotate_stale_vs_disk(result)
 
                 # Update board reference if command was successful
                 if result.get("success", False):
@@ -1752,6 +1817,41 @@ class KiCADInterface(BoardPersistenceMixin):
             "get_selection",
             "hit_test",
             "get_transaction_status",
+            # Shape query (handlers/shapes.py) — read-gate parity audit: it
+            # gates in-handler like the other IPC-only reads and was the one
+            # missing from this set, so it refused a swig_to_ipc conflict
+            # that every other read passed (with a staleVsDisk hint).
+            "list_shapes",
+        }
+    )
+
+    # IPC-only commands that MUTATE board content and therefore hit the
+    # swig_to_ipc cross-backend conflict when SWIG has a landed write.  Unlike
+    # the IPC-capable mutations (move_component, place_component, …) these have
+    # no SWIG fast-path, so they reach the dispatcher via command_routes and
+    # gate themselves in-handler (handlers/ipc_gate.require_ipc), which returned
+    # the needs_reconcile refusal verbatim.  The dispatcher gives them the SAME
+    # lossless swig_to_ipc auto-heal the fast path gets (finding F11), so
+    # title_block / origin / shape edits no longer refuse a conflict that
+    # move_component would auto-reconcile.
+    #
+    # Scope is board-CONTENT mutators only.  Selection (get/clear/add/remove)
+    # and transaction lifecycle (begin/commit/rollback) are editor / IPC-commit
+    # state, not board content — a mid-flight revert there has subtler semantics
+    # so they keep the verbatim needs_reconcile refusal.  Read-only IPC-only
+    # queries (get_origin, get_title_block_info, list_shapes, …) are untouched
+    # (they keep the current behaviour).
+    _IPC_ONLY_MUTATING_COMMANDS = frozenset(
+        {
+            "set_origin",
+            "set_title_block_info",
+            "add_segment",
+            "add_arc",
+            "add_circle",
+            "add_rectangle",
+            "add_polygon",
+            "delete_shape",
+            "edit_shape",
         }
     )
 

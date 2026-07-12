@@ -128,9 +128,24 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
 
         zone_count = iface.board.GetAreaCount() if hasattr(iface.board, "GetAreaCount") else 0
 
+        # F9: the SWIG ZONE_FILLER insets the fill from the board outline by
+        # the board's copper-to-edge clearance (BOARD_DESIGN_SETTINGS
+        # .m_CopperEdgeClearance).  When that setting is unset/zero the fill
+        # reaches Edge.Cuts at 0.0 mm → a copper_edge_clearance DRC error.
+        # Default it to 0.5 mm first, then RE-LOAD before filling: the filler
+        # only honours the edge clearance read from the freshly-loaded board,
+        # not an in-memory setter applied to an already-loaded board.  Zone
+        # local clearance / min-thickness are untouched.
         script = textwrap.dedent(f"""
             import pcbnew, sys
             board = pcbnew.LoadBoard({board_path!r})
+            ds = board.GetDesignSettings()
+            edge_clr = ds.m_CopperEdgeClearance
+            if not edge_clr or edge_clr <= 0:
+                ds.m_CopperEdgeClearance = pcbnew.FromMM(0.5)
+                board.Save({board_path!r})
+                board = pcbnew.LoadBoard({board_path!r})
+                print("edge_clearance_defaulted")
             filler = pcbnew.ZONE_FILLER(board)
             filler.Fill(board.Zones())
             board.Save({board_path!r})
@@ -162,16 +177,25 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                 # so the dispatcher's auto-save doesn't refuse the next write.
                 iface._record_board_signature(board_path)
                 logger.info("Zone fill subprocess succeeded")
+                warnings = [
+                    "force=true was set; this fill ran via SWIG "
+                    "subprocess isolation and may differ from KiCad's "
+                    "own result.  Verify with run_drc or open the "
+                    "gerber to check."
+                ]
+                if "edge_clearance_defaulted" in (result.stdout or ""):
+                    warnings.append(
+                        "Board copper-to-edge clearance was unset/zero; "
+                        "defaulted to 0.5 mm before filling so the pour "
+                        "does not touch Edge.Cuts (would be a "
+                        "copper_edge_clearance DRC error). This design "
+                        "setting is now persisted to the board."
+                    )
                 return {
                     "success": True,
                     "message": f"Zones refilled successfully ({zone_count} zones)",
                     "zoneCount": zone_count,
-                    "warnings": [
-                        "force=true was set; this fill ran via SWIG "
-                        "subprocess isolation and may differ from KiCad's "
-                        "own result.  Verify with run_drc or open the "
-                        "gerber to check."
-                    ],
+                    "warnings": warnings,
                 }
             else:
                 logger.warning(

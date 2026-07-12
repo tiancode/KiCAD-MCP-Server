@@ -36,7 +36,7 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
     }
 
 
-def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+def _require_ipc(iface: "KiCADInterface", *, read_only: bool = False) -> Dict[str, Any]:
     """Gate board-metadata ops on IPC + an open PCB editor frame.
 
     Routes through ``KiCADInterface.require_ipc_board_op``:
@@ -45,8 +45,12 @@ def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
     - else → wrap the raw ``_ipc_reason`` in our domain envelope so the
       message reads cleanly instead of nesting two "IPC backend not
       available" prefixes.
+
+    ``read_only=True`` (get_origin / get_title_block_info) skips the
+    cross-backend conflict refusal — reads can't lose data; the dispatcher
+    stamps staleVsDisk on the result.
     """
-    return require_ipc(iface, _ipc_unavailable)
+    return require_ipc(iface, _ipc_unavailable, read_only=read_only)
 
 
 def _xy_from_params(params: Dict[str, Any]) -> tuple:
@@ -92,7 +96,7 @@ def handle_get_origin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
         type: "grid" | "drill" (default "drill" — the one Gerber / PnP use)
         unit: "mm" | "inch" (default "mm")
     """
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     origin_type = str(params.get("type", "drill"))
@@ -135,7 +139,7 @@ def handle_set_origin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
 def handle_get_title_block_info(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Return the board title block (title / company / revision / date /
     comments dict keyed '1'..'9')."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     return iface.ipc_board_api.get_title_block_info()

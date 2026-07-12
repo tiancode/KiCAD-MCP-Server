@@ -117,7 +117,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // ------------------------------------------------------
   server.tool(
     "add_board_outline",
-    "Draw the PCB board outline (Edge.Cuts layer) as a rectangle, rounded rectangle, circle or polygon.",
+    "Draw the PCB board outline (Edge.Cuts layer) as a rectangle, rounded rectangle, circle or polygon. params.unit defaults to mm; params.x/y default to 0 (top-left).",
     {
       shape: z
         .enum(["rectangle", "circle", "polygon", "rounded_rectangle"])
@@ -141,9 +141,15 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
             .optional()
             .describe("Points of polygon"),
           // Position: top-left corner for rectangles/rounded_rectangle, center for circle
-          x: z.number().describe("X: top-left for rectangles, center for circle (default 0)"),
-          y: z.number().describe("Y: top-left for rectangles, center for circle (default 0)"),
-          unit: z.enum(["mm", "mil", "inch"]),
+          x: z
+            .number()
+            .optional()
+            .describe("X: top-left for rectangles, center for circle (default 0)"),
+          y: z
+            .number()
+            .optional()
+            .describe("Y: top-left for rectangles, center for circle (default 0)"),
+          unit: z.enum(["mm", "mil", "inch"]).optional().default("mm").describe("default mm"),
         })
         .describe("Parameters for the outline shape"),
     },
