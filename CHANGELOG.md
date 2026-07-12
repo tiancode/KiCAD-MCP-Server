@@ -4,6 +4,35 @@ All notable changes to the KiCAD MCP Server project are documented here.
 
 ## [Unreleased]
 
+### Documentation Cleanup (2026-07-12)
+
+Removed docs that no longer help development and re-synced the rest with
+the code:
+
+- **Deleted `.github/README.md` / `README.de.md` / `README.zh.md`** — stale
+  leftovers from the upstream fork (mixelpixx branding, badges, and star
+  chart; broken logo path; links into the removed `docs/` tree). GitHub
+  preferred them over the maintained root `README.md`, so the repo page
+  showed the outdated copy.
+- **README**: dropped the three historical "What's New" sections
+  (~300 lines duplicating `CHANGELOG.md`); regenerated the "Available
+  Tools" section from the actual `server.tool(...)` registrations in
+  `src/tools/` (all 163 tools listed — 50 were missing, 2 listed tools no
+  longer existed); unified the three contradictory tool counts
+  (160/174/167 → 163); removed every link into the deleted `docs/`
+  directory; fixed the Architecture section (removed
+  `schemas/tool_schemas.py`, described the `handlers/` package and the
+  command packages as they exist today); moved the resource URI list into
+  "Using Resources".
+- **CONTRIBUTING**: project-structure tree now matches the repo (no
+  `config/`, `docs/`, or `python/schemas/`; added `python/handlers/`);
+  removed the description of the deleted Tool Router / 16-category
+  registry; tool count 151 → 163 with `src/tools/` as the authoritative
+  source.
+- Removed the last two code references to deleted docs
+  (`docs/WINDOWS_TROUBLESHOOTING.md` hint in `src/server.ts`,
+  `docs/ARCHITECTURE.md` in `python/handlers/__init__.py`).
+
 ### Review Fixes: New-Tool Wiring Layer (2026-07-11)
 
 Adversarial review of the functional-expansion PR confirmed 9 defects, all
@@ -13,7 +42,7 @@ in the handler/wiring layer the pure-module tests didn't cover. All fixed:
   `total_components` stats key (canonical: `total_parts`), so every call
   reported an empty parts database. Search-matched BOM lines also never got
   prices (`price_json` was not normalized into `price_breaks` on that path).
-- **`route_smart` endpoint layers** — the A* search started on `layers[0]`
+- **`route_smart` endpoint layers** — the A\* search started on `layers[0]`
   and accepted the goal on any layer, producing electrically disconnected
   routes for SMD pads on other layers (and spurious "start blocked"
   refusals). Endpoints are now pinned to the pad's copper layer
@@ -50,8 +79,8 @@ plus layer-pinning cases in the router suites.
   2026-06 TS tool cleanup — none of these command names could arrive from
   the MCP surface: `add_zone` / `add_text` aliases, `export_svg`,
   `export_schematic_svg`, `get_drc_violations` (method kept — the
-  drc_violations resource consumes it), `export_dsn` / `import_ses` routes
-  (methods kept — unit-tested building blocks). The `ipc_*` handler
+  drc*violations resource consumes it), `export_dsn` / `import_ses` routes
+  (methods kept — unit-tested building blocks). The `ipc*\*` handler
   routes stay (scripts/ipc_smoke_test.py drives them).
 - **Finished the `CommandFunction` type migration**: all 18 registrars
   previously typed `callKicadScript: Function` now use the shared
@@ -70,7 +99,7 @@ plus layer-pinning cases in the router suites.
 
 Six new MCP tools plus one enhancement, targeting KiCad 10:
 
-- **`route_smart` — built-in obstacle-avoiding router.** Grid A* (default
+- **`route_smart` — built-in obstacle-avoiding router.** Grid A\* (default
   0.25 mm pitch) between two pads or points: routes around other-net
   pads/tracks/vias with clearance inflation, supports 1-2 copper layers
   with automatic via insertion, honors netclass width, and commits real

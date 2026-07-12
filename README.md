@@ -10,9 +10,9 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 160 tools with JSON Schema validation, each registered directly as an MCP tool
+- 163 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
-- Complete schematic workflow with 27 tools and dynamic symbol loading (~10,000 symbols)
+- Complete schematic workflow with 48 tools, hierarchical sheets, and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
 - Custom footprint and symbol creation tools
 - JLCPCB parts integration with 2.5M+ component catalog and local library search
@@ -22,465 +22,218 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 - Real-time KiCAD UI integration via IPC API (experimental)
 - Comprehensive error handling and logging
 
-## What's New (post-2.2.3, on `main`)
+## Release Notes
 
-### Leaner tool surface + graphic-shape editing
-
-The MCP tool list was trimmed to 160 tools: duplicates were removed in
-favor of one canonical tool each (`export_svg` →
-`get_board_2d_view(format=svg)`, `export_schematic_svg` →
-`get_schematic_view(format=svg)`, `get_drc_violations` → `run_drc`,
-`get_backend_state` → `get_backend_info`, `export_dsn`/`import_ses` →
-`autoroute`, `add_zone` → `add_copper_pour`, raw `ipc_*` passthroughs →
-the high-level tools that auto-route through IPC). The underlying Python
-commands still exist, so scripted callers keep working.
-
-New `list_shapes` / `delete_shape` / `edit_shape` tools (IPC) close a
-long-standing gap: graphic shapes created by
-`add_segment`/`add_circle`/… can now be enumerated, deleted, moved, and
-restyled instead of requiring hand-edits to the `.kicad_pcb`.
-
-Cross-backend sync also got safer: `reconcile_backends` now detects
-`.kicad_pcb` files edited outside the MCP (text editor, git) via a disk
-signature, Freerouting saves correctly mark the KiCad UI as stale, and
-transactions survive across tool calls (the IPC board API is cached per
-connection instead of recreated per dispatch).
-
-### Faster startup, lazy symbol library
-
-The biggest user-visible regression in older builds was a 30 – 120 s
-startup pause while every `.kicad_sym` file in the global library was
-parsed up front. That eager warm is **opt-in via
-`KICAD_MCP_EAGER_SYMBOL_CACHE=1`** now. The default path is lazy —
-libraries are parsed on first `list_symbols(nickname)` call. A
-persistent disk cache at `~/.kicad-mcp/cache/symbol_libraries.pickle`
-with per-library mtime validation means even broad
-`search_symbols` calls are fast on subsequent runs.
-
-### KiCAD 10 + Flatpak ergonomics
-
-End-to-end tested against KiCAD 10.0.3 (Flathub Flatpak):
-
-- IPC socket auto-detected under
-  `~/.var/app/org.kicad.KiCad/cache/tmp/kicad/api.sock` and the macOS
-  sandbox equivalent — no more manually setting `KICAD_API_SOCKET`.
-- `fp-lib-table` / `sym-lib-table` auto-discovered in the sandbox
-  config dir.
-- `KICAD10_FOOTPRINT_DIR` / `KICAD10_SYMBOL_DIR` recognised; the
-  Flatpak runtime library extension at
-  `/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints/.../files/footprints`
-  is probed as a last resort.
-- KiCAD-10 version detection no longer reports "unknown" when the
-  installed kipy is one patch version behind.
-
-### MCP-protocol fixes
-
-- The router/registry discovery layer (`list_tool_categories`,
-  `search_tools`, `execute_tool`, …) was removed. Every tool is
-  registered directly as an MCP tool and called by name, so the
-  meta-tools and the hand-maintained category registry no longer earned
-  their maintenance cost.
-- `get_backend_info` now has a proper MCP wrapper and reports the
-  correct project / board paths in IPC mode. (The raw `ipc_*` tool
-  wrappers and the `get_backend_state` duplicate that briefly shipped
-  alongside it were later removed in the tool-surface cleanup — see
-  "Leaner tool surface" above.)
-
-### Server architecture refactor
-
-`python/kicad_interface.py` shrank from **6 668 → 2 797 lines (−58 %)**.
-81 inline `_handle_*` methods moved into a new `python/handlers/`
-package (one module per tool category); a single `__getattr__` +
-`_HANDLER_MAP` replaces the 80 trampoline methods. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the new layout.
-
-### Cleanup that also shipped
-
-- `LOG_LEVEL` env var is now honoured by the Python side too (was
-  hardcoded `DEBUG`).
-- CI workflow no longer masks failures with `|| echo "... not
-configured yet"`; the 19 pollution failures it used to hide were
-  root-caused and fixed.
-- `express` dropped (`npm audit --high` → 0 vulnerabilities).
-- `scripts/swig_smoke_test.py` runs the full create-project → place
-  components → route → save chain against real `pcbnew` for catching
-  regressions pytest's MagicMock can't see.
-
-See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
-
-## What's New in v2.2.3
-
-### New Tools: FFC/Ribbon Cable Passthrough Workflow
-
-A complete workflow for designing passthrough adapter boards (e.g. Raspberry Pi CSI
-cable adapters) is now supported:
-
-1. `connect_passthrough` — wires all pins of one connector to the matching pins of
-   another in the schematic (J1 pin N → J2 pin N, auto-named nets).
-2. `sync_schematic_to_board` — imports the net assignments into the PCB.
-3. `route_pad_to_pad` — routes each connection with automatic via insertion when
-   pads are on opposite copper layers.
-4. `snapshot_project` — saves a named checkpoint into `<project>/snapshots/`.
-
-### Bug Fixes (KiCAD 9 / Windows)
-
-- **Via insertion for B.Cu footprints** — `route_pad_to_pad` now correctly detects
-  when a footprint is on B.Cu and inserts the required via. (KiCAD 9 SWIG returned
-  `F.Cu` for all SMD pads regardless of layer — fixed.)
-- **Board outline rounded corners** — `add_board_outline` now correctly applies
-  `cornerRadius` when `shape="rounded_rectangle"`.
-- **B.Cu placement hang** — placing a footprint on B.Cu no longer causes a ~30s
-  freeze in KiCAD 9.
-
-### Developer Mode
-
-Set `KICAD_MCP_DEV=1` in your Claude Desktop MCP environment to automatically save
-the MCP session log into the project's `logs/` folder on every `export_gerber` and
-`snapshot_project` call. Useful for debugging and for attaching to GitHub issues.
-
-```json
-"env": {
-  "KICAD_MCP_DEV": "1"
-}
-```
-
-> **Privacy warning:** The session log contains your full tool call history
-> (including file paths and design details). **Review or delete `logs/` before
-> sharing a project directory publicly.**
-
-See [CHANGELOG](CHANGELOG.md) for the full list of changes in this release.
-
----
-
-## What's New in v2.1.0
-
-### Critical Schematic Workflow Fix + Complete Wiring System (Issue #26)
-
-The schematic workflow was completely broken in previous versions - **this is now fixed AND dramatically enhanced!**
-
-**What was broken:**
-
-- `create_project` only created PCB files, no schematics
-- `add_schematic_component` called non-existent API methods
-- Schematics couldn't be created or edited at all
-- Only 13 component types available (severe limitation)
-- No working wire/connection functionality
-
-**Complete Implementation (3 Phases):**
-
-**Phase 1: Component Placement Foundation**
-
-- `create_project` now creates both .kicad_pcb and .kicad_sch files
-- Added pre-configured template schematics with 13 common component types
-- Rewrote component placement to use proper `clone()` API
-
-**Phase 2: Dynamic Symbol Loading (BREAKTHROUGH!)**
-
-- **Access to ALL ~10,000 KiCad symbols** from standard libraries
-- Automatic detection and dynamic loading from `.kicad_sym` library files
-- Zero configuration required - just specify library and symbol name
-- Seamless integration with existing MCP tools
-- Full S-expression parsing and injection system
-
-**Phase 3: Intelligent Wiring System (NEW in v2.1.0)**
-
-- **Automatic pin location discovery** with rotation support (0°, 90°, 180°, 270°)
-- **Smart wire routing** (direct, orthogonal horizontal-first, orthogonal vertical-first)
-- **Power symbol support** (VCC, GND, +3V3, +5V, etc.)
-- **Wire graph analysis** - geometric tracing for net connectivity
-- **Net label management** (local, global, hierarchical labels)
-- **Netlist generation** with accurate component/pin connections
-
-**Technical Architecture:**
-The kicad-skip library cannot create symbols or wires from scratch. We implemented a comprehensive solution:
-
-1. **Static Templates:** 13 pre-configured symbols (R, C, L, LED, etc.) for instant use
-2. **Dynamic Loading:** On-demand injection of ANY symbol from KiCad libraries:
-   - Parse `.kicad_sym` library files using S-expression parser
-   - Inject symbol definition into schematic's `lib_symbols` section
-   - Create offscreen template instance
-   - Reload schematic so kicad-skip sees new template
-   - Clone template to create actual component
-3. **Wire Creation:** S-expression-based wire injection (bypasses kicad-skip API limitations)
-4. **Pin Discovery:** Parse symbol definitions, apply rotation transformations, calculate absolute positions
-5. **Connectivity Analysis:** Geometric wire tracing to build net connection graphs
-
-**Example - Complete Circuit Creation:**
-
-```python
-# Load power symbols dynamically
-loader.load_symbol_dynamically(sch_path, "power", "VCC")
-
-# Place components with auto-rotation
-ComponentManager.add_component(sch, {
-    "type": "STM32F103C8Tx",
-    "library": "MCU_ST_STM32F1",
-    "reference": "U1",
-    "x": 100, "y": 100, "rotation": 0
-})
-
-# Connect with intelligent routing
-ConnectionManager.add_connection(sch_path, "U1", "1", "R1", "2", routing="orthogonal_h")
-
-# Connect to power nets
-ConnectionManager.connect_to_net(sch_path, "U1", "VDD", "VCC")
-
-# Analyze connectivity
-connections = ConnectionManager.get_net_connections(sch, "VCC", sch_path)
-# Returns: [{"component": "U1", "pin": "VDD"}, {"component": "R1", "pin": "1"}]
-```
-
-**Test Results:**
-
-- Component placement: 100% passing
-- Dynamic symbol loading: 10,000+ symbols accessible
-- Wire creation: 100% passing (8/8 connections in test circuit)
-- Pin discovery: Rotation-aware, sub-millimeter accuracy
-- Net connectivity: 100% accurate (VCC: 2 connections, GND: 4 connections)
-- Netlist generation: Working with accurate pin-level connections
-
-See [Schematic Tools Reference](docs/SCHEMATIC_TOOLS_REFERENCE.md) for the complete schematic tool documentation.
-
-### IPC Backend (Experimental)
-
-We are currently implementing and testing the KiCAD 9.0 IPC API for real-time UI synchronization:
-
-- Changes made via MCP tools appear immediately in the KiCAD UI
-- No manual reload required when IPC is active
-- Hybrid backend: uses IPC when available, falls back to SWIG API
-- IPC runtime reconnect: if MCP has fallen back to SWIG, IPC-capable board
-  tools retry IPC after KiCAD launches instead of staying on SWIG for the entire
-  session
-- 20+ commands now support IPC including routing, component placement, and zone operations
-
-Note: IPC features are under active development and testing. Enable IPC in KiCAD via Preferences > Plugins > Enable IPC API Server.
-
-### Tools
-
-Every tool is registered directly as an MCP tool and is callable by name — there
-is no router/registry indirection or `execute_tool` gateway. Just ask naturally
-("export gerber files", "add mounting holes") and Claude calls the appropriate
-tool.
-
-### NEEDS TESTING - REPORT ISSUES
-
-### JLCPCB Parts Integration (New!)
-
-Complete integration with JLCPCB's parts catalog, providing two complementary approaches for component selection:
-
-**Dual-Mode Architecture:**
-
-1. **Local Symbol Libraries** - Search JLCPCB libraries installed via KiCAD Plugin and Content Manager (contributed by [@l3wi](https://github.com/l3wi))
-2. **JLCPCB API Integration** - Access the complete 2.5M+ parts catalog with real-time pricing and stock data
-
-**Key Features:**
-
-- Real-time pricing with quantity breaks (1+, 10+, 100+, 1000+)
-- Stock availability checking
-- Basic vs Extended library type identification (Basic = free assembly)
-- Intelligent cost optimization with alternative part suggestions
-- Package-to-footprint mapping for KiCAD compatibility
-- Parametric search by category, package, manufacturer
-- Local SQLite database for fast offline searching
-- No API credentials required for local library search
-
-**Why this matters:** JLCPCB offers PCB assembly services where Basic parts have no assembly fee, while Extended parts charge $3 per unique component. This integration helps you find the cheapest components with the best availability, potentially saving hundreds of dollars on assembly costs for production runs.
-
-See [JLCPCB Usage Guide](docs/JLCPCB_USAGE_GUIDE.md) for detailed setup and usage instructions.
-
-### Comprehensive Tool Schemas
-
-Every tool now includes complete JSON Schema definitions with:
-
-- Detailed parameter descriptions and constraints
-- Input validation with type checking
-- Required vs. optional parameter specifications
-- Enumerated values for categorical inputs
-- Clear documentation of what each tool does
-
-### Resources Capability
-
-Access project state without executing tools:
-
-- `kicad://project/current/info` - Project metadata
-- `kicad://project/current/board` - Board properties
-- `kicad://project/current/components` - Component list (JSON)
-- `kicad://project/current/nets` - Electrical nets
-- `kicad://project/current/layers` - Layer stack configuration
-- `kicad://project/current/design-rules` - Current DRC settings
-- `kicad://project/current/drc-report` - Design rule violations
-- `kicad://board/preview.png` - Board visualization (PNG)
-
-### Protocol Compliance
-
-- Updated to MCP SDK 1.21.0 (latest)
-- Full JSON-RPC 2.0 support
-- Proper capability negotiation
-- Standards-compliant error codes
+See [CHANGELOG.md](CHANGELOG.md) for the full release history and what changed in each version.
 
 ## Available Tools
 
-The server provides 174 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish.
+The server provides 163 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
 
 ### Project Management (5 tools)
 
-- `create_project` - Initialize new KiCAD projects
-- `open_project` - Load existing project files
-- `save_project` - Save current project state
-- `get_project_info` - Retrieve project metadata
-- `snapshot_project` - Save named checkpoint snapshot
+- `create_project` - Create a new KiCAD project
+- `open_project` - Open an existing KiCAD project
+- `save_project` - Save the current KiCAD project
+- `get_project_info` - Get information about the current KiCAD project
+- `snapshot_project` - Save a named checkpoint snapshot of the current project state (renders board to PDF and records step label)
 
-### Board Operations (11 tools)
+### Board Operations (16 tools)
 
-- `set_board_size` - Configure PCB dimensions
-- `add_board_outline` - Create board edge (rectangle, circle, polygon, rounded rectangle)
-- `add_layer` - Add custom layers to stack
-- `set_active_layer` - Switch working layer
-- `get_layer_list` - List all board layers
-- `get_board_info` - Retrieve board properties
-- `get_board_2d_view` - Generate board preview image
-- `get_board_extents` - Get board bounding box
-- `add_mounting_hole` - Place mounting holes
-- `add_board_text` - Add text annotations
-- `import_svg_logo` - Import SVG file as PCB silkscreen polygons
+- `set_board_size` - Set the PCB board dimensions by drawing a rectangular Edge.Cuts outline
+- `add_layer` - Add a new copper or technical layer to the PCB stackup
+- `set_active_layer` - Set the currently active PCB layer by name (e.g. F.Cu, B.Silkscreen)
+- `get_board_info` - Retrieve general information about the current PCB board (dimensions, layer count, DRC status)
+- `get_layer_list` - Return the list of all layers defined in the current PCB board
+- `add_board_outline` - Draw the PCB board outline (Edge.Cuts layer) as a rectangle, rounded rectangle, circle or polygon
+- `add_mounting_hole` - Place a mounting hole (NPTH or PTH) at the specified position on the PCB
+- `add_board_text` - Add a text label to a PCB layer (silkscreen, copper, fab)
+- `get_board_extents` - Return the bounding box (min/max X and Y) of all objects on the current PCB board
+- `get_board_2d_view` - Render the current board as a PNG or SVG image, with optional layer selection and region crop
+- `import_svg_logo` - Import an SVG file as filled graphic polygons onto a PCB layer (default front silkscreen)
+- `get_pcb_overview` - One-shot snapshot of the loaded PCB: components, tracks, zones, nets, layers in a single response
+- `get_origin` - Return the board's grid or drill/place origin (IPC-only)
+- `set_origin` - Move the board's grid or drill/place origin (IPC-only)
+- `get_title_block_info` - Read the board's title block (title, date, revision, company, comment slots)
+- `set_title_block_info` - Partial-update the board's title block (IPC-only)
 
-### Component Management (16 tools)
+### Component Management (15 tools)
 
-- `place_component` - Place single component with footprint
-- `move_component` - Reposition existing component
-- `rotate_component` - Rotate component by angle
-- `delete_component` - Remove component from board
-- `edit_component` - Modify component properties
-- `find_component` - Search by reference or value
-- `get_component_properties` - Query component details
-- `get_component_pads` - Get all pad information
-- `get_component_list` - List all placed components
-- `get_pad_position` - Get precise pad position
-- `place_component_array` - Create component grids/patterns
-- `align_components` - Align multiple components
-- `duplicate_component` - Copy existing component
+- `place_component` - Add a NEW footprint instance to the PCB at the given position
+- `move_component` - Move a PCB component to a new position
+- `rotate_component` - Rotate a PCB component to an absolute angle in degrees
+- `delete_component` - Remove a component from the PCB by its reference designator
+- `edit_component` - Edit properties of an existing PCB component (reference, value, footprint)
+- `find_component` - Search for a PCB component by reference designator or value and return its position and properties
+- `get_component_properties` - Return all properties of a PCB component (position, rotation, layer, value, footprint)
+- `get_component_pads` - Return all pads of a PCB component with their positions, net assignments and sizes
+- `get_component_list` - Return a list of all components on the PCB, optionally filtered by layer or bounding box region
+- `get_pad_position` - Return the exact XY position of a specific pad on a PCB component
+- `place_component_array` - Place a rectangular grid array of identical components on the PCB with configurable row/column spacing
+- `align_components` - Align multiple PCB components horizontally, vertically or on a grid with optional spacing
+- `check_courtyard_overlaps` - Detect courtyard overlaps between footprints, and optionally flag courtyards past the board outline
+- `duplicate_component` - Duplicate an existing PCB component at an offset position, optionally with a new reference designator
+- `auto_place_components` - Auto-place components with a connectivity-driven greedy heuristic (strongly connected parts cluster together)
 
-### Routing (13 tools)
+### Routing (21 tools)
 
-- `add_net` - Create electrical net
-- `route_trace` - Route copper traces between XY points
-- `route_pad_to_pad` - Route between pads with auto-via insertion
-- `add_via` - Place vias for layer transitions
-- `delete_trace` - Remove traces (by UUID, position, or net)
-- `query_traces` - Query/filter traces
-- `get_nets_list` - List all nets with statistics
-- `modify_trace` - Change trace width, layer, or net
-- `create_netclass` - Define net class with rules
-- `add_copper_pour` - Create copper zones/pours
-- `route_differential_pair` - Route differential signals
-- `refill_zones` - Refill all copper zones
-- `copy_routing_pattern` - Replicate routing between component groups
+- `add_net` - Create a new net on the PCB
+- `route_trace` - Route a trace segment between two XY points on a fixed layer
+- `route_arc_trace` - Route a copper arc trace defined by start/mid/end points
+- `add_via` - Add a via to the PCB
+- `add_copper_pour` - Add a copper pour (ground/power plane) to the PCB
+- `edit_copper_pour` - Edit an existing copper pour (zone): pad connection style, clearance, outline, net, layer, priority, fill type, thermal relief settings
+- `delete_copper_pour` - Delete copper pour(s) from the PCB
+- `delete_trace` - Delete traces from the PCB
+- `query_traces` - Query traces on the board with optional filters by net, layer, or bounding box
+- `query_zones` - Query copper zones (filled pours) on the board with optional filters by net, layer, or bounding box
+- `add_gnd_stitching_vias` - Drop GND stitching vias with collision checking against every non-GND segment/via/pad on all copper layers (PTH vias span the full stackup)
+- `get_nets_list` - Get a list of all nets in the PCB with optional statistics
+- `modify_trace` - Modify an existing trace (change width, layer, or net)
+- `create_netclass` - Create (or update) a net class with custom design rules and persist it to the .kicad_pro project file
+- `assign_netclass_pattern` - Append a wildcard pattern -> net-class rule to the .kicad_pro (net_settings.netclass_patterns)
+- `route_differential_pair` - Route a differential pair between two sets of points
+- `refill_zones` - Refill all copper zones via the IPC fast-path when KiCad is running
+- `route_pad_to_pad` - Insert ONE STRAIGHT trace segment between two pads (auto-detects net; adds a via when layers differ)
+- `route_smart` - Route between two pads (or points) with grid A\* obstacle avoidance — routes around pads/traces/vias, adding vias on layer changes
+- `report_net_lengths` - Report routed copper length per net (mm) with segment/via counts, layers, and max skew across matched nets
+- `copy_routing_pattern` - Copy routing pattern (traces and vias) from a group of source components to a matching group of target components
 
 ### Graphic Shapes (8 tools)
 
-- `add_segment` / `add_arc` / `add_circle` / `add_rectangle` / `add_polygon` - Draw graphic primitives (no net binding) on any layer
-- `list_shapes` - Enumerate shapes with layer / kind / bounding-box filters
-- `delete_shape` / `edit_shape` - Remove or modify existing shapes (move, layer, stroke width, fill)
+- `add_segment` - Draw a graphic line (no net) on any layer
+- `add_arc` - Draw a graphic arc through three points (start → mid → end) on any layer
+- `add_circle` - Draw a graphic circle on any layer
+- `add_rectangle` - Draw an axis-aligned graphic rectangle on any layer
+- `add_polygon` - Draw a closed graphic polygon on any layer from ≥3 points
+- `list_shapes` - List graphic shapes on the board (id, kind, layer, width, filled, bounding box) with optional layer / kind / boundingBox filters
+- `delete_shape` - Delete graphic shape(s)
+- `edit_shape` - Edit one graphic shape (by id from list_shapes): move it by dx/dy, change layer, stroke width, or fill
 
-### Schematic (27 tools)
+### Schematic (48 tools)
 
-Complete schematic workflow with dynamic symbol loading (~10,000 symbols) and intelligent wiring.
-
-**Component Operations:**
-
-- `add_schematic_component` - Place symbols from any KiCad library
-- `delete_schematic_component` - Remove component
-- `edit_schematic_component` - Edit footprint, value, reference, label positions, and **arbitrary custom properties** (MPN, Manufacturer, DigiKey_PN, LCSC, Voltage, Tolerance, Dielectric, …) in one batched call
-- `set_schematic_component_property` - Add or update a single custom property (BOM/sourcing field) on a component
-- `remove_schematic_component_property` - Delete a single custom property from a component
-- `get_schematic_component` - Inspect every field on a component (built-in + custom) including label positions
-- `list_schematic_components` - List all components
-- `move_schematic_component` - Reposition component
-- `rotate_schematic_component` - Rotate component
-- `annotate_schematic` - Auto-assign reference designators
-
-**Wiring and Connections:**
-
-- `add_wire` - Create wire between points
-- `delete_schematic_wire` - Remove wire segment
-- `add_schematic_connection` - Auto-connect pins with routing
-- `add_schematic_net_label` - Add net labels (VCC, GND, signals)
-- `delete_schematic_net_label` - Remove net label
-- `connect_to_net` - Connect pin to named net
-- `connect_passthrough` - Wire all matching pins between connectors (FFC/ribbon)
-- `get_schematic_pin_locations` - Get pin locations for component
-
-**Analysis and Export:**
-
-- `get_net_connections` - Trace net connectivity
-- `list_schematic_nets` / `list_schematic_wires` / `list_schematic_labels`
-- `create_schematic` - Create new schematic file
-- `get_schematic_view` - Schematic preview (PNG or SVG)
-- `export_schematic_pdf`
-- `run_erc` - Electrical rule check
-- `generate_netlist` - Generate netlist from schematic
-- `sync_schematic_to_board` - Import nets/pads to PCB (F8 equivalent)
-
-See [Schematic Tools Reference](docs/SCHEMATIC_TOOLS_REFERENCE.md) for details and examples.
+- `create_schematic` - Create a new schematic
+- `add_schematic_component` - Add a component to the schematic
+- `delete_schematic_component` - Remove a component from the schematic
+- `edit_schematic_component` - Update a placed schematic symbol in place (keeps position and UUID)
+- `set_schematic_component_property` - Add or update one custom property on a placed schematic symbol
+- `remove_schematic_component_property` - Delete a single custom property from a schematic component
+- `get_schematic_component` - Get full component info from a schematic: position plus EVERY field's value and label position
+- `move_schematic_component` - Move a placed symbol
+- `rotate_schematic_component` - Rotate a placed symbol in the schematic
+- `annotate_schematic` - Assign reference designators to unannotated components (placeholder refs ending in '?')
+- `add_schematic_wire` - Draw a wire between two or more points
+- `add_schematic_net_label` - Add a net label
+- `add_no_connect` - Add a no-connect flag (X marker) to a pin that is intentionally left unconnected
+- `delete_no_connect` - Remove a no-connect (X) flag from a pin — the inverse of add_no_connect, matched by position (NC flags have no name)
+- `connect_to_net` - Connect a component pin to a named net by adding a wire stub and net label at the exact pin endpoint
+- `get_net_connections` - Get all connections for a named net
+- `get_wire_connections` - Return the net name plus all wires and pins connected at a point, given reference + pin OR x/y in mm
+- `get_schematic_pin_locations` - Returns the exact x/y coordinates of every pin on a schematic component
+- `connect_passthrough` - Wire all pins of a source connector to the matching pins of a target connector (FFC/ribbon adapters)
+- `delete_schematic_wire` - Remove a wire from the schematic by start and end coordinates
+- `delete_schematic_net_label` - Remove a net label from the schematic
+- `move_schematic_net_label` - Move a net label (local, global, or hierarchical) to a new position in the schematic
+- `edit_schematic_net_label` - Change an existing net label's type and/or text in place
+- `add_schematic_hierarchical_label` - Add a hierarchical label (sheet interface port) to a sub-sheet schematic
+- `export_schematic_pdf` - Export schematic to PDF format using kicad-cli
+- `run_erc` - Run ERC on a schematic and return all violations
+- `generate_netlist` - Return a structured JSON netlist — components (reference, value, footprint) and nets (name + connected component/pin pairs)
+- `run_simulation` - Run a SPICE analysis (op / tran / ac / dc) on the schematic via ngspice batch mode
+- `sync_schematic_to_board` - Import the schematic netlist into the PCB (= F8 / Tools → Update PCB from Schematic)
+- `get_schematic_overview` - One-shot snapshot of a schematic: components, wires, labels, and nets in a single response
+- `list_schematic_components` - List all components in a schematic with their references, values, positions, and pins
+- `list_schematic_nets` - List all nets in the schematic with their connections
+- `list_schematic_wires` - List all wires in the schematic with start/end coordinates
+- `list_schematic_labels` - List all net labels, global labels, and power flags in the schematic
+- `list_schematic_texts` - List all free-form text annotations (notes, headings, documentation strings) in the schematic
+- `get_schematic_view` - Return a rasterized image of the schematic (PNG by default, or SVG)
+- `get_schematic_view_region` - Export a cropped region of the schematic as an image (PNG or SVG)
+- `find_overlapping_elements` - Detect spatially overlapping symbols, wires, and labels in the schematic
+- `get_elements_in_region` - List all symbols, wires, and labels within a rectangular region of the schematic
+- `find_wires_crossing_symbols` - Find all wires that cross over component symbol bodies
+- `list_floating_labels` - Returns all net labels in the schematic that are not connected to any component pin
+- `find_orphaned_wires` - Find wire segments with at least one dangling endpoint
+- `snap_to_grid` - Snap schematic element coordinates to the nearest grid point
+- `get_net_at_point` - Returns the net name at a given (x, y) coordinate in a schematic, or null if no net label
+- `add_schematic_text` - Add a free-form text annotation to the schematic
+- `create_hierarchical_sheet` - Create a hierarchical sheet in a parent schematic, optionally creating the child .kicad_sch and interface pins
+- `add_sheet_pin` - Add a pin to a sheet symbol block on the parent schematic
+- `add_schematic_sheet` - Place a hierarchical sheet box on the parent schematic referencing a sub-sheet .kicad_sch
 
 ### Design Rules / DRC (4 tools)
 
-- `set_design_rules` / `get_design_rules` - Configure and inspect rules
-- `run_drc` - Execute design rule check (returns summary + violations)
-- `assign_net_to_class` - Assign nets to a class (create classes with `create_netclass`)
+- `set_design_rules` - Configure PCB design rules: clearance, track width, via dimensions and courtyard requirements
+- `get_design_rules` - Return the current PCB design rules (clearance, track width, via sizes, courtyard settings)
+- `run_drc` - Run the KiCAD Design Rule Check (DRC) on the current PCB and return violations
+- `assign_net_to_class` - Assign a net to an existing net class to apply its specific design rules
 
 ### Export (6 tools)
 
-- `export_gerber` - Gerber fabrication files
-- `export_pdf` - Documentation output (SVG via `get_board_2d_view`)
-- `export_3d` - 3D models (STEP, STL, VRML, OBJ)
-- `export_bom` - Bill of materials (CSV, XML, HTML, JSON)
-- `export_netlist` - Netlist (KiCad, Spice, Cadstar, OrcadPCB2)
-- `export_position_file` - Component positions for pick and place
+- `export_gerber` - Export PCB Gerber manufacturing files to a directory
+- `export_pdf` - Export the PCB layout as a PDF document, optionally selecting layers, page size and colour mode
+- `export_3d` - Export the PCB as a 3D model (STEP, STL, VRML or OBJ) including optional copper, solder mask, silkscreen and component 3D models
+- `export_bom` - Export a Bill of Materials (BOM) from the PCB in CSV, XML, HTML or JSON format
+- `export_netlist` - Export the schematic netlist to a file via kicad-cli (KiCad XML default, plus Spice, Cadstar, OrcadPCB2)
+- `export_position_file` - Export a component placement/position file (pick-and-place) for PCB assembly in CSV or ASCII format
 
-### Footprint Libraries (4 tools) and Symbol Libraries (4 tools)
+### Footprint and Symbol Libraries (10 tools)
 
-- `list_libraries` / `list_symbol_libraries` - Browse available libraries
-- `search_footprints` / `search_symbols` - Search across all libraries
-- `list_library_footprints` / `list_library_symbols` - Browse specific library
-- `get_footprint_info` / `get_symbol_info` - Detailed information
+- `list_libraries` - List the NAMES of all installed FOOTPRINT libraries (nicknames from the fp-lib-table)
+- `search_footprints` - Search for footprints matching a pattern across all libraries
+- `list_library_footprints` - List the footprints contained in one named footprint library
+- `get_footprint_info` - Get detailed information about a specific footprint
+- `list_symbol_libraries` - List the names of all available symbol libraries (from the sym-lib-table)
+- `search_symbols` - Search schematic symbols across all configured symbol libraries
+- `list_library_symbols` - List the symbols contained in one library identified by its nickname
+- `get_symbol_info` - Get details for a specific symbol (global, or project-scope with projectPath / an open project)
+- `refresh_symbol_libraries` - Force-rebuild the symbol library index from sym-lib-table on disk
+- `refresh_schematic_lib_symbols` - Re-inject every embedded lib_symbols entry in a .kicad_sch from the on-disk .kicad_sym
 
-### Footprint Creator (4 tools) and Symbol Creator (4 tools)
+### Footprint and Symbol Creators (8 tools)
 
-Create custom components when existing libraries do not have what you need.
+- `create_footprint` - Create a new KiCAD footprint (.kicad_mod) inside a .pretty library directory
+- `edit_footprint_pad` - Edit an existing pad inside a .kicad_mod footprint file
+- `register_footprint_library` - Register a .pretty footprint library in KiCAD's fp-lib-table so KiCAD can find the footprints
+- `list_footprint_libraries` - Discover FOOTPRINT libraries by SCANNING THE FILESYSTEM for .pretty directories, with a preview of the first 20 footprints in each
+- `create_symbol` - Create a schematic symbol in a .kicad_sym library (file created if missing); run register_symbol_library afterwards so KiCAD finds it
+- `delete_symbol` - Remove a symbol from a .kicad_sym library file
+- `list_symbols_in_library` - List the SYMBOL names in a single .kicad_sym library FILE given its path (libraryPath)
+- `register_symbol_library` - Register a .kicad_sym library in KiCAD's sym-lib-table so symbols can be used in schematics
 
-- `create_footprint` / `create_symbol` - Build from scratch with pads/pins
-- `edit_footprint_pad` - Modify pad properties
-- `register_footprint_library` / `register_symbol_library` - Register in lib-table
-- `list_footprint_libraries` / `list_symbols_in_library` - Browse custom libraries
-- `delete_symbol` - Remove symbol from library
+### Datasheets (2 tools)
 
-See [Footprint and Symbol Creator Guide](docs/FOOTPRINT_SYMBOL_CREATOR_GUIDE.md) for details.
+- `enrich_datasheets` - Fill in missing Datasheet URLs from LCSC part numbers
+- `get_datasheet_url` - Get the LCSC datasheet URL for a component
 
-### Datasheet Tools (2 tools)
+### JLCPCB Integration (9 tools)
 
-- `enrich_datasheets` - Auto-populate datasheet URLs using LCSC part numbers
-- `get_datasheet_url` - Get LCSC datasheet URL for a component
-
-### JLCPCB Integration (5 tools)
-
-- `download_jlcpcb_database` - Download 2.5M+ parts catalog (one-time setup)
-- `search_jlcpcb_parts` - Search with parametric filters
-- `get_jlcpcb_part` - Detailed part info with pricing
-- `get_jlcpcb_database_stats` - Database statistics
-- `suggest_jlcpcb_alternatives` - Find cheaper or in-stock alternatives
+- `download_jlcpcb_database` - Download the JLCPCB parts catalog into a local SQLite database (one-time setup)
+- `search_jlcpcb_parts` - Parametric search over the local JLCPCB parts database (package, category, stock, Basic/Extended)
+- `get_jlcpcb_part` - Get detailed information about a specific JLCPCB part by LCSC number
+- `download_jlcpcb_datasheet` - Download a part's datasheet PDF via its LCSC part number
+- `get_jlcpcb_database_stats` - Get statistics about the local JLCPCB parts database
+- `suggest_jlcpcb_alternatives` - Suggest cheaper or better-stocked JLCPCB alternatives for a part
+- `import_jlcpcb_symbol` - Import a schematic symbol from the EasyEDA/JLCPCB library into a local KiCad library
+- `import_jlcpcb_symbols` - Batch-import multiple EasyEDA/JLCPCB symbols
+- `check_bom_availability` - Check every BOM line of the loaded board against the local JLCPCB parts catalog (stock, pricing, Basic vs Extended)
 
 ### Freerouting Autorouter (2 tools)
 
-- `autoroute` - Run Freerouting autorouter (DSN export, route, SES import — all internal)
-- `check_freerouting` - Verify Java and Freerouting availability
+- `autoroute` - Run Freerouting autorouter on the current PCB: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES
+- `check_freerouting` - Check if Java and Freerouting JAR are available on the system
 
-See [Freerouting Guide](docs/FREEROUTING_GUIDE.md) for setup and usage.
+### UI and Backend Management (9 tools)
 
-### UI Management (2 tools)
-
-- `check_kicad_ui` - Check if KiCAD is running
-- `launch_kicad_ui` - Launch KiCAD application
+- `get_backend_info` - Return the active backend identifier, version, and a human-readable mode description
+- `check_kicad_ui` - Check if KiCAD UI is currently running
+- `launch_kicad_ui` - Launch KiCAD UI, optionally with a project file
+- `reconcile_backends` - Flush pending changes between the SWIG and IPC backends
+- `run_action` - Invoke any KiCad internal TOOL_ACTION by name (escape hatch via IPC)
+- `manage_selection` - Manage the KiCAD board editor selection (IPC-only)
+- `hit_test` - Find board items at (x, y) (IPC-only)
+- `interactive_move` - Start KiCad's interactive move tool on the supplied items (IPC-only)
+- `transaction` - Manage a KiCad transaction / undo group (IPC-only)
 
 ## Prerequisites
 
@@ -575,8 +328,7 @@ The script will:
 **Manual Setup:**
 Run `.\setup-windows.ps1` from PowerShell — the script auto-detects your
 KiCAD install, configures Python paths, builds the project, and writes
-your Claude Desktop MCP config. See [Windows Troubleshooting](docs/WINDOWS_TROUBLESHOOTING.md)
-if it fails.
+your Claude Desktop MCP config.
 
 ### macOS
 
@@ -1039,8 +791,6 @@ For users with JLCPCB enterprise accounts and order history:
    JLCPCB_API_SECRET=your_app_secret_here
    ```
 
-See [JLCPCB Usage Guide](docs/JLCPCB_USAGE_GUIDE.md) for detailed documentation.
-
 ## Usage Examples
 
 ### Basic PCB Design Workflow
@@ -1125,6 +875,15 @@ Export Gerber files to the 'fabrication' folder.
 
 Resources provide read-only access to project state:
 
+- `kicad://project/current/info` - Project metadata
+- `kicad://project/current/board` - Board properties
+- `kicad://project/current/components` - Component list (JSON)
+- `kicad://project/current/nets` - Electrical nets
+- `kicad://project/current/layers` - Layer stack configuration
+- `kicad://project/current/design-rules` - Current DRC settings
+- `kicad://project/current/drc-report` - Design rule violations
+- `kicad://board/preview.png` - Board visualization (PNG)
+
 ```text
 Show me the current component list.
 What are the current design rules?
@@ -1175,7 +934,7 @@ How many Basic parts are available?
 
 - **JSON-RPC 2.0 Transport:** Bi-directional communication via STDIO
 - **Protocol Version:** MCP 2025-06-18
-- **Capabilities:** Tools (174), Resources (8)
+- **Capabilities:** Tools (163), Resources (8)
 - **Error Handling:** Standard JSON-RPC error codes
 
 ### TypeScript Server (`src/`)
@@ -1194,20 +953,19 @@ How many Basic parts are available?
   - `ipc_backend.py` - KiCAD IPC API backend (real-time UI sync)
   - (The SWIG path is not a backend object — it is direct `pcbnew` access
     behind `KiCADInterface.command_routes` in `kicad_interface.py`.)
-- **schemas/tool_schemas.py:** JSON Schema definitions for all tools
 - **resources/resource_definitions.py:** Resource handlers and URIs
-- **commands/:** Modular command implementations
+- **handlers/:** Thin per-category dispatch modules (one `handle_<command>` per tool), bridging `kicad_interface.py` to the command implementations
+- **commands/:** Modular command implementations (highlights)
   - `project.py` - Project operations
-  - `board.py` - Board manipulation
-  - `component.py` - Component placement
-  - `routing.py` - Trace routing and nets
+  - `board/` - Board manipulation, 2D views
+  - `component/` - Component placement and auto-placement
+  - `routing/` - Trace routing, grid A\* smart routing, net length reports
   - `design_rules.py` - DRC operations
-  - `export.py` - File generation
-  - `schematic.py` - Schematic design
-  - `library.py` - Footprint libraries
-  - `library_symbol.py` - Symbol library search (local JLCPCB libraries)
-  - `jlcpcb.py` - JLCPCB API client
-  - `jlcpcb_parts.py` - JLCPCB parts database manager
+  - `export/` - Gerber, PDF, 3D, BOM, netlist generation
+  - `schematic.py`, `wire_manager/`, `hierarchy_sheet.py` - Schematic authoring
+  - `simulation.py` - ngspice SPICE simulation
+  - `library.py` / `library_symbol/` - Footprint and symbol library search
+  - `jlcpcb_parts.py`, `bom_check.py` - JLCPCB parts database and BOM availability
 
 ### KiCAD Integration
 
@@ -1300,7 +1058,6 @@ npm run format
 1. Run automated diagnostics: `.\setup-windows.ps1`
 2. Verify Python path uses double backslashes: `C:\\Program Files\\KiCad\\10.0`
 3. Check Windows Event Viewer for Node.js errors
-4. See [Windows Troubleshooting Guide](docs/WINDOWS_TROUBLESHOOTING.md)
 
 ### Getting Help
 
@@ -1317,9 +1074,9 @@ npm run format
 
 **Current Version:** 2.2.3
 
-See [STATUS_SUMMARY.md](docs/STATUS_SUMMARY.md) for the complete status matrix and [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
-**Working Features (167 tools):**
+**Working Features (163 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)
@@ -1346,8 +1103,6 @@ See [STATUS_SUMMARY.md](docs/STATUS_SUMMARY.md) for the complete status matrix a
 
 **Developer Mode:**
 Set `KICAD_MCP_DEV=1` to capture MCP session logs for debugging. See CHANGELOG v2.2.3 for details.
-
-See [ROADMAP.md](docs/ROADMAP.md) for planned features.
 
 ## What Do You Want to See Next?
 

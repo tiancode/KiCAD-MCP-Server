@@ -134,17 +134,11 @@ pre-commit run --all-files
 kicad-mcp-server/
 ├── .github/
 │   └── workflows/        # CI/CD pipelines
-├── config/               # Configuration examples
-│   ├── linux-config.example.json
-│   ├── windows-config.example.json
-│   ├── macos-config.example.json
-│   └── default-config.json
-├── docs/                 # Documentation
 ├── python/               # Python interface layer
-│   ├── commands/         # KiCAD command handlers (board, schematic, …)
+│   ├── commands/         # KiCAD command implementations (board, schematic, …)
+│   ├── handlers/         # Thin per-category dispatch modules (handle_<command>)
 │   ├── kicad_api/        # Backend abstraction (SWIG, IPC)
 │   ├── parsers/          # KiCAD file format parsers
-│   ├── schemas/          # JSON Schema definitions
 │   ├── utils/            # Utility modules (platform_helper, kicad_process)
 │   └── kicad_interface.py  # Main Python entry point
 ├── src/                  # TypeScript MCP server
@@ -170,16 +164,14 @@ kicad-mcp-server/
 
 The KiCAD MCP Server is organized into several key components:
 
-- **TypeScript MCP Server** (`src/`) - Handles MCP protocol communication and tool routing
-- **Python KiCAD Interface** (`python/`) - Interfaces with KiCAD's Python API (pcbnew)
-- **Tool Router** - Organizes 151 tools into 16 discoverable categories
+- **TypeScript MCP Server** (`src/`) - Handles MCP protocol communication; every tool is registered directly as an MCP tool (one file per category in `src/tools/`)
+- **Python KiCAD Interface** (`python/`) - Interfaces with KiCAD's Python API (pcbnew) and the IPC API (kipy)
 - **Resource System** - Provides dynamic project/board state information
 - **Prompt System** - Offers context-aware design prompts
 
-**Current Tool Count:** 151 tools across 16 categories (direct + routed).
-See [docs/TOOL_INVENTORY.md](docs/TOOL_INVENTORY.md) for the authoritative
-breakdown and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system
-layering.
+**Current Tool Count:** 163 tools, all registered directly. The authoritative
+source is the `server.tool(...)` registrations in `src/tools/`; the README's
+"Available Tools" section mirrors them.
 
 ---
 
@@ -408,8 +400,7 @@ We track work using GitHub Projects and Issues:
 - **GitHub Issues** - Specific bugs and features
 - **GitHub Discussions** - Design discussions and proposals
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the current roadmap and
-[CHANGELOG.md](CHANGELOG.md) for what shipped in each release.
+See [CHANGELOG.md](CHANGELOG.md) for what shipped in each release.
 
 ---
 
