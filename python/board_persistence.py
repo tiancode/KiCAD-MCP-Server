@@ -198,9 +198,16 @@ class BoardPersistenceMixin:
                 logger.warning(f"Auto-save backup failed (continuing): {e}")
                 backup_path = None
 
-        # Write the board.
+        # Write the board.  aSkipSettings=True keeps SaveBoard from ALSO
+        # rewriting the sibling .kicad_pro from the board's in-memory (stale /
+        # default) PROJECT — that write silently reverted netclass clearance
+        # and design-rule minimums persisted by create_netclass /
+        # set_design_rules straight back to their board defaults (E2E B10).
+        # The .kicad_pro is the canonical store for those settings and is only
+        # ever edited via utils/kicad_pro read-modify-write, so the auto-save
+        # must touch the .kicad_pcb only.
         try:
-            kicad_interface.pcbnew.SaveBoard(board_path, self.board)
+            kicad_interface.pcbnew.SaveBoard(board_path, self.board, True)
             logger.debug(f"Auto-saved board to: {board_path}")
             self._board_disk_signature = self._disk_signature(board_path)
         except Exception as e:

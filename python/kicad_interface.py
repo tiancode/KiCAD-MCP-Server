@@ -725,7 +725,9 @@ class KiCADInterface(BoardPersistenceMixin):
         "set_board_size": "_ipc_set_board_size",
         "get_board_info": "_ipc_get_board_info",
         "add_board_outline": "_ipc_add_board_outline",
-        "add_mounting_hole": "_ipc_add_mounting_hole",
+        # add_mounting_hole deliberately NOT listed: its fastpath was a
+        # SWIG-delegating stub, so advertising IPC capability misrouted the
+        # cross-backend gate (E2E finding B9c).
         "get_layer_list": "_ipc_get_layer_list",
         # Component commands
         "place_component": "_ipc_place_component",
@@ -865,6 +867,65 @@ class KiCADInterface(BoardPersistenceMixin):
             }
         return None
 
+    @staticmethod
+    def _auto_reconcile_enabled() -> bool:
+        """KICAD_AUTO_RECONCILE=false opts out of the swig_to_ipc auto-heal
+        (finding B11); default on, mirroring KICAD_AUTO_LAUNCH's style."""
+        return os.environ.get("KICAD_AUTO_RECONCILE", "").strip().lower() != "false"
+
+    def _auto_reconcile_swig_to_ipc(self, conflict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Finding B11: auto-heal a ``swig_to_ipc`` cross-backend conflict.
+
+        Reverting KiCad's in-memory board from disk (the ``swig_to_ipc``
+        reconcile) is LOSSLESS exactly when IPC has no unsaved changes: KiCad
+        simply reloads the ``.kicad_pcb``, which already holds the landed SWIG
+        writes.  So rather than refuse every SWIG-then-IPC step and force a
+        manual ``reconcile_backends`` between each pair, run that same reconcile
+        here and let the original command proceed.
+
+        Reuses ``handlers.ui.handle_reconcile_backends`` (the same revert +
+        signature bookkeeping + external-disk-change handling) rather than
+        duplicating it.
+
+        Returns:
+          - ``None`` → do NOT auto-heal; the caller must return the original
+            ``conflict`` refusal verbatim.  Covers the env opt-out, a
+            non-``swig_to_ipc`` direction, a genuine two-sided conflict (IPC also
+            dirty — reverting would discard its changes), and a reconcile that
+            itself refused/failed.
+          - ``{"auto_reconciled": True, "stepsTaken": [...],
+            "externalDiskChange": bool}`` → heal succeeded; the caller runs the
+            command and merges these markers onto the result.
+        """
+        if not self._auto_reconcile_enabled():
+            return None
+        # Only swig_to_ipc is lossless to auto-heal.  ipc_to_swig would flush
+        # IPC memory to disk (write amplification) — leave that manual.
+        if conflict.get("direction") != "swig_to_ipc":
+            return None
+        # Genuine two-sided conflict: IPC also has unsaved changes, so reverting
+        # would discard them.  Keep today's refusal verbatim.
+        if getattr(self, "_ipc_writes_pending", False):
+            return None
+
+        from handlers.ui import handle_reconcile_backends
+
+        result = handle_reconcile_backends(self, {"direction": "swig_to_ipc"})
+        if not result.get("success"):
+            # The reconcile itself refused/failed (e.g. revert returned False):
+            # the honest response is the original conflict refusal.
+            return None
+        logger.info(
+            "Auto-reconciled swig_to_ipc before an IPC command "
+            f"(steps={result.get('stepsTaken')}, "
+            f"externalDiskChange={result.get('externalDiskChange')})"
+        )
+        return {
+            "auto_reconciled": True,
+            "stepsTaken": result.get("stepsTaken", []),
+            "externalDiskChange": result.get("externalDiskChange", False),
+        }
+
     def _annotate_stale_vs_disk(self, result: Dict[str, Any]) -> None:
         """Flag an IPC read whose live KiCad-memory data is older than disk.
 
@@ -885,6 +946,44 @@ class KiCADInterface(BoardPersistenceMixin):
             "(direction=swig_to_ipc) to reload KiCad from disk (via "
             "board.revert()), or reload manually in KiCad (File → Revert from "
             "saved)."
+        )
+
+    def _clear_swig_landed_if_disk_matches(self) -> None:
+        """Drop a now-satisfied ``_swig_writes_landed`` after a fresh board open.
+
+        Finding B3: the auto-launch / auto-open self-heal opens the board in
+        KiCad *from the current disk file*.  Call this ONLY from a point where
+        we just performed such a fresh load (a cold-launch ``pcbnew <board>``
+        or a successful ``_try_auto_open_board``): KiCad's in-memory board now
+        equals the on-disk content.  If that on-disk content still matches the
+        signature recorded when the SWIG write landed (nothing edited it
+        externally in between), then IPC memory == disk == the SWIG board — the
+        cross-backend conflict is spurious, so drop the flag instead of
+        refusing the first IPC mutation as ``needs_reconcile``.
+
+        Precise safety: if the on-disk signature no longer matches the recorded
+        one, the file was changed EXTERNALLY after the SWIG write.  The freshly
+        opened board reflects that external content, not the SWIG in-memory
+        board, so the divergence is real — keep the flag so ``reconcile_backends``
+        still reloads the SWIG side (its ``externalDiskChange`` path).
+        """
+        if not getattr(self, "_swig_writes_landed", False):
+            return
+        try:
+            board_path = self.board.GetFileName() if getattr(self, "board", None) else None
+        except Exception:
+            board_path = None
+        if not board_path:
+            return
+        expected = getattr(self, "_board_disk_signature", None)
+        current = self._disk_signature(board_path)
+        if expected is None or current is None or expected[1] != current[1]:
+            return
+        self._swig_writes_landed = False
+        logger.info(
+            "Cleared _swig_writes_landed after a fresh board open: the on-disk "
+            "board matches the recorded landed SWIG write, so KiCad memory == "
+            "disk == SWIG (nothing to reconcile)."
         )
 
     def _try_enable_ipc_backend(self, force: bool = False) -> bool:
@@ -1023,6 +1122,8 @@ class KiCADInterface(BoardPersistenceMixin):
                     attempted = True
                     if self._ipc_has_open_board_document():
                         logger.info(f"Opened PCB editor via run_action({action!r})")
+                        # We just loaded the board fresh from disk (B3).
+                        self._clear_swig_landed_if_disk_matches()
                         return True
 
         if not attempted:
@@ -1035,6 +1136,8 @@ class KiCADInterface(BoardPersistenceMixin):
             if self._ipc_has_open_board_document():
                 logger.info(f"Board auto-open landed: {board_path or '(project board)'}")
                 self._auto_open_cooldown_until = 0.0
+                # We just loaded the board fresh from disk (B3).
+                self._clear_swig_landed_if_disk_matches()
                 return True
             time.sleep(0.5)
 
@@ -1260,7 +1363,14 @@ class KiCADInterface(BoardPersistenceMixin):
         while time.monotonic() < deadline:
             if self._try_enable_ipc_backend(force=True):
                 if _connected():
-                    return _check_editor_gate() or (True, "")
+                    gate = _check_editor_gate()
+                    if gate is None:
+                        # We just cold-launched `pcbnew <board>`: KiCad loaded
+                        # the board fresh from disk, so a just-landed SWIG write
+                        # it already includes needn't gate the first IPC op (B3).
+                        self._clear_swig_landed_if_disk_matches()
+                        return (True, "")
+                    return gate
             time.sleep(0.5)
 
         return (
@@ -1401,10 +1511,19 @@ class KiCADInterface(BoardPersistenceMixin):
                 # the live KiCad memory they read is stale vs disk, so flag
                 # the result instead of returning a clean-looking value.
                 read_is_stale_vs_disk = False
+                auto_reconcile_info: Optional[Dict[str, Any]] = None
                 if command not in self._IPC_READ_ONLY_COMMANDS:
                     conflict = self._cross_backend_conflict(attempting="ipc")
                     if conflict is not None:
-                        return conflict
+                        # B11: a swig_to_ipc conflict with a clean IPC side is
+                        # losslessly auto-healable (revert KiCad from disk).
+                        # Heal it here and let the command proceed rather than
+                        # bouncing every SWIG-then-IPC step to a manual
+                        # reconcile; fall back to the original refusal when
+                        # auto-heal isn't safe or is disabled.
+                        auto_reconcile_info = self._auto_reconcile_swig_to_ipc(conflict)
+                        if auto_reconcile_info is None:
+                            return conflict
                 elif getattr(self, "_swig_writes_landed", False):
                     read_is_stale_vs_disk = True
 
@@ -1417,6 +1536,13 @@ class KiCADInterface(BoardPersistenceMixin):
                     logger.debug(f"IPC command result: {result}")
                     if read_is_stale_vs_disk and isinstance(result, dict):
                         self._annotate_stale_vs_disk(result)
+                    if auto_reconcile_info is not None and isinstance(result, dict):
+                        # Surface that the dispatcher self-healed the conflict.
+                        result.setdefault("auto_reconciled", True)
+                        if auto_reconcile_info.get("stepsTaken"):
+                            result.setdefault("stepsTaken", auto_reconcile_info["stepsTaken"])
+                        if auto_reconcile_info.get("externalDiskChange"):
+                            result.setdefault("externalDiskChange", True)
                     return result
 
             # Fall back to SWIG-based handler
@@ -2119,6 +2245,97 @@ class KiCADInterface(BoardPersistenceMixin):
 
     # ------------------------------------------------------------------
 
+    def _export_schematic_netlist_xml(self, schematic_path: str) -> Optional[Any]:
+        """Run ``kicad-cli sch export netlist --format kicadxml`` once and
+        return the parsed ``<export>`` root ``Element`` (or ``None`` when
+        kicad-cli is missing / the export fails).
+
+        Shared by ``_extract_components_from_schematic`` (component list) and
+        the sync handler's pad→net map so a single ``sync_schematic_to_board``
+        never spawns kicad-cli twice.
+        """
+        import subprocess
+        import tempfile
+        import xml.etree.ElementTree as ET
+
+        kicad_cli = self._find_kicad_cli_static()
+        if not kicad_cli:
+            logger.warning("kicad-cli not found — sync falls back to the label/BFS net parser")
+            return None
+
+        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            cmd = [
+                kicad_cli,
+                "sch",
+                "export",
+                "netlist",
+                "--format",
+                "kicadxml",
+                "--output",
+                tmp_path,
+                schematic_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode != 0:
+                logger.warning(
+                    f"kicad-cli netlist export failed (exit {result.returncode}): "
+                    f"{result.stderr.strip()}"
+                )
+                return None
+            return ET.parse(tmp_path).getroot()
+        except Exception as e:
+            logger.warning(f"Failed to export schematic netlist: {e}")
+            return None
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _pad_net_map_from_netlist_root(root: Any) -> Tuple[Dict, set]:
+        """Build ``({(ref, pin): net_name}, {net_name, ...})`` from a kicad-cli
+        ``kicadxml`` netlist ``<export>`` root.
+
+        The kicad-cli netlist is *authoritative*: it names label-less wire nets
+        exactly as KiCad's "Update PCB from Schematic" does (``Net-(D1-A)``),
+        so deriving pad→net from it fixes the anonymous-net drop (finding B1)
+        that the label/BFS parser (``_build_hierarchical_pad_net_map``) cannot
+        see — a wire joining two pins with no label anywhere never got a seed
+        name and its pins fell out of the map.
+
+        Power/flag pseudo-refs (``#PWR`` / ``#FLG``) are skipped — they have no
+        PCB pad — and a net literally named ``PWR_FLAG`` is filtered defensively
+        to honor the "PWR_FLAG is never a real net" invariant (kicad-cli never
+        emits one, but the guard is cheap insurance).
+        """
+        pad_net_map: Dict = {}
+        net_names: set = set()
+        nets_el = root.find("nets")
+        if nets_el is None:
+            return pad_net_map, net_names
+        for net in nets_el.findall("net"):
+            name = (net.get("name") or "").strip()
+            if not name or name == "PWR_FLAG":
+                continue
+            nodes = []
+            for node in net.findall("node"):
+                ref = (node.get("ref") or "").strip()
+                pin = (node.get("pin") or "").strip()
+                if not ref or not pin or ref.startswith("#"):
+                    continue
+                nodes.append((ref, pin))
+            if not nodes:
+                continue
+            net_names.add(name)
+            for ref, pin in nodes:
+                pad_net_map[(ref, pin)] = name
+        return pad_net_map, net_names
+
+    # ------------------------------------------------------------------
+
     def _build_hierarchical_pad_net_map(self, project_sch_path: str):
         """Walk all .kicad_sch files in the project and build a {(ref, pin_num): net_name} map.
 
@@ -2129,10 +2346,20 @@ class KiCADInterface(BoardPersistenceMixin):
 
         Returns: (pad_net_map, net_names_set)
         """
+        import re
         from collections import defaultdict
 
         from commands.pin_locator import PinLocator
         from skip import Schematic
+
+        def natkey(s: Any) -> Tuple[str, int, str]:
+            """Natural sort key so R2 < R10 and the lowest-designator pin in a
+            label-less cluster is chosen as KiCad's net-name driver."""
+            s = str(s)
+            m = re.match(r"^([^\d]*)(\d*)", s)
+            prefix = m.group(1) if m else s
+            num = int(m.group(2)) if (m and m.group(2)) else -1
+            return (prefix, num, s)
 
         TOLERANCE = 0.5  # mm; schematic grid is 1.27 mm so 0.5 is safe
 
@@ -2248,7 +2475,52 @@ class KiCADInterface(BoardPersistenceMixin):
                         visited.add(neighbor)
                         queue.append(neighbor)
 
+            # ── 2b. Label connected components of the wire graph ─────────────
+            # A label-less wire cluster (no seed net name anywhere on it) is
+            # invisible to the BFS above, so its pins would silently drop off
+            # the board (finding B1).  Label every wire point with a component
+            # id here so those clusters can be given a synthetic KiCad-style
+            # name (``Net-(<ref>-<pin>)``) in step 3.  This is the fallback
+            # path; when kicad-cli is available the sync handler prefers the
+            # authoritative netlist (``_pad_net_map_from_netlist_root``).
+            comp_id: dict = {}
+            _next_cid = 0
+            for _start in all_wire_pts:
+                if _start in comp_id:
+                    continue
+                _stack = [_start]
+                comp_id[_start] = _next_cid
+                while _stack:
+                    _p = _stack.pop()
+                    for _nb in point_adj[_p]:
+                        if _nb not in comp_id:
+                            comp_id[_nb] = _next_cid
+                            _stack.append(_nb)
+                _next_cid += 1
+
+            def wire_component(px, py, tol=TOLERANCE):
+                """Component id of the wire point at/near (px, py), or None."""
+                key = snap(px, py)
+                if key in comp_id:
+                    return comp_id[key]
+                for (lx, ly), cid in comp_id.items():
+                    if abs(px - lx) < tol and abs(py - ly) < tol:
+                        return cid
+                return None
+
+            def pin_names_for(sym) -> dict:
+                """{pin_number: pin_name} for a placed symbol, or {} on error."""
+                try:
+                    lib_id = sym.lib_id.value
+                    defs = pin_locator.get_symbol_pins(sch_path, lib_id)
+                    return {num: (d.get("name") or "") for num, d in defs.items()}
+                except Exception:
+                    return {}
+
             # ── 3. Match component pin positions to net names ────────────────
+            # anon_clusters[cid] -> [(ref, pin_num, pin_name)] for label-less
+            # wired pins awaiting a synthetic name.
+            anon_clusters: dict = defaultdict(list)
             for sym in getattr(sch, "symbol", None) or []:
                 try:
                     ref = sym.property.Reference.value
@@ -2258,10 +2530,34 @@ class KiCADInterface(BoardPersistenceMixin):
                     continue
 
                 pin_positions = pin_locator.get_all_symbol_pins(sch_path, ref)
+                pin_names: Optional[dict] = None
                 for pin_num, (px, py) in pin_positions.items():
                     net = nearby_net((px, py), point_net)
                     if net:
                         pad_net_map[(ref, pin_num)] = net
+                        continue
+                    # Unnamed but sitting on a wire → remember for synthesis.
+                    cid = wire_component(px, py)
+                    if cid is not None:
+                        if pin_names is None:
+                            pin_names = pin_names_for(sym)
+                        anon_clusters[cid].append((ref, pin_num, pin_names.get(pin_num, "")))
+
+            # Synthesize KiCad-style names for label-less wire clusters that
+            # join ≥2 distinct pins.  A single-pin cluster is a dangling stub
+            # (KiCad leaves it unconnected), so it is left out of the map —
+            # matching the pre-fix "unconnected pin absent" behavior.
+            for _cid, members in anon_clusters.items():
+                if len({(r, p) for r, p, _ in members}) < 2:
+                    continue
+                rep_ref, rep_pin, rep_name = min(
+                    members, key=lambda m: (natkey(m[0]), natkey(m[1]))
+                )
+                part = rep_name if rep_name and rep_name != "~" else f"Pad{rep_pin}"
+                syn = f"Net-({rep_ref}-{part})"
+                all_net_names.add(syn)
+                for r, p, _ in members:
+                    pad_net_map.setdefault((r, p), syn)
 
         logger.info(
             f"_build_hierarchical_pad_net_map: {len(pad_net_map)} pin→net assignments, "
@@ -2269,46 +2565,25 @@ class KiCADInterface(BoardPersistenceMixin):
         )
         return pad_net_map, all_net_names
 
-    def _extract_components_from_schematic(self, schematic_path: str) -> List[Dict[str, str]]:
-        """Run kicad-cli netlist export and return the flat list of components.
+    def _extract_components_from_schematic(
+        self, schematic_path: str, root: Optional[Any] = None
+    ) -> List[Dict[str, str]]:
+        """Return the flat component list from the kicad-cli netlist.
 
-        Each entry: {"reference": str, "value": str, "footprint": str}
+        Each entry: {"reference": str, "value": str, "footprint": str}.
         Empty list on any failure (kicad-cli missing, parse error, etc.) — the
         caller treats that as "no missing footprints to add".
+
+        ``root`` accepts a pre-parsed netlist ``<export>`` element (from
+        ``_export_schematic_netlist_xml``) so a single ``sync_schematic_to_board``
+        reuses one kicad-cli run for both the component list and the pad→net
+        map instead of spawning kicad-cli twice.
         """
-        import subprocess
-        import tempfile
-        import xml.etree.ElementTree as ET
-
-        kicad_cli = self._find_kicad_cli_static()
-        if not kicad_cli:
-            logger.warning("kicad-cli not found — sync will not add new footprints")
+        if root is None:
+            root = self._export_schematic_netlist_xml(schematic_path)
+        if root is None:
             return []
-
-        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
-            tmp_path = tmp.name
         try:
-            cmd = [
-                kicad_cli,
-                "sch",
-                "export",
-                "netlist",
-                "--format",
-                "kicadxml",
-                "--output",
-                tmp_path,
-                schematic_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0:
-                logger.warning(
-                    f"kicad-cli netlist export failed (exit {result.returncode}): "
-                    f"{result.stderr.strip()}"
-                )
-                return []
-
-            tree = ET.parse(tmp_path)
-            root = tree.getroot()
             components = []
             for comp in root.findall("./components/comp"):
                 components.append(
@@ -2322,11 +2597,6 @@ class KiCADInterface(BoardPersistenceMixin):
         except Exception as e:
             logger.warning(f"Failed to extract components from schematic: {e}")
             return []
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
     # Grid layout constants for _add_missing_footprints_from_schematic.
     # Pitch defaults assume small SMD packages but adapt up to the largest
@@ -2415,7 +2685,7 @@ class KiCADInterface(BoardPersistenceMixin):
         return max_w, max_h
 
     def _add_missing_footprints_from_schematic(
-        self, board: Any, schematic_path: str
+        self, board: Any, schematic_path: str, netlist_root: Optional[Any] = None
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
         """Add footprints to ``board`` for any schematic component not yet present.
 
@@ -2448,7 +2718,7 @@ class KiCADInterface(BoardPersistenceMixin):
         added: List[Dict[str, Any]] = []
         skipped: List[Dict[str, str]] = []
 
-        components = self._extract_components_from_schematic(schematic_path)
+        components = self._extract_components_from_schematic(schematic_path, root=netlist_root)
         if not components:
             return added, skipped
 
@@ -2669,6 +2939,19 @@ def main() -> None:
     interface = KiCADInterface()
     # Signal to the TypeScript server that the stdin loop is live.
     _write_response(_response_fd, {"type": "ready"})
+
+    # F1: warm the symbol-library cache on a background daemon thread so the
+    # first cold `search_symbols` doesn't block ~60-70 s on the request path.
+    # Started AFTER the ready handshake so it can't delay startup, warm-up, or
+    # any queued command; it writes only to the logger, never to stdout.
+    # Default-on; opt out with KICAD_MCP_BG_SYMBOL_WARM=0 (and skipped when the
+    # blocking KICAD_MCP_EAGER_SYMBOL_CACHE=1 path is in force).
+    try:
+        from commands.library_symbol import start_background_symbol_warm
+
+        start_background_symbol_warm()
+    except Exception:  # noqa: BLE001 — warming is best-effort, never fatal
+        logger.exception("Could not start background symbol cache warm")
 
     try:
         logger.info("Processing commands from stdin...")

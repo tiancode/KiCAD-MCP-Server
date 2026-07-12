@@ -55,10 +55,17 @@ def _pcb_editor_open(monkeypatch):
 # ---------------------------------------------------------------------------
 # Gate at the IPC fast-path dispatch
 # ---------------------------------------------------------------------------
-def test_ipc_fastpath_blocked_when_swig_wrote_disk():
+def test_ipc_fastpath_blocked_when_swig_wrote_disk(monkeypatch):
     """An IPC mutation through the fast path must refuse to land when SWIG
     just wrote new content to disk — KiCad memory is stale and the IPC
-    save would overwrite the SWIG content."""
+    save would overwrite the SWIG content.
+
+    Finding B11 made the *default* behavior auto-heal this exact case (the
+    swig_to_ipc direction is lossless when IPC is clean), so this test now
+    pins the refusal that remains under the ``KICAD_AUTO_RECONCILE=false``
+    opt-out.  The auto-heal path itself is covered by
+    ``test_ipc_fastpath_auto_reconciles_when_swig_wrote_disk_and_ipc_clean``."""
+    monkeypatch.setenv("KICAD_AUTO_RECONCILE", "false")
     iface = _make_iface(use_ipc=True)
     iface._swig_writes_landed = True
     iface._ipc_place_component = lambda params: {  # type: ignore[attr-defined]
@@ -72,6 +79,76 @@ def test_ipc_fastpath_blocked_when_swig_wrote_disk():
     assert result["direction"] == "swig_to_ipc"
     # The handler must NOT have run.
     assert "SWIG" in result["message"]
+
+
+def test_ipc_fastpath_auto_reconciles_when_swig_wrote_disk_and_ipc_clean(monkeypatch):
+    """Finding B11: a swig_to_ipc conflict with a CLEAN IPC side is lossless to
+    heal (revert KiCad from disk, which already holds the SWIG writes).  The
+    dispatcher must auto-reconcile and then run the command, surfacing
+    ``auto_reconciled: true`` — not bounce the caller to a manual reconcile."""
+    from kicad_interface import KiCADInterface
+
+    monkeypatch.delenv("KICAD_AUTO_RECONCILE", raising=False)  # default on
+    iface = _make_iface(use_ipc=True)
+    iface.board = None
+    iface._swig_writes_landed = True
+    iface._ipc_writes_pending = False
+    # Reconcile's revert path: IPC reachable + revert succeeds.  Pin the board
+    # API so the dispatcher's _try_enable_ipc_backend refresh doesn't swap it
+    # out from under our fake_revert.
+    monkeypatch.setattr(KiCADInterface, "ensure_ipc", lambda self, **kw: (True, ""))
+    monkeypatch.setattr(KiCADInterface, "_refresh_ipc_board_api", lambda self: True)
+    fake_revert = MagicMock(return_value=True)
+    iface.ipc_board_api.revert = fake_revert
+
+    called = {"n": 0}
+
+    def fake_place(params):
+        called["n"] += 1
+        return {"success": True, "reference": "R1"}
+
+    iface._ipc_place_component = fake_place  # type: ignore[attr-defined]
+
+    result = iface.handle_command("place_component", {"reference": "R1"})
+
+    # The reconcile ran (revert called) and the command executed once.
+    fake_revert.assert_called_once()
+    assert called["n"] == 1
+    assert result["success"] is True
+    assert result["auto_reconciled"] is True
+    assert "ipc_revert" in result.get("stepsTaken", [])
+    # Flags cleared by the reconcile so no further gate fires.
+    assert iface._swig_writes_landed is False
+    assert iface._ipc_writes_pending is False
+    assert "needs_reconcile" not in result
+
+
+def test_ipc_fastpath_two_sided_conflict_still_refuses_verbatim(monkeypatch):
+    """Finding B11: when IPC ALSO has unsaved changes, reverting would discard
+    them — a genuine two-sided conflict.  Auto-heal must NOT run; the original
+    needs_reconcile refusal is returned verbatim and revert is never called."""
+    monkeypatch.delenv("KICAD_AUTO_RECONCILE", raising=False)  # default on
+    iface = _make_iface(use_ipc=True)
+    iface._swig_writes_landed = True
+    iface._ipc_writes_pending = True
+    fake_revert = MagicMock(return_value=True)
+    iface.ipc_board_api.revert = fake_revert
+    called = {"n": 0}
+
+    def fake_place(params):
+        called["n"] += 1
+        return {"success": True}
+
+    iface._ipc_place_component = fake_place  # type: ignore[attr-defined]
+
+    result = iface.handle_command("place_component", {"reference": "R1"})
+
+    assert result["success"] is False
+    assert result["needs_reconcile"] is True
+    assert result["direction"] == "swig_to_ipc"
+    fake_revert.assert_not_called()
+    assert called["n"] == 0
+    assert "auto_reconciled" not in result
 
 
 def test_ipc_fastpath_read_only_allowed_even_when_swig_dirty():

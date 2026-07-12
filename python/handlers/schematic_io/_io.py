@@ -113,16 +113,35 @@ def handle_sync_schematic_to_board(
                 "message": f"Schematic not found. Provide schematicPath. Tried: {schematic_path}",
             }
 
-        # Build hierarchical pad→net map (walks all sub-sheets)
-        pad_net_map, net_names = iface._build_hierarchical_pad_net_map(schematic_path)
+        # Build pad→net map.  Prefer the authoritative kicad-cli netlist: it
+        # names label-less wire nets exactly as KiCad's "Update PCB from
+        # Schematic" does (``Net-(D1-A)``), which the label/BFS parser cannot
+        # see — so plain-wire connections with no label anywhere are no longer
+        # silently dropped off the board (finding B1).  Export the netlist once
+        # and reuse it for the missing-footprint pass, so a single sync never
+        # spawns kicad-cli twice.
+        netlist_root = iface._export_schematic_netlist_xml(schematic_path)
+        netlist_source = "fallback-bfs"
+        pad_net_map: Dict[Any, str] = {}
+        net_names: set = set()
+        if netlist_root is not None:
+            pad_net_map, net_names = iface._pad_net_map_from_netlist_root(netlist_root)
+            if pad_net_map:
+                netlist_source = "kicad-cli"
+        if not pad_net_map:
+            # kicad-cli unavailable / produced nothing — fall back to the
+            # label/#PWR/BFS parser (which now also synthesizes
+            # Net-(<ref>-<pin>) names for label-less clusters).
+            pad_net_map, net_names = iface._build_hierarchical_pad_net_map(schematic_path)
+            netlist_source = "fallback-bfs"
 
         # Add missing footprints from the schematic to the board *before*
         # we add nets and assign pads — F8 in KiCad does this implicitly
         # ("Update PCB from Schematic"), but our previous implementation
         # only mutated nets, leaving newly-added schematic symbols with no
-        # PCB footprint at all.
+        # PCB footprint at all.  Reuse the netlist we already exported.
         added_footprints, skipped_footprints = iface._add_missing_footprints_from_schematic(
-            board, schematic_path
+            board, schematic_path, netlist_root=netlist_root
         )
 
         # Add all nets to board
@@ -141,7 +160,7 @@ def handle_sync_schematic_to_board(
 
         # Assign nets to pads (now also covers any footprints we just added)
         assigned_pads = 0
-        unmatched = []
+        assigned_keys: set = set()
         for fp in board.GetFootprints():
             ref = fp.GetReference()
             for pad in fp.Pads():
@@ -152,8 +171,22 @@ def handle_sync_schematic_to_board(
                     if nets_by_name.has_key(net_name):
                         pad.SetNet(nets_by_name[net_name])
                         assigned_pads += 1
-                else:
-                    unmatched.append(f"{ref}/{pad_num}")
+                        assigned_keys.add(key)
+
+        # Honest degradation: any schematic connection the netlist expects but
+        # that did NOT land on a board pad is a real electrical loss.  Surface
+        # the FULL list (not just a sample) plus which nets — if any — dropped
+        # entirely, instead of returning a bare success (finding B1).
+        from collections import defaultdict as _dd
+
+        unmatched_pads = sorted(f"{ref}/{pin}" for (ref, pin) in (set(pad_net_map) - assigned_keys))
+        net_expected: Dict[str, int] = _dd(int)
+        net_assigned: Dict[str, int] = _dd(int)
+        for _k, _n in pad_net_map.items():
+            net_expected[_n] += 1
+        for _k in assigned_keys:
+            net_assigned[pad_net_map[_k]] += 1
+        dropped_nets = sorted(n for n in net_expected if net_assigned[n] == 0)
 
         # Route through the iface helper so the in-memory signature tracks
         # the new on-disk hash; otherwise the dispatcher's follow-up
@@ -212,7 +245,15 @@ def handle_sync_schematic_to_board(
             "nets_added": added_nets,
             "nets_total": len(net_names),
             "pads_assigned": assigned_pads,
-            "unmatched_pads_sample": unmatched[:10],
+            # Which parser produced the pad→net map: the authoritative kicad-cli
+            # netlist ("kicad-cli", names anonymous wire nets like KiCad) or the
+            # label/BFS fallback ("fallback-bfs").
+            "netlist_source": netlist_source,
+            # FULL list of schematic pins that expected a net but were not
+            # assigned on the board (electrical losses), plus a short sample
+            # under the historical field name for backward compatibility.
+            "unmatched_pads": unmatched_pads,
+            "unmatched_pads_sample": unmatched_pads[:10],
             "footprints_added": added_footprints,
             "footprints_skipped": skipped_footprints,
             "layout_note": layout_note,
@@ -220,6 +261,15 @@ def handle_sync_schematic_to_board(
             # place/move/get_component_list calls see the synced footprints.
             "boardReloaded": board_reloaded,
         }
+        if unmatched_pads:
+            warn = (
+                f"{len(unmatched_pads)} schematic pin(s) expected a net but were not "
+                f"assigned on the board"
+            )
+            if dropped_nets:
+                warn += f"; {len(dropped_nets)} net(s) dropped entirely: {dropped_nets}"
+            response["warning"] = warn
+            response["dropped_nets"] = dropped_nets
         if ipc_attached:
             # KiCad has the same board open over IPC; its live in-memory copy is
             # now OLDER than disk and does NOT reflect this sync.

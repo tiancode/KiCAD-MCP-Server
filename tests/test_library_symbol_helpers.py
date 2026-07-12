@@ -57,6 +57,23 @@ class TestExtractProperties:
     def test_no_properties_returns_empty(self):
         assert _bare_manager()._extract_properties('(symbol "R")') == {}
 
+    def test_escaped_quote_in_value_not_truncated(self):
+        """F7: a value with an escaped quote (\\") must not be cut short at
+        the first inner quote, and the escape must be decoded."""
+        block = r'(symbol "+5V" (property "Description" "global label \"+5V\""))'
+        props = _bare_manager()._extract_properties(block)
+        assert props["Description"] == 'global label "+5V"'
+
+    def test_escaped_backslash_and_quote_decoded(self):
+        r"""Both \\ -> \ and \" -> " decode; a following property still parses."""
+        block = (
+            r'(symbol "X" (property "Description" "path C:\\Users \"q\" end") '
+            r'(property "Value" "X"))'
+        )
+        props = _bare_manager()._extract_properties(block)
+        assert props["Description"] == 'path C:\\Users "q" end'
+        assert props["Value"] == "X"
+
 
 # ---------------------------------------------------------------------------
 # split_library_qualifier  (uses self.libraries)

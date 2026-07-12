@@ -2,14 +2,130 @@
 Project-related command implementations for KiCAD interface
 """
 
+import json
 import logging
 import os
-import shutil
 from typing import Any, Dict, Optional
 
 import pcbnew  # type: ignore
 
 logger = logging.getLogger("kicad_interface")
+
+
+def _new_project_document(pro_filename: str) -> Dict[str, Any]:
+    """Return a faithful *minimal* KiCad 10 ``.kicad_pro`` document.
+
+    Values mirror what KiCad 10.0.4 itself writes for a brand-new project
+    (captured from ``pcbnew.SaveBoard`` output), trimmed to the keys that
+    matter: ``meta``, ``net_settings`` (with a full ``Default`` net class),
+    ``board.design_settings`` (defaults + rule minimums), ``schematic``, and the
+    small library/tool skeleton.  KiCad fills any omitted key with its own
+    default on load, so this opens cleanly while staying well under the full
+    ~9.5 KB dump.
+
+    This replaces the old ~112-byte stub (E2E B7).  The net class here is the
+    canonical store that ``create_netclass`` / ``set_design_rules`` edit and
+    that the auto-save path must not clobber (E2E B10).
+    """
+    return {
+        "board": {
+            "design_settings": {
+                "defaults": {
+                    "board_outline_line_width": 0.05,
+                    "copper_line_width": 0.2,
+                    "copper_text_size_h": 1.5,
+                    "copper_text_size_v": 1.5,
+                    "copper_text_thickness": 0.3,
+                    "courtyard_line_width": 0.05,
+                    "dimension_precision": 4,
+                    "dimension_units": 3,
+                    "fab_line_width": 0.1,
+                    "fab_text_size_h": 1.0,
+                    "fab_text_size_v": 1.0,
+                    "fab_text_thickness": 0.15,
+                    "other_line_width": 0.1,
+                    "other_text_size_h": 1.0,
+                    "other_text_size_v": 1.0,
+                    "other_text_thickness": 0.15,
+                    "pads": {"drill": 0.8, "height": 1.27, "width": 1.27},
+                    "silk_line_width": 0.1,
+                    "silk_text_size_h": 1.0,
+                    "silk_text_size_v": 1.0,
+                    "silk_text_thickness": 0.1,
+                },
+                "meta": {"version": 2},
+                "rules": {
+                    "max_error": 0.005,
+                    "min_clearance": 0.0,
+                    "min_connection": 0.0,
+                    "min_copper_edge_clearance": 0.5,
+                    "min_hole_clearance": 0.25,
+                    "min_hole_to_hole": 0.25,
+                    "min_microvia_diameter": 0.2,
+                    "min_microvia_drill": 0.1,
+                    "min_resolved_spokes": 2,
+                    "min_silk_clearance": 0.0,
+                    "min_text_height": 0.8,
+                    "min_text_thickness": 0.08,
+                    "min_through_hole_diameter": 0.3,
+                    "min_track_width": 0.2,
+                    "min_via_annular_width": 0.1,
+                    "min_via_diameter": 0.5,
+                    "solder_mask_to_copper_clearance": 0.0,
+                    "use_height_for_length_calcs": True,
+                },
+            }
+        },
+        "boards": [],
+        "cvpcb": {"equivalence_files": []},
+        "libraries": {"pinned_footprint_libs": [], "pinned_symbol_libs": []},
+        "meta": {"filename": pro_filename, "version": 3},
+        "net_settings": {
+            "classes": [
+                {
+                    "bus_width": 12,
+                    "clearance": 0.2,
+                    "diff_pair_gap": 0.25,
+                    "diff_pair_via_gap": 0.25,
+                    "diff_pair_width": 0.2,
+                    "line_style": 0,
+                    "microvia_diameter": 0.3,
+                    "microvia_drill": 0.1,
+                    "name": "Default",
+                    "pcb_color": "rgba(0, 0, 0, 0.000)",
+                    "priority": 2147483647,
+                    "schematic_color": "rgba(0, 0, 0, 0.000)",
+                    "track_width": 0.2,
+                    "tuning_profile": "",
+                    "via_diameter": 0.6,
+                    "via_drill": 0.3,
+                    "wire_width": 6,
+                }
+            ],
+            "meta": {"version": 5},
+            "net_colors": None,
+            "netclass_assignments": None,
+            "netclass_patterns": [],
+        },
+        "pcbnew": {
+            "last_paths": {
+                "idf": "",
+                "netlist": "",
+                "plot": "",
+                "specctra_dsn": "",
+                "vrml": "",
+            },
+            "page_layout_descr_file": "",
+        },
+        "schematic": {
+            "bus_aliases": {},
+            "legacy_lib_dir": "",
+            "legacy_lib_list": [],
+            "top_level_sheets": [],
+        },
+        "sheets": [],
+        "text_variables": {},
+    }
 
 
 class ProjectCommands:
@@ -37,9 +153,9 @@ class ProjectCommands:
             board_path = project_path.replace(".kicad_pro", ".kicad_pcb")
             schematic_path = project_path.replace(".kicad_pro", ".kicad_sch")
 
-            # Refuse to clobber an existing project. SaveBoard / shutil.copy
-            # below would otherwise silently overwrite the user's board and
-            # schematic. Mirrors create_footprint / create_symbol, which
+            # Refuse to clobber an existing project. The SaveBoard / schematic /
+            # project writes below would otherwise silently overwrite the user's
+            # board and schematic. Mirrors create_footprint / create_symbol, which
             # default overwrite=False and refuse when the target exists.
             overwrite = bool(params.get("overwrite", False))
             if not overwrite:
@@ -85,65 +201,46 @@ class ProjectCommands:
                     board.SetDesignSettings(template_board.GetDesignSettings())
                     board.SetLayerStack(template_board.GetLayerStack())
 
-            # Save the board (board_path computed above for the overwrite guard)
+            # Save the board (board_path computed above for the overwrite guard).
+            # aSkipSettings=True: SaveBoard must not emit its own .kicad_pro from
+            # the board's default in-memory PROJECT — we write a faithful minimal
+            # project file explicitly below (E2E B7 / B10).
             board.SetFileName(board_path)
-            pcbnew.SaveBoard(board_path, board)
+            pcbnew.SaveBoard(board_path, board, True)
 
-            # Create schematic from template (use expanded template with symbol definitions)
-            template_sch_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..",
-                "templates",
-                "template_with_symbols_expanded.kicad_sch",
-            )
+            # Create a minimal empty schematic.  The old code seeded every new
+            # project from template_with_symbols_expanded.kicad_sch, which
+            # preloaded 13 unused lib_symbols (LM358, Crystal, …) with zero
+            # placed instances (E2E B6).  add_schematic_component drives the
+            # dynamic symbol loader, which injects each symbol's definition into
+            # lib_symbols on demand, so the preload was dead weight that ERC then
+            # auto-refreshed forever.  A clean empty lib_symbols block is all the
+            # loader needs.
+            import uuid as uuid_module
 
-            if os.path.exists(template_sch_path):
-                # Copy template schematic
-                shutil.copy(template_sch_path, schematic_path)
+            schematic_uuid = str(uuid_module.uuid4())
+            with open(schematic_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write('(kicad_sch (version 20250114) (generator "KiCAD-MCP-Server")\n\n')
+                f.write(f"  (uuid {schematic_uuid})\n\n")
+                f.write('  (paper "A4")\n\n')
+                f.write("  (lib_symbols\n  )\n\n")
+                f.write('  (sheet_instances\n    (path "/" (page "1"))\n  )\n')
+                f.write(")\n")
+            logger.info(f"Created minimal schematic: {schematic_path}")
 
-                # Regenerate UUID to ensure uniqueness for each created project
-                import re
-                import uuid as uuid_module
-
-                with open(schematic_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                new_uuid = str(uuid_module.uuid4())
-                content = re.sub(
-                    r"\(uuid [0-9a-fA-F-]+\)",
-                    f"(uuid {new_uuid})",
-                    content,
-                    count=1,  # Only replace first (schematic) UUID
+            # Write a faithful minimal KiCad 10 project file (E2E B7).  The old
+            # code wrote a ~112-byte stub that only self-healed once a
+            # kicad-cli-backed op ran; this ships a real project document with a
+            # Default net class so create_netclass / set_design_rules have a
+            # canonical store to edit from the start.
+            with open(project_path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(
+                    _new_project_document(os.path.basename(project_path)),
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
                 )
-                with open(schematic_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(content)
-
-                logger.info(f"Created schematic from template: {schematic_path}")
-            else:
-                # Fallback: create minimal schematic
-                logger.warning(
-                    f"Template not found at {template_sch_path}, creating minimal schematic"
-                )
-                import uuid as uuid_module
-
-                schematic_uuid = str(uuid_module.uuid4())
-                with open(schematic_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write('(kicad_sch (version 20250114) (generator "KiCAD-MCP-Server")\n\n')
-                    f.write(f"  (uuid {schematic_uuid})\n\n")
-                    f.write('  (paper "A4")\n\n')
-                    f.write("  (lib_symbols\n  )\n\n")
-                    f.write('  (sheet_instances\n    (path "/" (page "1"))\n  )\n')
-                    f.write(")\n")
-
-            # Create project file with schematic reference
-            with open(project_path, "w") as f:
-                f.write("{\n")
-                f.write('  "board": {\n')
-                f.write(f'    "filename": "{os.path.basename(board_path)}"\n')
-                f.write("  },\n")
-                f.write('  "sheets": [\n')
-                f.write(f'    ["root", "{os.path.basename(schematic_path)}"]\n')
-                f.write("  ]\n")
-                f.write("}\n")
+                f.write("\n")
 
             self.board = board
 
@@ -224,8 +321,10 @@ class ProjectCommands:
                 filename = os.path.abspath(os.path.expanduser(filename))
                 self.board.SetFileName(filename)
 
-            # Save the board
-            pcbnew.SaveBoard(self.board.GetFileName(), self.board)
+            # Save the board.  aSkipSettings=True: SaveBoard must not rewrite the
+            # sibling .kicad_pro from the board's in-memory PROJECT, or it clobbers
+            # netclass / design-rule edits that live only in that JSON (E2E B10).
+            pcbnew.SaveBoard(self.board.GetFileName(), self.board, True)
 
             return {
                 "success": True,

@@ -241,8 +241,13 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         .object({ x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number() })
         .optional()
         .describe("Zoom to this board-space rectangle (mm) instead of the whole board"),
-      width: z.number().optional().describe("Image width in pixels"),
-      height: z.number().optional().describe("Image height in pixels"),
+      width: z
+        .number()
+        .optional()
+        .describe(
+          "Image width in pixels (raster only); the board is fit within width x height, aspect-preserving",
+        ),
+      height: z.number().optional().describe("Image height in pixels (raster only)"),
       format: z.enum(["png", "jpg", "svg"]).optional().describe("Image format"),
       responseMode: z
         .enum(["inline", "file"])

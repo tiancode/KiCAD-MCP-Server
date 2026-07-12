@@ -45,6 +45,9 @@ def _make_iface(*, ipc_attached: bool, reload_ok: bool = True) -> MagicMock:
     iface.board = _make_board()
     iface._swig_writes_landed = False
     iface.ipc_board_api = MagicMock(name="ipc_api") if ipc_attached else None
+    # kicad-cli unavailable in this stubbed environment → the handler takes the
+    # label/BFS fallback (kept as a MagicMock so we don't spawn a real export).
+    iface._export_schematic_netlist_xml.return_value = None
     # No nets, no missing footprints → the sync mutates/saves but adds nothing.
     iface._build_hierarchical_pad_net_map.return_value = ({}, [])
     iface._add_missing_footprints_from_schematic.return_value = ([], [])

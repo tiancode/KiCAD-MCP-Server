@@ -59,7 +59,8 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     "add_schematic_net_label",
     "Add a net label. KiCad connects a label to a pin ONLY at the exact pin endpoint (0.01 mm off breaks it). " +
       "Prefer componentRef + pinNumber (snaps to the pin); or position [x, y], auto-snapped to a pin " +
-      "within snapTolerance. Response reports connected_to_pin = {ref, pin} | null.",
+      "within snapTolerance. Response reports connected_to_pin = {ref, pin} | null. " +
+      "For dense 2-pin passives, connect_to_net (label on a short stub) reads cleaner.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
@@ -84,7 +85,12 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         .enum(["label", "global_label", "hierarchical_label"])
         .optional()
         .describe("Label type (default: label)"),
-      orientation: z.number().optional().describe("Rotation angle 0/90/180/270 (default: 0)"),
+      orientation: z
+        .number()
+        .optional()
+        .describe(
+          "Rotation angle 0/90/180/270. Default: derived from the snapped pin's outward direction so text extends away from the symbol, else 0.",
+        ),
       snapTolerance: z
         .number()
         .optional()
@@ -205,15 +211,29 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
     async (args: { schematicPath: string; netName: string }) => {
       const result = await callKicadScript("get_net_connections", args);
-      if (result.success && result.connections) {
-        const connectionList = result.connections
+      if (result.success) {
+        const connectionList = (result.connections ?? [])
           .map((conn: any) => `  - ${conn.component}/${conn.pin}`)
           .join("\n");
+        const lines = [`Net '${args.netName}' connections:`, connectionList || "  (none)"];
+        // Power-symbol / PWR_FLAG attachment side-channels (Python side-channel
+        // added for F3). Surface them so callers can verify power connectivity
+        // without re-reading the raw .kicad_sch.
+        const powerSymbols = result.power_symbols ?? [];
+        if (powerSymbols.length) {
+          lines.push("Power symbols:");
+          for (const p of powerSymbols) lines.push(`  - ${p.ref}/${p.pin} (${p.value})`);
+        }
+        const powerFlags = result.power_flags ?? [];
+        if (powerFlags.length) {
+          lines.push("Power flags (PWR_FLAG):");
+          for (const p of powerFlags) lines.push(`  - ${p.ref}/${p.pin} [${p.attachment}]`);
+        }
         return {
           content: [
             {
               type: "text",
-              text: `Net '${args.netName}' connections:\n${connectionList}`,
+              text: lines.join("\n"),
             },
           ],
         };

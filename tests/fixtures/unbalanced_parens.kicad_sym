@@ -1,0 +1,91 @@
+(kicad_symbol_lib
+	(version 20241209)
+	(generator "kicad_symbol_editor")
+	(generator_version "9.0")
+	(symbol "STM32H5xx_TRICKY"
+		(pin_names
+			(offset 0)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "U"
+			(at 0 0 0)
+		)
+		(property "Value" "STM32H5xx_TRICKY"
+			(at 0 0 0)
+		)
+		(property "Description" "Arm Cortex-M33 MCU (LQFP48"
+			(at 0 0 0)
+		)
+		(symbol "STM32H5xx_TRICKY_0_1"
+			(pin bidirectional line
+				(at -20 10 0)
+				(length 5)
+				(name "PA13(JTMS"
+					(effects (font (size 1.27 1.27)))
+				)
+				(number "34"
+					(effects (font (size 1.27 1.27)))
+				)
+			)
+			(pin bidirectional line
+				(at -20 7 0)
+				(length 5)
+				(name "PA14(JTCK"
+					(effects (font (size 1.27 1.27)))
+				)
+				(number "37"
+					(effects (font (size 1.27 1.27)))
+				)
+			)
+		)
+	)
+	(symbol "ESCAPED_TRICKY"
+		(pin_names
+			(offset 0)
+		)
+		(property "Reference" "U"
+			(at 0 0 0)
+		)
+		(property "Value" "ESCAPED_TRICKY"
+			(at 0 0 0)
+		)
+		(property "Description" "Active-low \"reset\" (see datasheet"
+			(at 0 0 0)
+		)
+	)
+	(symbol "PLAIN_C"
+		(property "Reference" "R"
+			(at 0 0 0)
+		)
+		(property "Value" "PLAIN_C"
+			(at 0 0 0)
+		)
+		(property "Description" "Plain resistor after the tricky ones"
+			(at 0 0 0)
+		)
+	)
+	(symbol "PLAIN_D"
+		(property "Reference" "C"
+			(at 0 0 0)
+		)
+		(property "Value" "PLAIN_D"
+			(at 0 0 0)
+		)
+		(property "Description" "Capacitor, 100nF"
+			(at 0 0 0)
+		)
+	)
+	(symbol "PLAIN_E"
+		(property "Reference" "D"
+			(at 0 0 0)
+		)
+		(property "Value" "PLAIN_E"
+			(at 0 0 0)
+		)
+		(property "Description" "LED (red)"
+			(at 0 0 0)
+		)
+	)
+)

@@ -10,8 +10,8 @@ Re-exports every function/constant so existing
 from commands.pin_locator import PinLocator
 
 from ._parsing import (
-    PWRFLAG_LABEL_SENTINEL,
     _IU_PER_MM,
+    PWRFLAG_LABEL_SENTINEL,
     _load_sexp,
     _parse_labels_sexp,
     _parse_symbol_instances_sexp,
@@ -22,6 +22,15 @@ from ._parsing import (
     _to_iu,
     is_pwrflag_label,
 )
+from ._queries import (
+    count_pins_on_net,
+    get_connections_for_net,
+    get_net_at_point,
+    get_power_attachments_for_net,
+    get_wire_connections,
+    list_floating_labels,
+    resolve_power_flags,
+)
 from ._traversal import (
     _build_adjacency,
     _build_sheet_context,
@@ -29,13 +38,6 @@ from ._traversal import (
     _find_connected_wires,
     _find_pins_on_net,
     _process_single_sheet,
-)
-from ._queries import (
-    count_pins_on_net,
-    get_connections_for_net,
-    get_net_at_point,
-    get_wire_connections,
-    list_floating_labels,
 )
 
 __all__ = [
@@ -58,7 +60,9 @@ __all__ = [
     "count_pins_on_net",
     "get_connections_for_net",
     "get_net_at_point",
+    "get_power_attachments_for_net",
     "get_wire_connections",
     "is_pwrflag_label",
     "list_floating_labels",
+    "resolve_power_flags",
 ]

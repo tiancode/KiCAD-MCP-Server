@@ -116,7 +116,14 @@ class QueryMixin:
                     "errorDetails": "Load or create a board first",
                 }
 
+            from utils.footprint_class import is_mounting_hole
+
             components = []
+            # Every footprint on the board is listed — including mounting holes
+            # (MH1-4 etc.), which are real footprints with real references.  The
+            # IPC listing does the same; they are tagged with is_mounting_hole
+            # so a consumer can filter intentionally instead of the two backends
+            # silently disagreeing on the component set.
             for module in self.board.GetFootprints():
                 pos = module.GetPosition()
                 x_mm = pos.x / 1000000
@@ -133,15 +140,18 @@ class QueryMixin:
                     "unit": "mm",
                 }
 
+                reference = module.GetReference()
+                fpid = module.GetFPIDAsString()
                 components.append(
                     {
-                        "reference": module.GetReference(),
+                        "reference": reference,
                         "value": module.GetValue(),
-                        "footprint": module.GetFPIDAsString(),
+                        "footprint": fpid,
                         "position": {"x": x_mm, "y": y_mm, "unit": "mm"},
                         "rotation": module.GetOrientation().AsDegrees(),
                         "layer": self.board.GetLayerName(module.GetLayer()),
                         "boundingBox": bbox_data,
+                        "is_mounting_hole": is_mounting_hole(fpid, reference),
                     }
                 )
 

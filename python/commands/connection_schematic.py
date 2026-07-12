@@ -31,6 +31,32 @@ class ConnectionManager:
         return cls._pin_locator
 
     @staticmethod
+    def _lookup_lib_value(schematic_path: Path, component_ref: str) -> tuple:
+        """Return ``(lib_id, value)`` for the placed symbol ``component_ref``.
+
+        Used to detect power *ports* (lib_id ``power:*`` / ref ``#PWR…``) so
+        connecting one to a net named by its own Value can be short-circuited
+        (F4). Returns ``(None, None)`` when the symbol or file can't be read.
+        """
+        try:
+            sch = Schematic(str(schematic_path))
+        except Exception as e:  # missing/unparseable file — caller falls back
+            logger.debug(f"_lookup_lib_value: could not load {schematic_path}: {e}")
+            return None, None
+        for symbol in getattr(sch, "symbol", []):
+            try:
+                if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+                    continue
+                if symbol.property.Reference.value.rstrip("_") != component_ref:
+                    continue
+                lib_id = symbol.lib_id.value if hasattr(symbol, "lib_id") else None
+                value = symbol.property.Value.value if hasattr(symbol.property, "Value") else None
+                return lib_id, value
+            except AttributeError:
+                continue
+        return None, None
+
+    @staticmethod
     def connect_to_net(
         schematic_path: Path, component_ref: str, pin_name: str, net_name: str
     ) -> Dict[str, Any]:
@@ -60,6 +86,42 @@ class ConnectionManager:
             if not locator:
                 logger.error("Pin locator unavailable")
                 return {"success": False, "message": "Pin locator unavailable"}
+
+            # Power-symbol short-circuit (F4): a power PORT (#PWR…, lib_id
+            # "power:*") already joins the net named by its Value and self-labels
+            # its own pin, so a matching-name connection is a redundant double
+            # label — skip the wire+label entirely. A mismatched name is almost
+            # certainly a mistake (the pin then carries both names); still wire
+            # it but warn. PWR_FLAG (#FLG) is not a named port and never matches.
+            lib_id, value = ConnectionManager._lookup_lib_value(schematic_path, component_ref)
+            power_warning: Optional[str] = None
+            if (
+                component_ref.startswith("#PWR")
+                and not component_ref.startswith("#FLG")
+                and str(lib_id or "").startswith("power:")
+            ):
+                if value is not None and net_name == value:
+                    logger.info(
+                        f"Skipping redundant connect_to_net on power symbol "
+                        f"{component_ref} (its Value '{value}' already names the net)"
+                    )
+                    return {
+                        "success": True,
+                        "already_connected": True,
+                        "skipped_label": True,
+                        "power_symbol": {"ref": component_ref, "value": value},
+                        "message": (
+                            f"{component_ref} is a power symbol; its pin already "
+                            f"joins net '{value}' via its Value, so no wire/label "
+                            f"was added. Power symbols self-label their pin."
+                        ),
+                    }
+                power_warning = (
+                    f"{component_ref} is a power symbol already driving net "
+                    f"'{value}' via its Value; connecting it to '{net_name}' will "
+                    f"not rename that net — its pin ends up on BOTH nets. This is "
+                    f"almost certainly a mistake."
+                )
 
             # Get pin location using PinLocator
             pin_loc = locator.get_pin_location(schematic_path, component_ref, pin_name)
@@ -115,13 +177,16 @@ class ConnectionManager:
                 return {"success": False, "message": msg}
 
             logger.info(f"Connected {component_ref}/{pin_name} to net '{net_name}'")
-            return {
+            result: Dict[str, Any] = {
                 "success": True,
                 "message": f"Connected {component_ref}/{pin_name} to net '{net_name}'",
                 "pin_location": pin_loc,
                 "label_location": stub_end,
                 "wire_stub": [pin_loc, stub_end],
             }
+            if power_warning:
+                result["warnings"] = [power_warning]
+            return result
 
         except Exception as e:  # API boundary; bucket: catch + return
             logger.exception(f"Error connecting to net: {e}")

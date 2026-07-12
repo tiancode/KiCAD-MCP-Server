@@ -14,6 +14,8 @@ logger = logging.getLogger("kicad_interface")
 
 from ._parsing import (
     _IU_PER_MM,
+    _load_sexp,
+    _parse_labels_sexp,
     _parse_virtual_connections,
     _parse_wires,
     _to_iu,
@@ -369,3 +371,173 @@ def get_connections_for_net(
             logger.warning(f"Error processing sub-sheet {sub_path}: {e}")
 
     return all_pins
+
+
+# ---------------------------------------------------------------------------
+# Power-symbol / PWR_FLAG net attachment (verification side-channel)
+#
+# The default net queries (get_connections_for_net, count_pins_on_net) filter
+# #PWR / #FLG pins by design — they are not "real" component pins.  That makes a
+# placed PWR_FLAG (or power symbol) impossible to confirm against a net without
+# reading the raw file.  The helpers below surface that attachment as an
+# additive side-channel, without touching the existing pin arrays or their
+# filters.
+# ---------------------------------------------------------------------------
+
+
+def _power_symbols_on_net(schematic: Any, net_name: str) -> List[Dict[str, Any]]:
+    """Return power-port (#PWR / ``power:*``) symbols that name ``net_name``.
+
+    A power-port symbol belongs to the net equal to its ``Value`` — that is how
+    the schematic joins it (its pin carries an implicit label of that name).
+    Returns ``[{"ref", "pin", "value"}]``.
+    """
+    out: List[Dict[str, Any]] = []
+    if not hasattr(schematic, "symbol"):
+        return out
+    for symbol in schematic.symbol:
+        try:
+            if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+                continue
+            ref = symbol.property.Reference.value
+            # #FLG (PWR_FLAG) is a marker, never a named port — excluded.
+            if ref.startswith("_TEMPLATE") or not ref.startswith("#PWR") or ref.startswith("#FLG"):
+                continue
+            lib_id = symbol.lib_id.value if hasattr(symbol, "lib_id") else ""
+            if not str(lib_id or "").startswith("power:"):
+                continue
+            value = symbol.property.Value.value if hasattr(symbol.property, "Value") else None
+            if value is not None and value == net_name:
+                out.append({"ref": ref, "pin": "1", "value": value})
+        except Exception as e:  # defensive: one odd symbol shouldn't kill the query
+            logger.warning(f"Error reading power symbol for net '{net_name}': {e}")
+    return out
+
+
+def _classify_flag_attachment(
+    flag_iu: Tuple[int, int],
+    coords: List[float],
+    labels_only_p2l: Dict[Tuple[int, int], str],
+    point_to_label: Dict[Tuple[int, int], str],
+    label_to_points: Dict[str, List[Tuple[int, int]]],
+    all_wires: List[List[Tuple[int, int]]],
+    iu_to_wires: Dict[Tuple[int, int], Set[int]],
+    adjacency: List[Set[int]],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve the net a PWR_FLAG pin joins and *how* it attaches.
+
+    Priority mirrors how the schematic joins a flag's pin — the same order the
+    task documents: a net label at the pin, then a wire to it, then a coincident
+    (power-port) pin.  Returns ``(net_name | None, attachment | None)`` where
+    attachment is ``"label"`` | ``"wire"`` | ``"pin_coincident"``.
+    """
+    # 1. A real net-label element sits exactly on the flag pin (the canonical
+    #    "attach a PWR_FLAG by labeling its pin" idiom).
+    lbl = labels_only_p2l.get(flag_iu)
+    if lbl is not None and not is_pwrflag_label(lbl):
+        return lbl, "label"
+
+    # 2. The flag pin sits on the wire network — trace out to the net's name.
+    if all_wires:
+        visited, net_points = _find_connected_wires(
+            coords[0],
+            coords[1],
+            all_wires,
+            iu_to_wires,
+            adjacency,
+            point_to_label=point_to_label,
+            label_to_points=label_to_points,
+        )
+        if visited is not None and net_points:
+            for pt in net_points:
+                cand = point_to_label.get(pt)
+                if cand is not None and not is_pwrflag_label(cand):
+                    return cand, "wire"
+            return None, "wire"  # wired, but to an unnamed net
+
+    # 3. The flag pin coincides with a power-port pin (net from that port's
+    #    Value) with no intervening label or wire.
+    coincident = point_to_label.get(flag_iu)
+    if coincident is not None and not is_pwrflag_label(coincident):
+        return coincident, "pin_coincident"
+
+    return None, None
+
+
+def resolve_power_flags(schematic: Any, schematic_path: str) -> List[Dict[str, Any]]:
+    """Resolve every PWR_FLAG (#FLG) symbol's net attachment on this sheet.
+
+    Returns ``[{"ref", "pin", "net", "attachment"}]`` where ``net`` is the named
+    net the flag's single pin joins (``None`` when it joins no named net) and
+    ``attachment`` is ``"label"`` | ``"wire"`` | ``"pin_coincident"``.
+
+    PWR_FLAG is never itself a net name (see PWRFLAG_LABEL_SENTINEL); this
+    reports what rail the marker is attached to, which no other net query
+    surfaces because they filter #FLG pins.
+    """
+    results: List[Dict[str, Any]] = []
+    if not hasattr(schematic, "symbol"):
+        return results
+
+    try:
+        sexp = _load_sexp(schematic_path)
+    except Exception:
+        sexp = None
+    labels_only_p2l: Dict[Tuple[int, int], str] = {}
+    if sexp is not None:
+        labels_only_p2l, _ = _parse_labels_sexp(sexp)
+
+    point_to_label, label_to_points = _parse_virtual_connections(
+        schematic, schematic_path, sexp=sexp
+    )
+    all_wires = _parse_wires(schematic)
+    if all_wires:
+        adjacency, iu_to_wires = _build_adjacency(all_wires)
+    else:
+        adjacency, iu_to_wires = [], {}
+
+    locator = PinLocator()
+    for symbol in schematic.symbol:
+        try:
+            if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+                continue
+            ref = symbol.property.Reference.value
+            if ref.startswith("_TEMPLATE") or not ref.startswith("#FLG"):
+                continue
+            all_pins = locator.get_all_symbol_pins(Path(schematic_path), ref)
+            if not all_pins:
+                continue
+            for pin_num, coords in all_pins.items():
+                flag_iu = _to_iu(float(coords[0]), float(coords[1]))
+                net, attachment = _classify_flag_attachment(
+                    flag_iu,
+                    list(coords),
+                    labels_only_p2l,
+                    point_to_label,
+                    label_to_points,
+                    all_wires,
+                    iu_to_wires,
+                    adjacency,
+                )
+                results.append({"ref": ref, "pin": pin_num, "net": net, "attachment": attachment})
+        except Exception as e:  # defensive: keep resolving the rest
+            logger.warning(f"Error resolving power flag: {e}")
+    return results
+
+
+def get_power_attachments_for_net(
+    schematic: Any, schematic_path: str, net_name: str
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Power-symbol / PWR_FLAG attachment for a single net (verification aid).
+
+    Returns ``{"power_symbols": [{ref, pin, value}],
+    "power_flags": [{ref, pin, attachment}]}`` — the power ports whose Value is
+    ``net_name`` and the PWR_FLAG markers whose pin joins ``net_name``.
+    """
+    power_symbols = _power_symbols_on_net(schematic, net_name)
+    power_flags = [
+        {"ref": f["ref"], "pin": f["pin"], "attachment": f["attachment"]}
+        for f in resolve_power_flags(schematic, schematic_path)
+        if f["net"] == net_name
+    ]
+    return {"power_symbols": power_symbols, "power_flags": power_flags}

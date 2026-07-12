@@ -7,6 +7,7 @@ API and behaviour are unchanged.
 import atexit
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -50,6 +51,12 @@ class SymbolLibraryManager(LoadingMixin, ParsingMixin, SearchMixin, QueryMixin):
         # turns a cold start into a warm one: instead of re-parsing 200+
         # .kicad_sym files (30-120 s) we read a single pickle (< 200 ms).
         self._load_disk_cache()
+        # Reuse anything already parsed *this session* by another manager
+        # instance (path-keyed shared store).  This is what lets the
+        # background warm survive a manager rebuild: open_project ->
+        # use_project() builds a fresh manager, and this hydration reuses the
+        # already-warmed global libraries instead of re-parsing them.
+        self._hydrate_from_shared_store()
 
         # Eager full-warm is now opt-in: KICAD_MCP_EAGER_SYMBOL_CACHE=1.  The
         # default lazy path costs nothing at startup and parses per-library on
@@ -74,3 +81,60 @@ _SYMBOL_MANAGER_CACHE: Dict[Optional[str], Tuple[SymbolLibraryManager, Dict[str,
 def get_symbol_library_manager(project_path: Optional[Path] = None) -> SymbolLibraryManager:
     """Return a cached :class:`SymbolLibraryManager` for the given project scope."""
     return _load_cached_manager(_SYMBOL_MANAGER_CACHE, SymbolLibraryManager, project_path)
+
+
+def _bg_symbol_warm_enabled() -> bool:
+    """Whether the background symbol-cache warm should run.
+
+    Default-on.  Disabled by ``KICAD_MCP_BG_SYMBOL_WARM`` in {0, false}
+    (case-insensitive).  Skipped when ``KICAD_MCP_EAGER_SYMBOL_CACHE=1``,
+    which already warms the cache synchronously at manager construction —
+    running both would just parse everything twice.
+    """
+    if os.environ.get("KICAD_MCP_EAGER_SYMBOL_CACHE") == "1":
+        return False
+    flag = os.environ.get("KICAD_MCP_BG_SYMBOL_WARM", "").strip().lower()
+    return flag not in ("0", "false")
+
+
+def start_background_symbol_warm() -> Optional[threading.Thread]:
+    """Warm the symbol-library cache in a daemon thread after startup.
+
+    F1: the first cold symbol search parses every ``.kicad_sym`` and can
+    block ~60-70 s.  Warming on a background daemon thread pays that cost
+    off the request path so the first search hits a (mostly) warm cache.
+    The thread mutates the *shared* default-scope manager (the same one
+    :class:`SymbolLibraryCommands` uses), so ``list_symbols`` cooperates
+    via its per-library locks and a racing search parses each library at
+    most once.  Warming marks the cache dirty so the pickle persists at
+    exit for the next session.
+
+    Contract:
+      * Never writes to stdout — that channel carries the JSON protocol;
+        all diagnostics go to the file/stderr logger.
+      * Never raises — a broken lib-table must not take down the process.
+      * Returns the started thread (for tests), or ``None`` when disabled.
+    """
+    if not _bg_symbol_warm_enabled():
+        return None
+
+    def _run() -> None:
+        try:
+            manager = get_symbol_library_manager()
+            manager._warm_cache()
+            logger.info(
+                "Background symbol cache warm complete: %d libraries cached",
+                len(manager.symbol_cache),
+            )
+            # Persist-early: flush the pickle now (not only at atexit) so a
+            # full manager rebuild that somehow missed the in-memory shared
+            # store — or the *next* session — starts hot off disk instead of
+            # re-parsing everything.  Respects the dirty flag + atomic write.
+            manager._save_disk_cache()
+        except Exception:  # noqa: BLE001 — must not kill the process
+            logger.exception("Background symbol cache warm failed")
+
+    thread = threading.Thread(target=_run, name="symbol-cache-warm", daemon=True)
+    thread.start()
+    logger.info("Started background symbol cache warm thread")
+    return thread

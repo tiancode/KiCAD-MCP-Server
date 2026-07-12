@@ -21,7 +21,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
   // unrouted count to zero.
   server.tool(
     "autoroute",
-    "Autoroute the current PCB with Freerouting: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES. Requires Java 11+ and freerouting.jar (see check_freerouting). attempts > 1 runs best-of-N with varied --max-passes and imports the result routing the most nets.",
+    "Autoroute the PCB with Freerouting: exports DSN, runs the CLI, imports the SES (REPLACES routing on the SES's nets, no duplicates). Needs Java 11+ and freerouting.jar (check_freerouting). attempts>1 runs best-of-N. Freerouting 2.2.4 may crash on boards with pre-routed traces; if it routes 0 nets the call fails honestly with a hint (route from a clean/unrouted board).",
     {
       boardPath: z.string().optional().describe("Path to .kicad_pcb file (default: current board)"),
       freeroutingJar: z

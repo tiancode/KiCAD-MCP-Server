@@ -6,7 +6,6 @@ Split out of the former monolithic kicad_api/ipc_backend.py.
 import logging
 from typing import Any, Dict, List, Optional
 
-
 from ._helpers import (
     kiid_str,
     normalize_board_layer,
@@ -17,9 +16,17 @@ logger = logging.getLogger("kicad_interface")
 
 class _ComponentMixin:
     def list_components(self) -> List[Dict[str, Any]]:
-        """List all components (footprints) on the board."""
+        """List all components (footprints) on the board.
+
+        Every footprint is returned — including mounting holes (MH1-4 etc.),
+        which are real footprints with real references.  The SWIG listing does
+        the same; both tag each entry with ``is_mounting_hole`` so a consumer
+        can filter intentionally rather than the two backends silently
+        disagreeing on the component set.
+        """
         try:
             from kipy.util.units import to_mm
+            from utils.footprint_class import is_mounting_hole
 
             board = self._get_board()
             footprints = board.get_footprints()
@@ -90,21 +97,21 @@ class _ComponentMixin:
                     # enum object, a name string, or a bare protobuf int.
                     layer_str = normalize_board_layer(getattr(fp, "layer", None)) or "F.Cu"
 
+                    reference = fp.reference_field.text.value if fp.reference_field else ""
+                    fpid = (
+                        str(fp.definition.library_link)
+                        if fp.definition and hasattr(fp.definition, "library_link")
+                        else (
+                            str(fp.definition.id)
+                            if fp.definition and hasattr(fp.definition, "id")
+                            else ""
+                        )
+                    )
                     components.append(
                         {
-                            "reference": (
-                                fp.reference_field.text.value if fp.reference_field else ""
-                            ),
+                            "reference": reference,
                             "value": fp.value_field.text.value if fp.value_field else "",
-                            "footprint": (
-                                str(fp.definition.library_link)
-                                if fp.definition and hasattr(fp.definition, "library_link")
-                                else (
-                                    str(fp.definition.id)
-                                    if fp.definition and hasattr(fp.definition, "id")
-                                    else ""
-                                )
-                            ),
+                            "footprint": fpid,
                             "position": {
                                 "x": to_mm(pos.x) if pos else 0,
                                 "y": to_mm(pos.y) if pos else 0,
@@ -114,6 +121,7 @@ class _ComponentMixin:
                             "layer": layer_str,
                             "id": kiid_str(getattr(fp, "id", None)),
                             "boundingBox": bbox_data,
+                            "is_mounting_hole": is_mounting_hole(fpid, reference),
                         }
                     )
                 except Exception as e:

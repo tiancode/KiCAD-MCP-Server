@@ -236,9 +236,18 @@ class BoardOutlineCommands:
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             diameter_nm = int(diameter * scale)
-            pad_diameter_nm = (
-                int(pad_diameter * scale) if pad_diameter else diameter_nm + scale
-            )  # 1mm larger by default
+            if pad_diameter:
+                pad_diameter_nm = int(pad_diameter * scale)
+            elif plated:
+                # Plated hole: default to a ~1 mm annular copper ring so there
+                # is copper to solder / ground to.
+                pad_diameter_nm = diameter_nm + scale
+            else:
+                # Bare NPTH mounting hole, KiCad-library convention: pad size ==
+                # hole size — no annular ring and no oversized mask aperture.
+                # (The old default padded +1 mm, leaving a copper-less mask ring
+                # that reads as a footprint anomaly to DRC's lib checks.)
+                pad_diameter_nm = diameter_nm
 
             # Create footprint for mounting hole with unique reference
             existing_mh = [
@@ -289,6 +298,35 @@ class BoardOutlineCommands:
 
             module.Add(pad)
 
+            # F.Courtyard keepout circle (KiCad-library convention). Without a
+            # courtyard the footprint is (a) invisible to check_courtyard_overlaps'
+            # exact-polygon path, forcing the text-inflated bbox fallback, and
+            # (b) flagged by KiCad DRC's missing-courtyard / lib_footprint_issues
+            # checks. Radius = the larger of hole/pad radius + a 0.25 mm margin,
+            # drawn with the standard 0.05 mm courtyard line. The margin/line
+            # widths are always in mm, independent of the position unit.
+            nm_per_mm = 1_000_000
+            courtyard_radius_nm = max(pad_diameter_nm, diameter_nm) // 2 + int(0.25 * nm_per_mm)
+            courtyard = pcbnew.PCB_SHAPE(module)
+            courtyard.SetShape(pcbnew.SHAPE_T_CIRCLE)
+            courtyard.SetLayer(pcbnew.F_CrtYd)
+            courtyard.SetCenter(pcbnew.VECTOR2I(0, 0))
+            courtyard.SetStart(pcbnew.VECTOR2I(0, 0))
+            courtyard.SetEnd(pcbnew.VECTOR2I(courtyard_radius_nm, 0))
+            courtyard.SetWidth(int(0.05 * nm_per_mm))
+            module.Add(courtyard)
+
+            # F.Fab hole outline (radius = hole radius, 0.1 mm line) — mirrors
+            # the fabrication marker on KiCad's own MountingHole footprints.
+            fab = pcbnew.PCB_SHAPE(module)
+            fab.SetShape(pcbnew.SHAPE_T_CIRCLE)
+            fab.SetLayer(pcbnew.F_Fab)
+            fab.SetCenter(pcbnew.VECTOR2I(0, 0))
+            fab.SetStart(pcbnew.VECTOR2I(0, 0))
+            fab.SetEnd(pcbnew.VECTOR2I(diameter_nm // 2, 0))
+            fab.SetWidth(int(0.1 * nm_per_mm))
+            module.Add(fab)
+
             # Position the mounting hole
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
 
@@ -301,9 +339,10 @@ class BoardOutlineCommands:
                 "mountingHole": {
                     "position": position,
                     "diameter": diameter,
-                    "padDiameter": pad_diameter or diameter + 1,
+                    "padDiameter": round(pad_diameter_nm / scale, 4),
                     "plated": plated,
                     "footprintLibId": f"{lib_name}:{fp_name}",
+                    "courtyard": True,
                 },
             }
 

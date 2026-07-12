@@ -7,8 +7,11 @@ import logging
 import os
 import pickle
 import re
+import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from ._models import SymbolInfo
 
 logger = logging.getLogger("kicad_interface")
 
@@ -16,10 +19,42 @@ logger = logging.getLogger("kicad_interface")
 # (mirroring the original single-module layout). Tests monkeypatch
 # commands.library_symbol._manager_loading._DISK_CACHE_PATH to redirect the
 # cache file. Bump _DISK_CACHE_VERSION when SymbolInfo fields or the cache
-# structure change so older pickles are rejected instead of producing
-# stale/misshapen data.
-_DISK_CACHE_VERSION = 1
+# structure change — OR when a parser fix changes which symbols/values a
+# given .kicad_sym yields — so older pickles are rejected instead of
+# producing stale/misshapen data.  v2: the block walker became string-aware
+# (parens inside quoted strings no longer corrupt paren-depth), so v1 pickles
+# written by the old parser could be missing whole libraries' worth of
+# symbols (e.g. every MCU_ST_STM32H5 part); reject them and re-parse.
+_DISK_CACHE_VERSION = 2
 _DISK_CACHE_PATH = Path.home() / ".kicad-mcp" / "cache" / "symbol_libraries.pickle"
+
+# Process-wide parsed-symbol store shared across ALL SymbolLibraryManager
+# instances, keyed by the resolved .kicad_sym *absolute path* (not nickname —
+# a project sym-lib-table may reuse a global nickname for a different file, so
+# path is the robust key). Each entry is (symbols, source_mtime_ns).
+#
+# This is what makes the background symbol warm survive a manager rebuild:
+# open_project -> use_project() constructs a fresh SymbolLibraryManager, whose
+# __init__ hydrates its per-instance caches from this store, so the ~200 global
+# libraries the warm already parsed on the default-scope manager are reused
+# instead of re-parsed (~17 s -> <1 s). Project-specific libraries (new paths)
+# still parse lazily. Entries are mtime-validated on hydration AND on every
+# read (list_symbols -> _cached_if_fresh), so an external .kicad_sym edit still
+# forces a re-parse. Writes go through _SHARED_PARSED_LOCK; the per-instance
+# symbol_cache/_cache_mtimes dicts and the on-disk pickle are unchanged.
+_SHARED_PARSED_LOCK = threading.Lock()
+_SHARED_PARSED: Dict[str, Tuple[List[SymbolInfo], int]] = {}
+
+
+def _reset_shared_symbol_cache() -> None:
+    """Clear the process-wide shared parsed-symbol store.
+
+    Used by the test suite (conftest) to keep per-test isolation, mirroring
+    the existing ``_SYMBOL_MANAGER_CACHE.clear()`` discipline. Not used in
+    production — the store is meant to live for the whole session.
+    """
+    with _SHARED_PARSED_LOCK:
+        _SHARED_PARSED.clear()
 
 
 class LoadingMixin:
@@ -41,6 +76,53 @@ class LoadingMixin:
                 # also swallowed programmer bugs; tightened to file-IO and
                 # parse failures only.
                 logger.debug("Skipping unparseable library %s: %s", nickname, e)
+
+    def _hydrate_from_shared_store(self) -> None:
+        """Seed symbol_cache/_cache_mtimes from the process-wide shared store.
+
+        Called at construction (after ``_load_disk_cache``) so a manager
+        rebuilt for a new project scope — the open_project -> use_project()
+        flow — instantly reuses libraries any other manager parsed this
+        session (notably the background warm's default-scope manager),
+        instead of re-parsing them.
+
+        Only libraries this manager actually knows (present in
+        ``self.libraries``) whose resolved path is in the shared store AND
+        whose current on-disk mtime still matches the stored one are seeded;
+        anything stale/absent parses lazily on first ``list_symbols`` (whose
+        own mtime check still guards external edits). Existing per-instance
+        entries (e.g. from the disk cache) are left untouched.
+        """
+        if not self.libraries:
+            return
+        with _SHARED_PARSED_LOCK:
+            for nickname, library_path in self.libraries.items():
+                if nickname in self.symbol_cache:
+                    continue
+                entry = _SHARED_PARSED.get(library_path)
+                if entry is None:
+                    continue
+                symbols, stored_mtime = entry
+                try:
+                    current_mtime = os.stat(library_path).st_mtime_ns
+                except OSError:
+                    continue
+                if current_mtime != stored_mtime:
+                    continue
+                self.symbol_cache.setdefault(nickname, symbols)
+                self._cache_mtimes.setdefault(nickname, stored_mtime)
+
+    def _publish_to_shared_store(
+        self, library_path: str, symbols: List[SymbolInfo], mtime_ns: int
+    ) -> None:
+        """Record a freshly parsed library in the process-wide shared store.
+
+        Keyed by resolved path so a later manager rebuild (new project scope)
+        reuses this parse without re-reading the file. Thread-safe: the
+        background warm and a racing search may both publish.
+        """
+        with _SHARED_PARSED_LOCK:
+            _SHARED_PARSED[library_path] = (symbols, mtime_ns)
 
     def _load_disk_cache(self) -> None:
         """Restore symbol_cache + _cache_mtimes from the on-disk pickle.
@@ -87,18 +169,39 @@ class LoadingMixin:
     def _save_disk_cache(self) -> None:
         """Persist symbol_cache + mtimes to disk for the next session.
 
-        Best-effort.  Called via atexit.  No-op when the cache hasn't been
-        touched (saves an unnecessary pickle write on PCB-only sessions
-        that never invoke search_symbols).
+        Best-effort.  Called via atexit *and* immediately after the
+        background warm completes (persist-early), so even a full manager
+        rebuild that missed the in-memory shared store still starts hot off
+        disk.  No-op when the cache hasn't been touched (saves an
+        unnecessary pickle write on PCB-only sessions that never invoke
+        search_symbols).
+
+        Because the early call can overlap a concurrent search mutating the
+        caches, the payload is snapshotted defensively and a
+        ``RuntimeError`` ("dictionary changed size during iteration") is
+        treated as a transient miss — atexit will retry.
         """
         if not self._cache_dirty:
             return
         try:
             _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            # Shallow-copy under the risk of concurrent mutation; the copy
+            # itself can race a live insert, so retry a couple of times.
+            symbol_cache = mtimes = None
+            for _ in range(3):
+                try:
+                    symbol_cache = dict(self.symbol_cache)
+                    mtimes = dict(self._cache_mtimes)
+                    break
+                except RuntimeError:
+                    continue
+            if symbol_cache is None or mtimes is None:
+                symbol_cache = dict(self.symbol_cache)
+                mtimes = dict(self._cache_mtimes)
             payload = {
                 "version": _DISK_CACHE_VERSION,
-                "symbol_cache": self.symbol_cache,
-                "mtimes": self._cache_mtimes,
+                "symbol_cache": symbol_cache,
+                "mtimes": mtimes,
             }
             tmp = _DISK_CACHE_PATH.with_suffix(_DISK_CACHE_PATH.suffix + ".tmp")
             with tmp.open("wb") as fh:
@@ -106,10 +209,10 @@ class LoadingMixin:
             tmp.replace(_DISK_CACHE_PATH)
             logger.info(
                 "Saved symbol disk cache: %d libraries to %s",
-                len(self.symbol_cache),
+                len(symbol_cache),
                 _DISK_CACHE_PATH,
             )
-        except (OSError, pickle.PicklingError) as e:
+        except (OSError, pickle.PicklingError, RuntimeError) as e:
             logger.warning("Could not persist symbol disk cache: %s", e)
 
     def _load_libraries(self) -> None:

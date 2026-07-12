@@ -14,6 +14,26 @@ from PIL import Image
 logger = logging.getLogger("kicad_interface")
 
 
+def _fit_within_box(img: "Image.Image", max_w: int, max_h: int) -> "Image.Image":
+    """Scale ``img`` to fit within ``max_w`` x ``max_h``, preserving aspect ratio.
+
+    Scales both up and down ("contain" semantics) so an explicitly requested
+    size is honored regardless of the source resolution.  Returns ``img``
+    unchanged when the box is degenerate or the size already matches.
+    """
+    if max_w <= 0 or max_h <= 0:
+        return img
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return img
+    scale = min(max_w / w, max_h / h)
+    new_w = max(1, round(w * scale))
+    new_h = max(1, round(h * scale))
+    if (new_w, new_h) == (w, h):
+        return img
+    return img.resize((new_w, new_h), Image.LANCZOS)
+
+
 class BoardViewCommands:
     """Handles board viewing operations"""
 
@@ -90,6 +110,11 @@ class BoardViewCommands:
             # Get parameters
             width = params.get("width", 800)
             height = params.get("height", 600)
+            # Whether the caller explicitly asked for a size. In crop-to-board
+            # mode the alpha-crop resizes the raster down to just the board
+            # content, which otherwise discards a requested width/height; when
+            # a size is explicit we fit the cropped board to it (see below).
+            size_requested = params.get("width") is not None or params.get("height") is not None
             format = params.get("format", "png")
             layers = params.get("layers", [])
             response_mode = params.get("responseMode", "inline")
@@ -212,6 +237,23 @@ class BoardViewCommands:
                                 image_bytes = buf.getvalue()
                     except Exception as crop_err:
                         logger.debug(f"Auto-crop to board failed (continuing): {crop_err}")
+
+                # Honor an explicitly requested width/height even after the
+                # crop-to-board resize discarded it. The board is fitted
+                # (aspect-preserving) within the requested box so callers that
+                # ask for a specific size get one; the default (no size given)
+                # keeps the native cropped-content resolution as before.
+                # Region-crop mode renders straight to width/height already.
+                if size_requested:
+                    try:
+                        img = Image.open(io.BytesIO(image_bytes))
+                        fitted = _fit_within_box(img, width, height)
+                        if fitted is not img:
+                            buf = io.BytesIO()
+                            fitted.save(buf, format="PNG")
+                            image_bytes = buf.getvalue()
+                    except Exception as resize_err:
+                        logger.debug(f"Fit-to-requested-size failed (continuing): {resize_err}")
 
                 if format == "jpg":
                     img = Image.open(io.BytesIO(image_bytes))

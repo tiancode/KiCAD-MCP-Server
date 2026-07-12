@@ -42,6 +42,10 @@ def fresh_pcbnew_mock(monkeypatch):
     pcbnew.PAD_SHAPE_CIRCLE = "circle"
     pcbnew.F_Mask = "F.Mask"
     pcbnew.B_Mask = "B.Mask"
+    # Constants used by the F.Courtyard / F.Fab shape generation.
+    pcbnew.SHAPE_T_CIRCLE = "circle_shape"
+    pcbnew.F_CrtYd = "F.CrtYd"
+    pcbnew.F_Fab = "F.Fab"
     return pcbnew
 
 
@@ -188,3 +192,80 @@ class TestNpthPadLayers:
         # For PTH, the default LSET (*.Cu + *.Mask) is correct, so we must
         # NOT override it via SetLayerSet.
         pad.SetLayerSet.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# B9(b): NPTH pad geometry follows the KiCad-library convention
+#   (bare hole → pad size == drill == hole; no annular ring, no oversized mask).
+# ---------------------------------------------------------------------------
+
+
+class TestNpthGeometryConvention:
+    def test_npth_default_pad_size_equals_hole(self, cmds, fresh_pcbnew_mock):
+        result = cmds.add_mounting_hole(
+            {"position": {"x": 0, "y": 0, "unit": "mm"}, "diameter": 3.2}
+        )
+        # Bare NPTH hole: pad diameter defaults to the hole diameter (no ring).
+        assert result["mountingHole"]["padDiameter"] == 3.2
+        # Both SetSize and SetDrillSize therefore build VECTOR2I(3.2mm, 3.2mm).
+        vc = [c.args for c in fresh_pcbnew_mock.VECTOR2I.call_args_list]
+        assert (3_200_000, 3_200_000) in vc, vc
+
+    def test_plated_default_keeps_annular_ring(self, cmds, fresh_pcbnew_mock):
+        result = cmds.add_mounting_hole(
+            {"position": {"x": 0, "y": 0, "unit": "mm"}, "diameter": 3.2, "plated": True}
+        )
+        # Plated hole keeps a ~1 mm annular copper ring so there is copper.
+        assert result["mountingHole"]["padDiameter"] == 4.2
+
+    def test_explicit_pad_diameter_is_respected(self, cmds, fresh_pcbnew_mock):
+        result = cmds.add_mounting_hole(
+            {"position": {"x": 0, "y": 0, "unit": "mm"}, "diameter": 3.2, "padDiameter": 3.5}
+        )
+        assert result["mountingHole"]["padDiameter"] == 3.5
+
+
+# ---------------------------------------------------------------------------
+# B9(a): the generated footprint carries an F.Courtyard circle (and an F.Fab
+# hole outline) — without a courtyard the part feeds check_courtyard_overlaps'
+# text-inflated bbox fallback and KiCad DRC's missing-courtyard checks.
+# ---------------------------------------------------------------------------
+
+
+class TestCourtyardAndFab:
+    def test_courtyard_circle_added_with_margin(self, cmds, fresh_pcbnew_mock):
+        result = cmds.add_mounting_hole(
+            {"position": {"x": 5, "y": 5, "unit": "mm"}, "diameter": 3.2}
+        )
+        assert result["success"] is True
+        assert result["mountingHole"]["courtyard"] is True
+
+        pcb = fresh_pcbnew_mock
+        assert pcb.PCB_SHAPE.called, "a PCB_SHAPE must be created for the courtyard"
+        shape = pcb.PCB_SHAPE.return_value
+        set_layers = [c.args[0] for c in shape.SetLayer.call_args_list]
+        assert "F.CrtYd" in set_layers
+
+        # Courtyard radius = hole radius (1.6 mm) + 0.25 mm margin = 1.85 mm,
+        # built as VECTOR2I(1_850_000, 0).
+        radius_calls = [c.args for c in pcb.VECTOR2I.call_args_list]
+        assert (1_850_000, 0) in radius_calls, radius_calls
+
+    def test_courtyard_radius_tracks_annular_pad(self, cmds, fresh_pcbnew_mock):
+        # With a 3.5 mm pad the courtyard must enclose the pad, not just the
+        # hole: radius = 3.5/2 + 0.25 = 2.0 mm.
+        cmds.add_mounting_hole(
+            {"position": {"x": 0, "y": 0, "unit": "mm"}, "diameter": 3.2, "padDiameter": 3.5}
+        )
+        radius_calls = [c.args for c in fresh_pcbnew_mock.VECTOR2I.call_args_list]
+        assert (2_000_000, 0) in radius_calls, radius_calls
+
+    def test_fab_circle_added_at_hole_radius(self, cmds, fresh_pcbnew_mock):
+        cmds.add_mounting_hole({"position": {"x": 0, "y": 0, "unit": "mm"}, "diameter": 3.2})
+        pcb = fresh_pcbnew_mock
+        shape = pcb.PCB_SHAPE.return_value
+        set_layers = [c.args[0] for c in shape.SetLayer.call_args_list]
+        assert "F.Fab" in set_layers
+        # Fab outline is drawn at the hole radius (1.6 mm).
+        radius_calls = [c.args for c in pcb.VECTOR2I.call_args_list]
+        assert (1_600_000, 0) in radius_calls, radius_calls

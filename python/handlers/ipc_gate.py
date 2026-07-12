@@ -21,17 +21,30 @@ def require_ipc(
 ) -> Dict[str, Any]:
     """Gate a board op on IPC + an open PCB editor frame.
 
-    Routes through ``KiCADInterface.require_ipc_board_op``:
+    Routes through ``KiCADInterface.require_ipc_board_op``, which returns one
+    of:
     - ``{}`` → ready, caller falls through.
-    - ``needs_pcb_editor: True`` → pass the editor-gate response through
-      unchanged (so it reaches the agent).
-    - else → wrap the raw ``_ipc_reason`` in the caller's domain envelope so
-      the message reads cleanly instead of nesting two "IPC backend not
-      available" prefixes.
+    - a structured refusal WITHOUT ``_ipc_reason`` — the editor-frame gate
+      (``needs_pcb_editor: True``) or the cross-backend conflict gate
+      (``needs_reconcile: True`` + ``direction``).  These carry their own
+      actionable payload (which remedy to run, which reconcile direction), so
+      they are passed through verbatim to reach the agent intact.
+    - ``{"success": False, "_ipc_reason": <raw reason>}`` — the *only* shape we
+      rewrap, in the caller's domain envelope, so the message reads cleanly
+      instead of nesting two "IPC backend not available" prefixes.
+
+    Regression context (finding B2): this wrapper used to special-case only
+    ``needs_pcb_editor`` and funnel *everything else* — including a
+    ``needs_reconcile`` cross-backend conflict — through ``ipc_unavailable``.
+    That discarded ``needs_reconcile`` / ``direction`` and told the user to
+    "Launch KiCAD / enable IPC" while IPC was already connected, hiding the
+    real remedy (``reconcile_backends``).  Keying the rewrap on the presence of
+    ``_ipc_reason`` (the raw-reason envelope) instead means every structured
+    refusal shape — current or future — is forwarded untouched.
     """
     gate = iface.require_ipc_board_op(allow_launch=True)
     if not gate:
         return {}
-    if gate.get("needs_pcb_editor"):
-        return gate
-    return ipc_unavailable(gate.get("_ipc_reason", ""))
+    if "_ipc_reason" in gate:
+        return ipc_unavailable(gate.get("_ipc_reason", ""))
+    return gate

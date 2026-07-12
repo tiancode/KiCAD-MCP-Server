@@ -265,7 +265,7 @@ def test_auto_save_recovers_when_save_leaves_board_dehydrated():
     ):
         setattr(iface, attr, MagicMock())
 
-    def _save_then_dehydrate(path, board):
+    def _save_then_dehydrate(path, board, skip_settings=False):
         # SaveBoard succeeds but leaves iface.board unusable
         iface.board = _make_dehydrated_board()
         iface.board.GetFileName = MagicMock(return_value="/tmp/test.kicad_pcb")

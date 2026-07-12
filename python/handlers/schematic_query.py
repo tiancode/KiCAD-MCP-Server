@@ -226,10 +226,19 @@ def handle_get_wire_connections(iface: "KiCADInterface", params: Dict[str, Any])
 
 
 def handle_get_net_connections(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Get all connections for a named net"""
+    """Get all connections for a named net.
+
+    ``connections`` keeps its historical contract (real component pins only —
+    #PWR / #FLG pins stay filtered).  ``power_symbols`` and ``power_flags`` are
+    additive side-channels that make power-symbol / PWR_FLAG attachment
+    verifiable without reading the raw file (see F3).
+    """
     logger.info("Getting net connections")
     try:
-        from commands.wire_connectivity import get_connections_for_net
+        from commands.wire_connectivity import (
+            get_connections_for_net,
+            get_power_attachments_for_net,
+        )
 
         schematic_path = params.get("schematicPath")
         net_name = params.get("netName")
@@ -242,7 +251,13 @@ def handle_get_net_connections(iface: "KiCADInterface", params: Dict[str, Any]) 
             return {"success": False, "message": "Failed to load schematic"}
 
         connections = get_connections_for_net(schematic, schematic_path, net_name)
-        return {"success": True, "connections": connections}
+        power = get_power_attachments_for_net(schematic, schematic_path, net_name)
+        return {
+            "success": True,
+            "connections": connections,
+            "power_symbols": power["power_symbols"],
+            "power_flags": power["power_flags"],
+        }
     except Exception as e:
         logger.error(f"Error getting net connections: {str(e)}")
         return {"success": False, "message": str(e)}
@@ -398,6 +413,7 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
             _parse_wires,
             count_pins_on_net,
             get_connections_for_net,
+            resolve_power_flags,
         )
 
         schematic_path = params.get("schematicPath")
@@ -450,6 +466,18 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
             adjacency, iu_to_wires = [], {}
         point_to_label, label_to_points = _parse_virtual_connections(schematic, schematic_path)
 
+        # Resolve which nets carry a PWR_FLAG once (O(flags), not per-net), so
+        # each net entry can advertise a cheap has_power_flag boolean without a
+        # full pin dump (see F3). resolve_power_flags is sentinel-aware, so
+        # "PWR_FLAG" never appears as a net.
+        try:
+            nets_with_flag = {
+                f["net"] for f in resolve_power_flags(schematic, schematic_path) if f.get("net")
+            }
+        except Exception as e:
+            logger.warning(f"Could not resolve power flags for net listing: {e}")
+            nets_with_flag = set()
+
         # Parse + index each sheet once and reuse across every net, instead of
         # rebuilding the O(wires^2) adjacency graph per net (the old behaviour
         # made a large schematic's overview time out).
@@ -474,6 +502,7 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
                     "name": net_name,
                     "connections": connections,
                     "connected_pin_count": pin_count,
+                    "has_power_flag": net_name in nets_with_flag,
                 }
             )
 

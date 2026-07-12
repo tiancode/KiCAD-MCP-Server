@@ -5,14 +5,68 @@ Split out of the former monolithic commands/library_symbol.py.
 
 import logging
 import os
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from ._models import SymbolInfo
 
 logger = logging.getLogger("kicad_interface")
 
+# Guards lazy creation of the per-library parse locks (below).  Only the
+# lock-dict bookkeeping runs under this module-level lock, never a parse,
+# so it stays contention-free.  Kept module-level so it works even for the
+# ``__new__``-built bare managers the tests use (no __init__ to set it up).
+_PARSE_LOCKS_GUARD = threading.Lock()
+
 
 class QueryMixin:
+    def _get_parse_lock(self, library_nickname: str) -> threading.Lock:
+        """Return a per-library lock, creating it on first use.
+
+        A search racing the background cache warm (F1) must not parse the
+        same ``.kicad_sym`` twice or corrupt ``symbol_cache``.  Each
+        library gets its own lock so a search for an already-warm library
+        never waits behind the warm thread parsing a *different* one; the
+        hot cache-hit path in ``list_symbols`` takes no lock at all.
+        """
+        with _PARSE_LOCKS_GUARD:
+            locks = self.__dict__.get("_parse_locks")
+            if locks is None:
+                locks = {}
+                self._parse_locks = locks
+            lock = locks.get(library_nickname)
+            if lock is None:
+                lock = threading.Lock()
+                locks[library_nickname] = lock
+            return lock
+
+    def _cached_if_fresh(
+        self, library_nickname: str, library_path: str
+    ) -> Optional[List[SymbolInfo]]:
+        """Return the cached symbols for ``library_nickname`` iff still fresh.
+
+        Fresh = an entry exists AND the source file's current mtime_ns
+        matches the one recorded when it was parsed.  Returns ``None`` on a
+        miss / stale entry / vanished file so the caller re-parses.  An
+        empty-but-fresh library correctly returns ``[]`` (distinct from
+        ``None``), so callers must test ``is not None``.
+        """
+        if library_nickname not in self.symbol_cache:
+            return None
+        try:
+            current_mtime = os.stat(library_path).st_mtime_ns
+        except OSError:
+            # File disappeared — don't serve a stale cache for a file that
+            # no longer exists; let the caller re-parse (and also fail/log).
+            return None
+        if self._cache_mtimes.get(library_nickname) == current_mtime:
+            return self.symbol_cache[library_nickname]
+        logger.debug(
+            "Symbol cache stale for %s; re-parsing (mtime moved).",
+            library_nickname,
+        )
+        return None
+
     def list_libraries(self) -> List[str]:
         """Get list of available library nicknames"""
         return list(self.libraries.keys())
@@ -56,35 +110,37 @@ class QueryMixin:
             return []
 
         # Hot path: cache entry exists AND the source file hasn't moved.
-        if library_nickname in self.symbol_cache:
-            try:
-                current_mtime = os.stat(library_path).st_mtime_ns
-            except OSError:
-                # File disappeared — fall through to the parser which will
-                # also fail and log; don't serve a stale cache for a file
-                # that no longer exists.
-                current_mtime = None
-            if (
-                current_mtime is not None
-                and self._cache_mtimes.get(library_nickname) == current_mtime
-            ):
-                return self.symbol_cache[library_nickname]
-            logger.debug(
-                "Symbol cache stale for %s; re-parsing (mtime moved).",
-                library_nickname,
-            )
+        # Lock-free so warm searches never contend with the background warm.
+        cached = self._cached_if_fresh(library_nickname, library_path)
+        if cached is not None:
+            return cached
 
-        # Cache miss or stale — parse and refresh both tiers.
-        symbols = self._parse_kicad_sym_file(library_path, library_nickname)
-        self.symbol_cache[library_nickname] = symbols
-        try:
-            self._cache_mtimes[library_nickname] = os.stat(library_path).st_mtime_ns
-        except OSError:
-            # Drop any stale mtime so a future call re-checks instead of
-            # serving from a cache entry with no validation anchor.
-            self._cache_mtimes.pop(library_nickname, None)
-        self._cache_dirty = True
-        return symbols
+        # Cache miss or stale — parse under a per-library lock so a search
+        # racing the background warm (F1) parses each library at most once.
+        with self._get_parse_lock(library_nickname):
+            # Re-check under the lock: a concurrent caller may have parsed
+            # this same library while we waited for the lock.
+            cached = self._cached_if_fresh(library_nickname, library_path)
+            if cached is not None:
+                return cached
+
+            symbols = self._parse_kicad_sym_file(library_path, library_nickname)
+            self.symbol_cache[library_nickname] = symbols
+            try:
+                parsed_mtime: Optional[int] = os.stat(library_path).st_mtime_ns
+                self._cache_mtimes[library_nickname] = parsed_mtime
+            except OSError:
+                # Drop any stale mtime so a future call re-checks instead of
+                # serving from a cache entry with no validation anchor.
+                self._cache_mtimes.pop(library_nickname, None)
+                parsed_mtime = None
+            self._cache_dirty = True
+            # Publish to the process-wide shared store (keyed by resolved path)
+            # so a manager rebuilt for a new project scope reuses this parse
+            # instead of re-reading the file.  Only with a valid mtime anchor.
+            if parsed_mtime is not None:
+                self._publish_to_shared_store(library_path, symbols, parsed_mtime)
+            return symbols
 
     def get_symbol_info(self, library_nickname: str, symbol_name: str) -> Optional[SymbolInfo]:
         """
@@ -137,25 +193,24 @@ class QueryMixin:
         import sexpdata
         from commands.pin_locator import PinLocator
 
+        from ._manager_parsing import _find_block_end
+
         def _slice_symbol_block(name: str) -> Optional[str]:
-            """Slice ``(symbol "name" …)`` from content by walking paren depth."""
+            """Slice ``(symbol "name" …)`` from content by walking paren depth.
+
+            String-aware (via ``_find_block_end``) so unbalanced parens inside
+            quoted values — pin names like ``"PA13(JTMS"`` — don't corrupt the
+            depth count and truncate/lose the block.
+            """
             needle = f'(symbol "{name}"'
             start = content.find(needle)
             if start == -1:
                 return None
-            d = 0
-            j = start
-            while j < len(content):
-                ch = content[j]
-                if ch == "(":
-                    d += 1
-                elif ch == ")":
-                    d -= 1
-                    if d == 0:
-                        return content[start : j + 1]
-                j += 1
-            logger.warning(f"Malformed symbol block for '{name}' in {library_path}")
-            return None
+            end = _find_block_end(content, start)
+            if end == start:
+                logger.warning(f"Malformed symbol block for '{name}' in {library_path}")
+                return None
+            return content[start:end]
 
         def _extends_parent(sexp: Any) -> Optional[str]:
             """Return the parent name from a top-level ``(extends "parent")``."""

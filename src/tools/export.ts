@@ -29,7 +29,14 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
       layers: z.array(z.string()).optional().describe("Layer names to export (default: all)"),
       useProtelExtensions: z.boolean().optional().describe("Use Protel filename extensions"),
       generateDrillFiles: z.boolean().optional().describe("Generate drill files"),
-      generateMapFile: z.boolean().optional().describe("Generate a map file"),
+      generateMapFile: z
+        .boolean()
+        .optional()
+        .describe("Also write a drill map (+ .gbrjob) next to the drill files; see files.map"),
+      mapFormat: z
+        .enum(["gerberx2", "pdf", "postscript", "dxf", "svg"])
+        .optional()
+        .describe("Drill-map format when generateMapFile is set (default gerberx2)"),
       useAuxOrigin: z.boolean().optional().describe("Use auxiliary axis as origin"),
     },
     async ({
@@ -38,6 +45,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
       useProtelExtensions,
       generateDrillFiles,
       generateMapFile,
+      mapFormat,
       useAuxOrigin,
     }) => {
       logger.debug(`Exporting Gerber files to: ${outputDir}`);
@@ -47,6 +55,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         useProtelExtensions,
         generateDrillFiles,
         generateMapFile,
+        mapFormat,
         useAuxOrigin,
       });
 

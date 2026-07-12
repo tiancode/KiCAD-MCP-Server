@@ -121,7 +121,7 @@ def test_auto_save_with_matching_signature_proceeds(iface, board_file):
 
     save_calls = []
 
-    def fake_save(path, board):
+    def fake_save(path, board, skip_settings=False):
         save_calls.append((path, board))
         # Simulate pcbnew rewriting the file
         Path(path).write_text("(kicad_pcb (version 1) (generator test) ; saved)\n")
@@ -144,7 +144,7 @@ def test_auto_save_creates_backup_before_writing(iface, board_file):
 
     original_contents = board_file.read_text()
 
-    def fake_save(path, board):
+    def fake_save(path, board, skip_settings=False):
         Path(path).write_text("(kicad_pcb ; overwritten)\n")
 
     with patch("kicad_interface.pcbnew") as mock_pcb:
@@ -160,6 +160,71 @@ def test_auto_save_creates_backup_before_writing(iface, board_file):
     assert backups[0].read_text() == original_contents
     # Returned path matches the file we created
     assert result["backup"] == str(backups[0])
+
+
+# ---------------------------------------------------------------------------
+# _auto_save_board: must NOT rewrite the sibling .kicad_pro (E2E B10)
+# ---------------------------------------------------------------------------
+
+
+def test_auto_save_passes_skip_settings_true(iface, board_file):
+    """Regression for E2E B10: the SWIG auto-save must call SaveBoard with
+    aSkipSettings=True so it writes only the .kicad_pcb. Without it, SaveBoard
+    also regenerates the sibling .kicad_pro from the board's stale in-memory
+    PROJECT, reverting netclass clearance / design-rule minimums that
+    create_netclass / set_design_rules persisted to that JSON.
+    """
+    iface.board = _fake_board(str(board_file))
+    iface._record_board_signature()
+
+    def fake_save(path, board, skip_settings=False):
+        Path(path).write_text("(kicad_pcb ; saved)\n")
+
+    with patch("kicad_interface.pcbnew") as mock_pcb:
+        mock_pcb.SaveBoard.side_effect = fake_save
+        result = iface._auto_save_board()
+
+    assert result["saved"] is True
+    # SaveBoard(board_path, board, aSkipSettings) — third arg must be True.
+    args, kwargs = mock_pcb.SaveBoard.call_args
+    skip = kwargs.get("aSkipSettings", args[2] if len(args) > 2 else False)
+    assert skip is True, f"auto-save must skip project settings; got args={args} kwargs={kwargs}"
+
+
+def test_auto_save_preserves_sibling_kicad_pro_netclass(iface, tmp_path: Path):
+    """End-to-end B10 seam with a real .kicad_pro on disk: a netclass edit in the
+    project JSON survives the auto-save. Uses a fake SaveBoard that honours the
+    aSkipSettings flag exactly like real pcbnew (skip => leave .kicad_pro alone).
+    """
+    import json
+
+    pcb = tmp_path / "demo.kicad_pcb"
+    pcb.write_text("(kicad_pcb (version 1) (generator test))\n")
+    pro = tmp_path / "demo.kicad_pro"
+    pro.write_text(
+        json.dumps({"net_settings": {"classes": [{"name": "Default", "clearance": 0.15}]}})
+    )
+
+    iface.board = _fake_board(str(pcb))
+    iface._record_board_signature()
+
+    def fake_save(path, board, skip_settings=False):
+        # Real pcbnew rewrites the .kicad_pro from board defaults unless skipped.
+        Path(path).write_text("(kicad_pcb ; saved)\n")
+        if not skip_settings:
+            pro.write_text(
+                json.dumps({"net_settings": {"classes": [{"name": "Default", "clearance": 0.2}]}})
+            )
+
+    with patch("kicad_interface.pcbnew") as mock_pcb:
+        mock_pcb.SaveBoard.side_effect = fake_save
+        iface._auto_save_board()
+
+    data = json.loads(pro.read_text())
+    clearance = next(
+        c["clearance"] for c in data["net_settings"]["classes"] if c["name"] == "Default"
+    )
+    assert clearance == 0.15, "auto-save clobbered the .kicad_pro netclass (B10 regression)"
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +260,7 @@ def test_auto_save_first_save_with_no_recorded_signature_proceeds(iface, board_f
     iface._board_disk_signature = None  # explicit: nothing recorded yet
 
     with patch("kicad_interface.pcbnew") as mock_pcb:
-        mock_pcb.SaveBoard.side_effect = lambda p, b: Path(p).write_text("first\n")
+        mock_pcb.SaveBoard.side_effect = lambda p, b, s=False: Path(p).write_text("first\n")
         result = iface._auto_save_board()
 
     assert result["saved"] is True
@@ -221,7 +286,7 @@ def test_auto_save_proceeds_when_only_mtime_changed_via_touch(iface, board_file)
 
     save_calls: list[tuple[Any, Any]] = []
 
-    def fake_save(path: str, board: Any) -> None:
+    def fake_save(path: str, board: Any, skip_settings: bool = False) -> None:
         save_calls.append((path, board))
         Path(path).write_text("(kicad_pcb ; saved by mcp)\n")
 
@@ -309,7 +374,7 @@ def test_backup_pruning_keeps_only_n_most_recent(iface, board_file):
     iface.board = _fake_board(str(board_file))
     iface._auto_save_backup_keep = 3
 
-    def fake_save(path, board):
+    def fake_save(path, board, skip_settings=False):
         Path(path).write_text(f"(kicad_pcb ; save at {time.time_ns()})\n")
 
     with patch("kicad_interface.pcbnew") as mock_pcb:

@@ -244,6 +244,104 @@ def _score_ses(ses_text: str, target_nets: Iterable[str]) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Freerouting failure detection
+# ---------------------------------------------------------------------------
+#
+# Freerouting 2.2.4 can hit a fatal error mid-run (e.g. the
+# ``NullPointerException: "to_trace_entries" is null`` in
+# ``ShapeSearchTree.merge_entries_in_front`` that fires on boards carrying
+# pre-routed traces) yet still **exit 0 and write a SES file** — the SES is
+# merely an echo of the input wiring with nothing new routed.  A clean exit
+# code is therefore NOT proof of a successful route; the stdout/stderr stream
+# has to be scanned for the fatal signatures below.  Reported as E2E finding
+# B4.
+# ---------------------------------------------------------------------------
+
+_FATAL_FR_PATTERNS = [
+    # The specific fatal log line Freerouting prints when a routing pass
+    # throws — observed verbatim in the B4 crash.
+    re.compile(r"ERROR\s+Error during routing passes", re.IGNORECASE),
+    # Java stack-trace markers.  Kept specific (``java.lang.…Exception`` /
+    # ``…Error``, ``Exception in thread``, an ``at pkg.Class.method(File:line)``
+    # frame) so normal INFO/WARN routing chatter never trips the detector.
+    re.compile(r"Exception in thread"),
+    re.compile(r"java\.[\w.]*\.\w*(?:Exception|Error)\b"),
+    re.compile(r"^\s*at\s+[\w.$]+\([\w.$]+:\d+\)"),
+    re.compile(r"\bFATAL\b"),
+]
+
+
+def _detect_routing_failure(output: str) -> Optional[str]:
+    """Return the most diagnostic fatal line in Freerouting output, or None.
+
+    ``output`` is the combined stdout+stderr of one Freerouting invocation.
+    Returns the offending line (the exception message, preferentially) so the
+    caller can surface it to the user; returns ``None`` when the run looks
+    clean.  Freerouting exiting 0 does NOT imply success — this scan is the
+    authoritative signal (see the module note above).
+    """
+    if not output:
+        return None
+    matches: List[str] = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        for pat in _FATAL_FR_PATTERNS:
+            if pat.search(line):
+                matches.append(line)
+                break
+    if not matches:
+        return None
+    # Prefer a line that actually names the exception — it's the most useful
+    # thing to put in front of the user.
+    for m in matches:
+        if "Exception" in m or "Error:" in m:
+            return m
+    return matches[0]
+
+
+# Net token inside a SES block: either a quoted "name with spaces" or a bare
+# token up to the next whitespace / closing paren.
+_SES_NET_TOKEN_RE = re.compile(r'\(net\s+("(?:[^"\\]|\\.)*"|[^\s)]+)')
+
+
+def _ses_routed_nets(ses_text: str) -> set:
+    """Net names that carry at least one wire or via in a SES file.
+
+    Only these nets should have their existing board routing replaced before
+    import — a net that appears in the SES with no wire/via must be left
+    untouched, or we'd delete routing the import won't restore.  Used to give
+    ``ImportSpecctraSES`` KiCad's native *replace* semantics instead of the
+    *stack* behaviour that duplicated pre-routed traces in E2E finding B4.
+    """
+    if not ses_text:
+        return set()
+    matches = list(_SES_NET_TOKEN_RE.finditer(ses_text))
+    nets: set = set()
+    for i, m in enumerate(matches):
+        name = m.group(1).strip('"')
+        block_start = m.end()
+        block_end = matches[i + 1].start() if i + 1 < len(matches) else len(ses_text)
+        block = ses_text[block_start:block_end]
+        if "(wire" in block or "(via " in block or "(via(" in block:
+            nets.add(name)
+    return nets
+
+
+# NOTE (E2E finding B4, prevention item 3 — investigated + rejected):
+# Rewriting pre-routed wires in the exported DSN from ``(type route)`` to
+# ``(type protect)`` was tried as a way to sidestep the upstream Freerouting
+# 2.2.4 crash (``to_trace_entries`` NPE). Against the real binary it did NOT
+# work: on the fully pre-routed ESP32-C3 board the protect variant crashed
+# just as often as the route variant (both ~5/5 runs), because Freerouting
+# normalises protected traces too. The NPE is a multithread race in
+# ShapeSearchTree.merge_entries_in_front that pre-routed traces trigger
+# regardless of wire type. We therefore rely on honest-failure detection +
+# SES replace-semantics instead of a DSN rewrite.
+
+
 class FreeroutingCommands:
     """Handles Freerouting autoroute operations."""
 
@@ -268,6 +366,125 @@ class FreeroutingCommands:
                 cb(board_path)
             except Exception:
                 logger.debug("Signature callback raised; ignoring", exc_info=True)
+
+    def _board_routed_nets(self) -> set:
+        """Net names that currently have at least one track or via on the board.
+
+        Used to tell "did the autoroute actually route anything new?" apart
+        from "the SES is just an echo of the pre-existing routing" (the B4
+        crash case).
+        """
+        nets: set = set()
+        try:
+            tracks = list(self.board.GetTracks())
+        except Exception:
+            return nets
+        for t in tracks:
+            try:
+                name = t.GetNetname()
+            except Exception:
+                name = None
+            if name:
+                nets.add(name)
+        return nets
+
+    def _remove_tracks_on_nets(self, net_names: set) -> int:
+        """Delete every track/via whose net is in ``net_names``; return count.
+
+        This is the "rip" half of KiCad's native Specctra *replace* semantics:
+        before importing a SES we clear the existing routing on exactly the
+        nets the SES will re-add, so the import replaces rather than stacks
+        (which duplicated pre-routed traces — E2E finding B4).
+
+        Uses ``board.Delete`` (not ``Remove``) to match the rest of the code
+        base: the KiCAD 10 SWIG bindings leak / corrupt the object table on
+        ``Remove`` but free cleanly on ``Delete`` (see routing/_traces.py).
+        """
+        if not net_names:
+            return 0
+        removed = 0
+        try:
+            tracks = list(self.board.GetTracks())
+        except Exception:
+            return 0
+        for t in tracks:
+            try:
+                name = t.GetNetname()
+            except Exception:
+                name = None
+            if name in net_names:
+                self.board.Delete(t)
+                removed += 1
+        return removed
+
+    def _apply_ses(self, ses_path: str, board_path: Optional[str]) -> Dict[str, Any]:
+        """Import a SES with replace semantics, then save the board.
+
+        Removes existing tracks/vias on the nets the SES will re-route, runs
+        ``ImportSpecctraSES``, and saves via ``_save_and_record`` (preserving
+        the ``_on_swig_direct_save`` landed-write bookkeeping).
+
+        Returns ``{"ok": True, "removed_tracks": n, "replaced_nets": [...]}``
+        on success, or ``{"ok": False, "error": {...response...}}`` on an
+        import failure.
+        """
+        import pcbnew
+
+        try:
+            with open(ses_path, "r", encoding="utf-8", errors="replace") as fh:
+                ses_text = fh.read()
+        except OSError:
+            ses_text = ""
+        replace_nets = _ses_routed_nets(ses_text)
+        removed = self._remove_tracks_on_nets(replace_nets)
+
+        try:
+            result = pcbnew.ImportSpecctraSES(self.board, ses_path)
+            if result is not True and result != 0:
+                return {
+                    "ok": False,
+                    "error": {
+                        "success": False,
+                        "message": "SES import failed",
+                        "errorDetails": f"ImportSpecctraSES returned: {result}",
+                    },
+                }
+        except Exception as e:
+            # API boundary — pcbnew can raise C-level exceptions surfaced as
+            # RuntimeError/generic Exception; return the caller-friendly shape.
+            logger.exception(f"ImportSpecctraSES crashed: {e}")
+            return {
+                "ok": False,
+                "error": {
+                    "success": False,
+                    "message": "SES import failed",
+                    "errorDetails": str(e),
+                },
+            }
+
+        if board_path:
+            try:
+                self._save_and_record(board_path)
+            except (OSError, RuntimeError) as e:
+                # Non-fatal: the SES is imported; user can save manually.
+                logger.warning(f"Board save after SES import failed: {e}")
+
+        return {
+            "ok": True,
+            "removed_tracks": removed,
+            "replaced_nets": sorted(replace_nets),
+        }
+
+    def _board_track_stats(self) -> Dict[str, int]:
+        """Return ``{"tracks": n, "vias": m}`` for the current board."""
+        track_count = 0
+        via_count = 0
+        for t in self.board.GetTracks():
+            if t.GetClass() == "PCB_VIA":
+                via_count += 1
+            else:
+                track_count += 1
+        return {"tracks": track_count, "vias": via_count}
 
     def _resolve_execution_mode(self, jar_path: str) -> Dict[str, Any]:
         """Determine how to run Freerouting: direct or docker.
@@ -324,6 +541,21 @@ class FreeroutingCommands:
         scripts/routing/freeroute_runner.py). On dense boards a single
         run regularly leaves 1–7 nets unrouted; cycling through a few
         ``-mp`` values typically gets the count to zero.
+
+        Honest failure (E2E finding B4): Freerouting 2.2.4 can throw
+        mid-run (the ``to_trace_entries`` NPE on boards with pre-routed
+        traces), log ``ERROR Error during routing passes``, **exit 0**, and
+        still write an echo SES. The stdout/stderr stream is scanned for the
+        fatal signatures (``_detect_routing_failure``); a crashed pass never
+        wins best-of-N, and a run that routed 0 new nets returns
+        ``success: False`` with the exception line + a remediation hint
+        instead of a fake ``success: True``. A partial crash (some new nets
+        routed) imports what landed and returns ``routing_incomplete: True``
+        + warnings.
+
+        Replace semantics (B4): the SES import first clears existing
+        tracks/vias on the nets the SES re-routes, so importing replaces
+        rather than stacks (which duplicated pre-routed traces).
         """
         try:
             import pcbnew
@@ -379,6 +611,11 @@ class FreeroutingCommands:
         pass_schedule = list(params.get("passSchedule") or DEFAULT_PASS_SCHEDULE)
         if not pass_schedule:
             pass_schedule = [passes]
+
+        # Net names that already carry routing — captured before we touch the
+        # board so the failure path can tell "routed something new" from "the
+        # SES is just an echo of the pre-existing traces" (the B4 crash).
+        pre_routed_nets = self._board_routed_nets()
 
         # Validate Freerouting JAR
         if not os.path.isfile(jar_path):
@@ -448,9 +685,19 @@ class FreeroutingCommands:
         mode_label = "docker" if use_docker else "direct"
         total_start = time.time()
         attempt_results: List[Dict[str, Any]] = []
+        # Best CLEAN attempt (Freerouting reported no fatal error).
         best_score = -1
         best_attempt_idx = -1
         best_proc_stdout = ""
+        # Best attempt that produced a SES but logged a FATAL error (the B4
+        # NPE case: exit 0 + SES written, yet nothing meaningful routed). A
+        # crashed pass must never win best-of-N over a clean one, so it's
+        # tracked separately and only consulted when no clean attempt exists.
+        failed_best_score = -1
+        failed_best_idx = -1
+        failed_best_stdout = ""
+        failed_best_error = ""
+        failed_ses_path = os.path.join(board_dir, f"{board_stem}_failed.ses")
 
         # If only one attempt, use the legacy maxPasses value (preserves
         # exact backward-compatible behaviour). Otherwise cycle through
@@ -549,25 +796,46 @@ class FreeroutingCommands:
                     }
                 continue
 
+            # A clean exit code is NOT proof of success: Freerouting 2.2.4
+            # can throw mid-run (the B4 NPE), log ``ERROR Error during routing
+            # passes``, exit 0, and still write an echo SES. Scan the output
+            # stream for the fatal signatures.
+            routing_error = _detect_routing_failure(
+                (proc.stdout or "") + "\n" + (proc.stderr or "")
+            )
+
             # Score this attempt
             with open(ses_path, "r", encoding="utf-8", errors="replace") as fh:
                 ses_text = fh.read()
             score_info = _score_ses(ses_text, target_nets)
             score = score_info["score"]
-            attempt_results.append(
-                {
-                    "attempt": idx + 1,
-                    "max_passes": attempt_passes,
-                    "elapsed_seconds": attempt_elapsed,
-                    "ok": True,
-                    **score_info,
-                }
-            )
+            attempt_rec: Dict[str, Any] = {
+                "attempt": idx + 1,
+                "max_passes": attempt_passes,
+                "elapsed_seconds": attempt_elapsed,
+                "ok": routing_error is None,
+                **score_info,
+            }
+            if routing_error:
+                attempt_rec["routing_error"] = routing_error
+            attempt_results.append(attempt_rec)
             logger.info(
                 f"  attempt {idx + 1}: score={score} "
                 f"({score_info['nets']} nets, {score_info['segments']} segs, "
                 f"{score_info['vias']} vias)"
+                + (f" FAILED: {routing_error}" if routing_error else "")
             )
+
+            if routing_error:
+                # Keep the best failed SES aside as a fallback, but never let
+                # it compete with a clean attempt for best-of-N.
+                if score > failed_best_score:
+                    failed_best_score = score
+                    failed_best_idx = idx
+                    failed_best_stdout = proc.stdout or ""
+                    failed_best_error = routing_error
+                    shutil.copy2(ses_path, failed_ses_path)
+                continue
 
             if score > best_score:
                 best_score = score
@@ -579,86 +847,131 @@ class FreeroutingCommands:
 
         elapsed = round(time.time() - total_start, 1)
 
-        if best_attempt_idx == -1:
-            return {
-                "success": False,
-                "message": "All Freerouting attempts failed",
-                "errorDetails": "No attempt produced a usable SES file",
-                "elapsed_seconds": elapsed,
-                "attempts": attempt_results,
-            }
-
-        # Restore the winning SES as the canonical output file
-        if attempts > 1:
-            shutil.copy2(best_ses_path, ses_path)
-
-        ses_size = os.path.getsize(ses_path)
-        logger.info(
-            f"Best SES: attempt {best_attempt_idx + 1}, score={best_score}, "
-            f"{ses_size} bytes (total {elapsed}s)"
+        hint = (
+            "Freerouting 2.2.4 can crash (NullPointerException in "
+            "ShapeSearchTree.merge_entries_in_front, 'to_trace_entries' is null) "
+            "on boards that carry pre-routed traces. Delete the existing traces "
+            "on the nets you want routed and re-run autoroute from a clean "
+            "(unrouted) state."
         )
 
-        # Step 3: Import the winning SES
-        logger.info(f"Importing SES from {ses_path}")
-        try:
-            result = pcbnew.ImportSpecctraSES(self.board, ses_path)
-            if result is not True and result != 0:
+        # --- Case A: a clean attempt won -> normal success path -------------
+        if best_attempt_idx != -1:
+            # Restore the winning SES as the canonical output file
+            if attempts > 1:
+                shutil.copy2(best_ses_path, ses_path)
+            ses_size = os.path.getsize(ses_path)
+            logger.info(
+                f"Best SES: attempt {best_attempt_idx + 1}, score={best_score}, "
+                f"{ses_size} bytes (total {elapsed}s)"
+            )
+
+            # Step 3+4: Import the winning SES (replace semantics) and save.
+            logger.info(f"Importing SES from {ses_path}")
+            applied = self._apply_ses(ses_path, board_path)
+            if not applied["ok"]:
+                err = dict(applied["error"])
+                err["elapsed_seconds"] = elapsed
+                err["attempts"] = attempt_results
+                return err
+
+            with open(ses_path, "r", encoding="utf-8", errors="replace") as fh:
+                routed_nets = _ses_routed_nets(fh.read())
+            response: Dict[str, Any] = {
+                "success": True,
+                "message": f"Autoroute completed in {elapsed}s",
+                "mode": mode_label,
+                "dsn_path": dsn_path,
+                "ses_path": ses_path,
+                "elapsed_seconds": elapsed,
+                "board_stats": self._board_track_stats(),
+                "nets_routed": len(routed_nets),
+                "replaced_existing_tracks": applied["removed_tracks"],
+                "freerouting_stdout": best_proc_stdout[:1000],
+            }
+            if attempts > 1:
+                response["attempts"] = attempt_results
+                response["best_attempt"] = best_attempt_idx + 1
+                response["best_score"] = best_score
+                response["best_ses_path"] = best_ses_path
+            return response
+
+        # --- Case B: only failed attempts produced a SES --------------------
+        # Every attempt that ran logged a fatal error (the B4 NPE: exit 0 +
+        # echo SES). Decide from what the SES actually contains, not a hopeful
+        # default.
+        if failed_best_idx != -1:
+            shutil.copy2(failed_ses_path, ses_path)
+            with open(ses_path, "r", encoding="utf-8", errors="replace") as fh:
+                ses_nets = _ses_routed_nets(fh.read())
+            newly_routed = sorted(ses_nets - pre_routed_nets)
+
+            if not newly_routed:
+                # Total failure: the SES is just an echo of the pre-existing
+                # routing (nothing new was routed). Do NOT import — leave the
+                # board exactly as it was — and fail honestly with the hint.
+                logger.error(f"Autoroute failed: 0 new nets routed ({failed_best_error})")
                 return {
                     "success": False,
-                    "message": "SES import failed",
-                    "errorDetails": f"ImportSpecctraSES returned: {result}",
+                    "message": "Freerouting failed: 0 nets routed",
+                    "errorDetails": failed_best_error,
+                    "hint": hint,
+                    "mode": mode_label,
+                    "dsn_path": dsn_path,
+                    "ses_path": ses_path,
                     "elapsed_seconds": elapsed,
+                    "freerouting_error": failed_best_error,
+                    "freerouting_stdout": failed_best_stdout[:1000],
+                    "pre_routed_nets": sorted(pre_routed_nets),
                     "attempts": attempt_results,
                 }
-        except Exception as e:
-            # API boundary — same shape as the ExportSpecctraDSN catch above.
-            logger.exception(f"ImportSpecctraSES crashed: {e}")
+
+            # Partial: some new nets got routed before/around the crash. Import
+            # with replace semantics, but flag the run as incomplete.
+            logger.warning(
+                f"Autoroute partial: {len(newly_routed)} new net(s) routed "
+                f"despite a fatal error ({failed_best_error})"
+            )
+            applied = self._apply_ses(ses_path, board_path)
+            if not applied["ok"]:
+                err = dict(applied["error"])
+                err["elapsed_seconds"] = elapsed
+                err["attempts"] = attempt_results
+                err["freerouting_error"] = failed_best_error
+                return err
             return {
-                "success": False,
-                "message": "SES import failed",
-                "errorDetails": str(e),
+                "success": True,
+                "routing_incomplete": True,
+                "message": (
+                    f"Autoroute completed with errors in {elapsed}s: "
+                    f"{len(newly_routed)} new net(s) routed, but Freerouting "
+                    "reported a fatal error — routing is partial"
+                ),
+                "warnings": [
+                    f"Freerouting reported a fatal error: {failed_best_error}",
+                    hint,
+                ],
+                "mode": mode_label,
+                "dsn_path": dsn_path,
+                "ses_path": ses_path,
                 "elapsed_seconds": elapsed,
+                "board_stats": self._board_track_stats(),
+                "nets_routed": len(ses_nets),
+                "newly_routed_nets": newly_routed,
+                "replaced_existing_tracks": applied["removed_tracks"],
+                "freerouting_error": failed_best_error,
+                "freerouting_stdout": failed_best_stdout[:1000],
                 "attempts": attempt_results,
             }
 
-        # Step 4: Save board
-        try:
-            self._save_and_record(board_path)
-        except (OSError, RuntimeError) as e:
-            # OSError on filesystem failure, RuntimeError from pcbnew on
-            # board-state issues.  Non-fatal — autoroute is already done and
-            # the SES has been imported; user can save manually.
-            logger.warning(f"Board save after autoroute failed: {e}")
-
-        # Collect stats
-        tracks = self.board.GetTracks()
-        track_count = 0
-        via_count = 0
-        for t in tracks:
-            if t.GetClass() == "PCB_VIA":
-                via_count += 1
-            else:
-                track_count += 1
-
-        response: Dict[str, Any] = {
-            "success": True,
-            "message": f"Autoroute completed in {elapsed}s",
-            "mode": mode_label,
-            "dsn_path": dsn_path,
-            "ses_path": ses_path,
+        # --- Case C: no attempt produced a SES at all -----------------------
+        return {
+            "success": False,
+            "message": "All Freerouting attempts failed",
+            "errorDetails": "No attempt produced a usable SES file",
             "elapsed_seconds": elapsed,
-            "board_stats": {
-                "tracks": track_count,
-                "vias": via_count,
-            },
-            "freerouting_stdout": best_proc_stdout[:1000],
+            "attempts": attempt_results,
         }
-        if attempts > 1:
-            response["attempts"] = attempt_results
-            response["best_attempt"] = best_attempt_idx + 1
-            response["best_score"] = best_score
-            response["best_ses_path"] = best_ses_path
-        return response
 
     def export_dsn(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export the board to Specctra DSN format only."""
@@ -716,9 +1029,15 @@ class FreeroutingCommands:
         }
 
     def import_ses(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Import a Specctra SES file into the board."""
+        """Import a Specctra SES file into the board (with replace semantics).
+
+        Existing tracks/vias on the nets the SES re-routes are cleared before
+        the import so routing is *replaced*, not stacked — the same fix as
+        autoroute (E2E finding B4): ``ImportSpecctraSES`` alone duplicated
+        pre-routed traces.
+        """
         try:
-            import pcbnew
+            import pcbnew  # noqa: F401  (import guarded for the caller's env)
         except ImportError:
             return {
                 "success": False,
@@ -748,40 +1067,16 @@ class FreeroutingCommands:
                 "errorDetails": f"File not found: {ses_path}",
             }
 
-        try:
-            result = pcbnew.ImportSpecctraSES(self.board, ses_path)
-            if result is not True and result != 0:
-                return {
-                    "success": False,
-                    "message": "SES import failed",
-                    "errorDetails": (f"ImportSpecctraSES returned: {result}"),
-                }
-        except Exception as e:
-            logger.exception(f"ImportSpecctraSES crashed: {e}")
-            return {
-                "success": False,
-                "message": "SES import failed",
-                "errorDetails": str(e),
-            }
-
         board_path = params.get("boardPath") or self.board.GetFileName()
-        if board_path:
-            try:
-                self._save_and_record(board_path)
-            except (OSError, RuntimeError) as e:
-                logger.warning(f"Board save after SES import failed: {e}")
-
-        tracks = self.board.GetTracks()
-        track_count = sum(1 for t in tracks if t.GetClass() != "PCB_VIA")
-        via_count = sum(1 for t in tracks if t.GetClass() == "PCB_VIA")
+        applied = self._apply_ses(ses_path, board_path)
+        if not applied["ok"]:
+            return applied["error"]
 
         return {
             "success": True,
             "message": f"Imported SES from {ses_path}",
-            "board_stats": {
-                "tracks": track_count,
-                "vias": via_count,
-            },
+            "board_stats": self._board_track_stats(),
+            "replaced_existing_tracks": applied["removed_tracks"],
         }
 
     def check_freerouting(self, params: Dict[str, Any]) -> Dict[str, Any]:

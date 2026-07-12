@@ -11,6 +11,55 @@ import pcbnew
 
 logger = logging.getLogger("kicad_interface")
 
+# kicad-cli's drill-map formats. gerberx2 keeps the map as a Gerber file that
+# lands next to the drill/gerber set (fab-friendly); pdf/ps/dxf/svg are also
+# accepted. Anything else falls back to gerberx2.
+_DRILL_MAP_FORMATS = ("gerberx2", "pdf", "postscript", "dxf", "svg")
+_DEFAULT_DRILL_MAP_FORMAT = "gerberx2"
+# kicad-cli names drill-map files "<name>-<PTH|NPTH>-drl_map.<ext>" — the
+# "drl_map" token is the stable marker we glob for regardless of format.
+_DRILL_MAP_MARKER = "drl_map"
+
+
+def _normalize_map_format(map_format: Any) -> str:
+    fmt = str(map_format or _DEFAULT_DRILL_MAP_FORMAT).strip().lower()
+    return fmt if fmt in _DRILL_MAP_FORMATS else _DEFAULT_DRILL_MAP_FORMAT
+
+
+def build_drill_export_cmd(
+    kicad_cli: str,
+    output_dir: str,
+    board_file: str,
+    *,
+    generate_map: bool = False,
+    map_format: str = _DEFAULT_DRILL_MAP_FORMAT,
+) -> List[str]:
+    """Build the ``kicad-cli pcb export drill`` command.
+
+    Isolated so tests can assert the flags without a real board/pcbnew.  When
+    ``generate_map`` is set, ``--generate-map`` + ``--map-format`` are appended
+    so a drill map is written alongside the ``.drl`` files (previously the
+    ``generateMapFile`` flag was accepted but never forwarded, so no map
+    appeared on disk).
+    """
+    cmd = [
+        kicad_cli,
+        "pcb",
+        "export",
+        "drill",
+        "--output",
+        output_dir,
+        "--format",
+        "excellon",
+        "--drill-origin",
+        "absolute",
+        "--excellon-separate-th",  # Separate plated/non-plated
+    ]
+    if generate_map:
+        cmd += ["--generate-map", "--map-format", _normalize_map_format(map_format)]
+    cmd.append(board_file)
+    return cmd
+
 
 class FabricationMixin:
     def export_gerber(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -28,6 +77,7 @@ class FabricationMixin:
             use_protel_extensions = params.get("useProtelExtensions", False)
             generate_drill_files = params.get("generateDrillFiles", True)
             generate_map_file = params.get("generateMapFile", False)
+            map_format = _normalize_map_format(params.get("mapFormat"))
             use_aux_origin = params.get("useAuxOrigin", False)
 
             if not output_dir:
@@ -119,28 +169,25 @@ class FabricationMixin:
                 if kicad_cli and board_file and os.path.exists(board_file):
                     import subprocess
 
-                    # Generate drill files using kicad-cli
-                    cmd = [
+                    # Generate drill files (+ optional drill map) using kicad-cli
+                    cmd = build_drill_export_cmd(
                         kicad_cli,
-                        "pcb",
-                        "export",
-                        "drill",
-                        "--output",
                         output_dir,
-                        "--format",
-                        "excellon",
-                        "--drill-origin",
-                        "absolute",
-                        "--excellon-separate-th",  # Separate plated/non-plated
                         board_file,
-                    ]
+                        generate_map=generate_map_file,
+                        map_format=map_format,
+                    )
 
                     try:
                         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                         if result.returncode == 0:
-                            # Get list of generated drill files
+                            # Get list of generated drill files (exclude the
+                            # drill-map files, which are collected separately).
                             for file in os.listdir(output_dir):
-                                if file.endswith((".drl", ".cnc")):
+                                if (
+                                    file.endswith((".drl", ".cnc"))
+                                    and _DRILL_MAP_MARKER not in file
+                                ):
                                     drill_files.append(file)
                         else:
                             logger.warning(f"Drill file generation failed: {result.stderr}")
@@ -156,12 +203,15 @@ class FabricationMixin:
                 except Exception as dev_err:
                     logger.warning(f"[DEV] Could not copy MCP log: {dev_err}")
 
-            # Verify gerber job file if requested
-            job_files: List[str] = []
+            # Collect map/job files when requested: the gerber job (.gbrjob)
+            # plus the drill-map files kicad-cli just wrote next to the drill
+            # files ("<name>-<PTH|NPTH>-drl_map.<ext>").
+            map_files: List[str] = []
             if generate_map_file:
                 for file in os.listdir(output_dir):
-                    if file.endswith(".gbrjob"):
-                        job_files.append(os.path.join(output_dir, file))
+                    if file.endswith(".gbrjob") or _DRILL_MAP_MARKER in file:
+                        map_files.append(os.path.join(output_dir, file))
+                map_files.sort()
 
             requested_count = len(target_layers)
             written_count = len(written_files)
@@ -185,7 +235,7 @@ class FabricationMixin:
                 "files": {
                     "gerber": written_files,
                     "drill": drill_files,
-                    "map": job_files,
+                    "map": map_files,
                 },
                 "outputDir": output_dir,
             }

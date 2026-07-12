@@ -7,7 +7,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction } from "./tool-response.js";
+import { CommandFunction, formatKicadResult } from "./tool-response.js";
 
 export function registerDatasheetTools(server: McpServer, callKicadScript: CommandFunction) {
   // ── enrich_datasheets ──────────────────────────────────────────────────────
@@ -62,6 +62,20 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
         ],
         isError: true,
       };
+    },
+  );
+
+  // ── get_datasheet_url ──────────────────────────────────────────────────────
+  server.tool(
+    "get_datasheet_url",
+    "Return the canonical LCSC datasheet + product URLs for an LCSC part number " +
+      "(e.g. C25804). Constructed, no network call. Use to look up a single part's " +
+      "datasheet link; use enrich_datasheets to fill a whole schematic.",
+    {
+      lcsc: z.string().describe("LCSC part number, e.g. C25804 (leading 'C' optional)"),
+    },
+    async (args: { lcsc: string }) => {
+      return formatKicadResult(await callKicadScript("get_datasheet_url", args));
     },
   );
 }

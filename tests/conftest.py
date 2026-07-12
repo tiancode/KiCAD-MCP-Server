@@ -65,17 +65,22 @@ def _reset_library_manager_caches():
     another. No-op if those modules aren't importable in this environment."""
     try:
         from commands.library import _MANAGER_CACHE
-        from commands.library_symbol import _SYMBOL_MANAGER_CACHE
+        from commands.library_symbol import (
+            _SYMBOL_MANAGER_CACHE,
+            _reset_shared_symbol_cache,
+        )
     except Exception:
         yield
         return
     _MANAGER_CACHE.clear()
     _SYMBOL_MANAGER_CACHE.clear()
+    _reset_shared_symbol_cache()
     try:
         yield
     finally:
         _MANAGER_CACHE.clear()
         _SYMBOL_MANAGER_CACHE.clear()
+        _reset_shared_symbol_cache()
 
 
 @pytest.fixture(autouse=True)

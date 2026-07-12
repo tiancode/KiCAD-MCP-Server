@@ -440,7 +440,22 @@ def handle_snapshot_project(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         snapshots_base.mkdir(exist_ok=True)
         snapshot_dir = str(snapshots_base / snapshot_name)
 
-        shutil.copytree(project_dir, snapshot_dir, ignore=shutil.ignore_patterns("snapshots"))
+        # Exclude the snapshots dir itself (no recursion) plus transient
+        # artifacts that only bloat a checkpoint: KiCad lock files (~*.lck),
+        # the MCP's own rotating backups / edit history, VCS metadata, and
+        # Python bytecode caches.  Real design files are kept.
+        shutil.copytree(
+            project_dir,
+            snapshot_dir,
+            ignore=shutil.ignore_patterns(
+                "snapshots",
+                "*.lck",
+                ".history",
+                ".mcp-backups",
+                "__pycache__",
+                ".git",
+            ),
+        )
         logger.info(f"Project snapshot saved: {snapshot_dir}")
         return {
             "success": True,

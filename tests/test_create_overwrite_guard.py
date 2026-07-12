@@ -7,10 +7,10 @@ silently clobbering an existing project/sheet on a name collision. They now
 refuse unless overwrite=true. pcbnew / skip are stubbed by tests/conftest.py.
 """
 
+import json
 import os
 
 import pytest
-
 from commands.project import ProjectCommands
 
 
@@ -51,6 +51,40 @@ class TestCreateProjectOverwriteGuard:
         )
 
         assert result["success"] is True, result
+
+
+@pytest.mark.unit
+class TestCreateProjectFileContents:
+    """B6/B7: create_project must write a faithful minimal .kicad_pro and a
+    clean empty schematic (no preloaded dead lib_symbols)."""
+
+    def test_kicad_pro_is_a_real_minimal_project(self, tmp_path):
+        # B7: no more ~112-byte stub — a parseable KiCad 10 project with a
+        # Default net class and > 1 KB of real content.
+        res = ProjectCommands().create_project({"name": "Demo", "path": str(tmp_path)})
+        assert res["success"] is True, res
+
+        pro = tmp_path / "Demo.kicad_pro"
+        assert pro.exists()
+        assert pro.stat().st_size > 1024, "project file should be a real document, not a stub"
+
+        data = json.loads(pro.read_text(encoding="utf-8"))
+        classes = {c["name"]: c for c in data["net_settings"]["classes"]}
+        assert "Default" in classes
+        assert "clearance" in classes["Default"]
+        assert data["meta"]["filename"] == "Demo.kicad_pro"
+
+    def test_schematic_has_no_preloaded_lib_symbols(self, tmp_path):
+        # B6: the dynamic symbol loader injects lib_symbols on demand, so a
+        # fresh schematic must start with an empty lib_symbols block and zero
+        # placed instances — no dead LM358/Crystal/… defs.
+        res = ProjectCommands().create_project({"name": "Demo", "path": str(tmp_path)})
+        assert res["success"] is True, res
+
+        sch = (tmp_path / "Demo.kicad_sch").read_text(encoding="utf-8")
+        assert sch.count('(symbol "') == 0, "no lib_symbol definitions should be preloaded"
+        assert sch.count("(lib_id") == 0, "no components should be placed"
+        assert "(lib_symbols\n  )" in sch
 
 
 @pytest.mark.unit

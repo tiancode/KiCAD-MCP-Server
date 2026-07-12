@@ -16,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 from commands.library_symbol import SymbolLibraryCommands, SymbolLibraryManager
 
 FIXTURE = Path(__file__).parent / "fixtures" / "Simulation_SPICE_minimal.kicad_sym"
+ESCAPED_FIXTURE = Path(__file__).parent / "fixtures" / "escaped_quotes.kicad_sym"
+UNBALANCED_FIXTURE = Path(__file__).parent / "fixtures" / "unbalanced_parens.kicad_sym"
+LCSC_FIXTURE = Path(__file__).parent / "fixtures" / "lcsc_part.kicad_sym"
 SPICE_LIB = Path("/usr/share/kicad/symbols/Simulation_SPICE.kicad_sym")
 
 
@@ -84,6 +87,150 @@ class TestSymbolLibraryManagerParsing:
         symbols = manager.list_symbols("Simulation_SPICE")
         pjfet = next(s for s in symbols if s.name == "PJFET")
         assert pjfet.sim_pins == "1=D 2=G 3=S"
+
+
+@pytest.mark.unit
+class TestEscapedQuoteDescriptions:
+    """F7: power-symbol descriptions embed escaped quotes, e.g.
+    ``"... with name \\"+5V\\""``.  The old ``"([^"]*)"`` capture truncated
+    them at the first inner quote (``... with name \\``); the fix tolerates
+    the escapes and unescapes the captured text.  Full round-trip through
+    list_symbols -> _parse_kicad_sym_file -> _extract_properties."""
+
+    def _manager(self):
+        manager = SymbolLibraryManager.__new__(SymbolLibraryManager)
+        manager.project_path = None
+        manager.libraries = {"escaped": str(ESCAPED_FIXTURE)}
+        manager.symbol_cache = {}
+        manager._cache_mtimes = {}
+        manager._cache_dirty = False
+        return manager
+
+    def test_escaped_quote_description_round_trips(self):
+        symbols = self._manager().list_symbols("escaped")
+        plus5 = next(s for s in symbols if s.name == "+5V")
+        assert plus5.description == 'Power symbol creates a global label with name "+5V"'
+
+    def test_backslash_and_quote_description_round_trips(self):
+        symbols = self._manager().list_symbols("escaped")
+        pathy = next(s for s in symbols if s.name == "PATHY")
+        assert pathy.description == r'Win path C:\Users and a "quoted" bit'
+
+    def test_all_symbols_parsed_despite_escapes(self):
+        """A truncated value must not swallow the rest of the block and
+        drop the following symbol."""
+        names = [s.name for s in self._manager().list_symbols("escaped")]
+        assert names == ["+5V", "PATHY"]
+
+
+@pytest.mark.unit
+class TestUnbalancedParensInStrings:
+    """The block walker counts paren depth to find each symbol's extent.
+
+    KiCad ``.kicad_sym`` files embed unbalanced parens inside quoted string
+    values — pin names such as ``"PA13(JTMS"`` / ``"PA14(JTCK"`` and
+    descriptions like ``"... MCU (LQFP48"``.  A string-*unaware* counter
+    mis-tracks depth on those, walks past the true block end (to EOF), logs
+    "Malformed symbol block", and silently drops the symbol — which made
+    whole libraries (MCU_ST_STM32H5, 73 symbols) unsearchable.  The walker
+    is now string-aware; this pins that every symbol is recovered with the
+    right name/description despite the tricky strings and any symbols that
+    follow them.
+    """
+
+    def _manager(self):
+        manager = SymbolLibraryManager.__new__(SymbolLibraryManager)
+        manager.project_path = None
+        manager.libraries = {"tricky": str(UNBALANCED_FIXTURE)}
+        manager.symbol_cache = {}
+        manager._cache_mtimes = {}
+        manager._cache_dirty = False
+        return manager
+
+    def test_every_symbol_recovered(self):
+        """No symbol is dropped even though the first one has two unbalanced
+        ``(`` in pin-name strings (net +2 that the naive walker never
+        unwinds, so it ran to EOF and skipped the symbol)."""
+        names = [s.name for s in self._manager().list_symbols("tricky")]
+        assert names == [
+            "STM32H5xx_TRICKY",
+            "ESCAPED_TRICKY",
+            "PLAIN_C",
+            "PLAIN_D",
+            "PLAIN_E",
+        ]
+
+    def test_unbalanced_paren_symbol_description(self):
+        symbols = self._manager().list_symbols("tricky")
+        tricky = next(s for s in symbols if s.name == "STM32H5xx_TRICKY")
+        assert tricky.description == "Arm Cortex-M33 MCU (LQFP48"
+
+    def test_escaped_quote_and_paren_in_same_string(self):
+        """Case (b): an escaped quote AND a paren in one value.  The block
+        must stay correctly bounded (string-aware walk) and the value must
+        round-trip with the escape decoded and the paren preserved."""
+        symbols = self._manager().list_symbols("tricky")
+        esc = next(s for s in symbols if s.name == "ESCAPED_TRICKY")
+        assert esc.description == 'Active-low "reset" (see datasheet'
+
+    def test_symbols_after_tricky_ones_intact(self):
+        """The over-long block the naive walker produced for the tricky
+        symbols must not corrupt the plainly-defined symbols that follow."""
+        symbols = self._manager().list_symbols("tricky")
+        by_name = {s.name: s for s in symbols}
+        assert by_name["PLAIN_C"].description == "Plain resistor after the tricky ones"
+        assert by_name["PLAIN_D"].description == "Capacitor, 100nF"
+        assert by_name["PLAIN_E"].description == "LED (red)"
+
+    def test_get_symbol_pins_string_aware_slice(self):
+        """get_symbol_pins uses its own paren walker to slice one block;
+        it must also skip string parens so the tricky symbol's pins parse."""
+        pins = self._manager().get_symbol_pins("tricky", "STM32H5xx_TRICKY")
+        assert pins is not None
+        names = {p["name"] for p in pins}
+        assert names == {"PA13(JTMS", "PA14(JTCK"}
+
+
+@pytest.mark.unit
+class TestLcscPartProperty:
+    """easyeda2kicad writes the LCSC id as the property ``"LCSC Part"`` (not
+    ``"LCSC"``), so reading only ``"LCSC"`` left every imported symbol with an
+    empty ``lcsc_id`` and unsearchable by its LCSC number.  The parser now
+    accepts both names."""
+
+    def _manager(self):
+        manager = SymbolLibraryManager.__new__(SymbolLibraryManager)
+        manager.project_path = None
+        manager.libraries = {"lcsc": str(LCSC_FIXTURE)}
+        manager.symbol_cache = {}
+        manager._cache_mtimes = {}
+        manager._cache_dirty = False
+        return manager
+
+    def test_lcsc_part_property_populates_lcsc_id(self):
+        symbols = self._manager().list_symbols("lcsc")
+        part = next(s for s in symbols if s.name == "0603WAF1002T5E")
+        assert part.lcsc_id == "C25804"
+
+    def test_plain_lcsc_property_still_populates_lcsc_id(self):
+        symbols = self._manager().list_symbols("lcsc")
+        plain = next(s for s in symbols if s.name == "PLAIN_LCSC")
+        assert plain.lcsc_id == "C11702"
+
+    def test_searchable_by_lcsc_number(self):
+        """The whole point: search_symbols('C25804') finds the imported part
+        via its LCSC id (previously 0 results because lcsc_id was empty)."""
+        results = self._manager().search_symbols("C25804")
+        assert "lcsc:0603WAF1002T5E" in [s.full_ref for s in results]
+
+    def test_lcsc_from_properties_helper(self):
+        from commands.library_symbol._manager_parsing import _lcsc_from_properties
+
+        assert _lcsc_from_properties({"LCSC Part": "C25804"}) == "C25804"
+        assert _lcsc_from_properties({"LCSC": "C11702"}) == "C11702"
+        # "LCSC Part" wins when both are present.
+        assert _lcsc_from_properties({"LCSC": "C1", "LCSC Part": "C2"}) == "C2"
+        assert _lcsc_from_properties({"Value": "R"}) == ""
 
 
 @pytest.mark.integration

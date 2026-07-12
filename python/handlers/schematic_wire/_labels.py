@@ -288,6 +288,46 @@ def _scan_all_pin_positions(schematic_path: Any) -> List[Dict[str, Any]]:
     return pins
 
 
+def _lookup_symbol_lib_value(schematic_path: Any, ref: str) -> tuple:
+    """Return ``(lib_id, value)`` for the placed symbol whose Reference == ref.
+
+    Used to detect power *ports* (lib_id ``power:*`` / ref ``#PWR…``) so a label
+    that merely duplicates a power symbol's Value can be skipped (F4). Returns
+    ``(None, None)`` when the symbol or file can't be read. Reads fresh (not via
+    the PinLocator cache) so a just-written file is always seen.
+    """
+    from skip import Schematic as SkipSchematic
+
+    try:
+        sch = SkipSchematic(str(schematic_path))
+    except Exception as e:
+        logger.debug(f"_lookup_symbol_lib_value: could not load {schematic_path}: {e}")
+        return None, None
+    for symbol in getattr(sch, "symbol", []):
+        try:
+            if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+                continue
+            if symbol.property.Reference.value.rstrip("_") != ref:
+                continue
+            lib_id = symbol.lib_id.value if hasattr(symbol, "lib_id") else None
+            value = symbol.property.Value.value if hasattr(symbol.property, "Value") else None
+            return lib_id, value
+        except AttributeError:
+            continue
+    return None, None
+
+
+def _is_power_port(ref: Optional[str], lib_id: Optional[str]) -> bool:
+    """True for a power-PORT symbol (#PWR…, lib_id ``power:*``).
+
+    PWR_FLAG (#FLG, lib ``power:PWR_FLAG``) is NOT a named port — labeling its
+    pin IS the correct attachment idiom — so it is explicitly excluded.
+    """
+    if not ref or not ref.startswith("#PWR") or ref.startswith("#FLG"):
+        return False
+    return str(lib_id or "").startswith("power:")
+
+
 def handle_add_schematic_net_label(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -321,7 +361,12 @@ def handle_add_schematic_net_label(
         net_name = params.get("netName")
         position = params.get("position")
         label_type = params.get("labelType", "label")
-        orientation = params.get("orientation", 0)
+        # Distinguish "orientation omitted" from "explicitly passed 0": an
+        # explicit value (0 included) is honored verbatim; when omitted the
+        # orientation is derived from the pin the label lands on so its text
+        # extends away from the symbol body (left pin → 180/justify right).
+        orientation_explicit = "orientation" in params and params["orientation"] is not None
+        orientation = params["orientation"] if orientation_explicit else 0
         component_ref = params.get("componentRef")
         pin_number = params.get("pinNumber")
         snap_tolerance = float(params.get("snapTolerance", 0.05))
@@ -399,6 +444,83 @@ def handle_add_schematic_net_label(
                     f"{best['ref']}/{best['pin']} at {position} (Δ={best_dist:.4f} mm)"
                 )
 
+        # Resolve which pin (if any) the FINAL coordinates land on — shared by
+        # the power-symbol short-circuit and the outward-orientation derivation.
+        landing_pin: Optional[Dict[str, str]] = None
+        if snapped_to_pin:
+            landing_pin = {"ref": snapped_to_pin["component"], "pin": str(snapped_to_pin["pin"])}
+        elif position is not None:
+            # Exact-hit raw position: no snap occurred, but the coordinates may
+            # still sit on a pin endpoint — resolve it before the write.
+            try:
+                for entry in _scan_all_pin_positions(schematic_path):
+                    cx, cy = entry["coords"]
+                    if (
+                        abs(float(position[0]) - float(cx)) <= _LABEL_PIN_CONNECT_TOLERANCE_MM
+                        and abs(float(position[1]) - float(cy)) <= _LABEL_PIN_CONNECT_TOLERANCE_MM
+                    ):
+                        landing_pin = {"ref": entry["ref"], "pin": entry["pin"]}
+                        break
+            except Exception as e:
+                logger.debug(f"Landing-pin scan failed: {e}")
+
+        # Power-symbol short-circuit (F4): a power PORT already joins the net
+        # named by its Value and self-labels its own pin, so a matching label is
+        # a redundant double label — skip the write entirely. A mismatched name
+        # is almost certainly a mistake (the pin then carries both names); write
+        # it but warn. PWR_FLAG is not a named port, so it never reaches here.
+        power_warnings: List[str] = []
+        if landing_pin is not None:
+            lib_id_lp, value_lp = _lookup_symbol_lib_value(schematic_path, landing_pin["ref"])
+            if _is_power_port(landing_pin["ref"], lib_id_lp):
+                ref_lp = landing_pin["ref"]
+                if value_lp is not None and net_name == value_lp:
+                    logger.info(
+                        f"Skipping redundant '{net_name}' label on power symbol "
+                        f"{ref_lp} (its Value already names the net)"
+                    )
+                    return {
+                        "success": True,
+                        "already_connected": True,
+                        "skipped_label": True,
+                        "connected_to_pin": {"ref": ref_lp, "pin": landing_pin["pin"]},
+                        "power_symbol": {"ref": ref_lp, "value": value_lp},
+                        "message": (
+                            f"{ref_lp} is a power symbol; its pin already joins net "
+                            f"'{value_lp}' via its Value, so no label was written. "
+                            f"Power symbols self-label their pin — adding a "
+                            f"'{net_name}' label would duplicate it."
+                        ),
+                    }
+                power_warnings.append(
+                    f"{ref_lp} is a power symbol already driving net '{value_lp}' via "
+                    f"its Value. Labeling its pin '{net_name}' does not rename that "
+                    f"net: the pin ends up on BOTH '{value_lp}' (from the symbol) and "
+                    f"'{net_name}' (from this label), which is almost certainly a "
+                    f"mistake. Use a plain net label on a wire instead."
+                )
+
+        # Derive the label orientation from the pin the final coordinates land
+        # on (unless the caller passed one). PinLocator.get_pin_angle returns the
+        # OUTWARD angle (0=right, 90=up, 180=left, 270=down); rounding it to a
+        # KiCad label orientation makes the text extend away from the symbol body
+        # (WireManager.add_label picks justify right for 180/270). Mirrors the
+        # snap connect_to_net applies. Free-floating labels and any failure → 0.
+        orientation_source = "explicit" if orientation_explicit else "default"
+        if not orientation_explicit and landing_pin is not None:
+            try:
+                from commands.pin_locator import PinLocator
+
+                pin_angle = PinLocator().get_pin_angle(
+                    Path(schematic_path), landing_pin["ref"], str(landing_pin["pin"])
+                )
+                if pin_angle is not None:
+                    orientation = int(round(float(pin_angle) / 90.0) * 90) % 360
+                    orientation_source = "pin_outward"
+            except Exception as e:
+                logger.debug(f"Pin-angle derivation for label orientation failed: {e}")
+                orientation = 0
+
         # Collect existing net names BEFORE adding the new label so we can
         # detect case-mismatch collisions against pre-existing nets only.
         existing_net_names: List[str] = []
@@ -460,6 +582,8 @@ def handle_add_schematic_net_label(
             "message": f"Added net label '{net_name}' at {position}",
             "actual_position": position,
             "connected_to_pin": connected_to_pin,
+            "orientation": orientation,
+            "orientation_source": orientation_source,
         }
         if requested_position is not None and snapped_to_pin and not (component_ref and pin_number):
             # Auto-snap path — surface what we moved so the caller knows
@@ -474,6 +598,8 @@ def handle_add_schematic_net_label(
             )
         if case_warnings:
             response["case_warnings"] = case_warnings
+        if power_warnings:
+            response["warnings"] = power_warnings
         return response
 
     except Exception as e:

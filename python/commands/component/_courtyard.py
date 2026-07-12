@@ -85,14 +85,20 @@ class CourtyardMixin:
             outline_bbox = self._resolve_outline_bbox(params.get("board_outline"))
 
             # Gather courtyard bboxes for every footprint we'll consider.
+            # ``fallback_refs`` records which parts had no real courtyard
+            # polygon and fell back to the (text-excluded) footprint bbox — the
+            # response flags these so a caller knows the keepout is approximate.
             entries = []
+            fallback_refs = set()
             for fp in self.board.GetFootprints():
                 ref = fp.GetReference()
                 if ref_filter is not None and ref not in ref_filter:
                     continue
-                bbox = self._footprint_courtyard_bbox(fp, virtual.get(ref))
+                bbox, used_fallback = self._footprint_courtyard_bbox(fp, virtual.get(ref))
                 if bbox is None:
                     continue
+                if used_fallback:
+                    fallback_refs.add(ref)
                 # Expand by margin
                 if margin_mm:
                     x1, y1, x2, y2 = bbox
@@ -124,6 +130,10 @@ class CourtyardMixin:
                                     "y2": round(min(a[3], b[3]), 3),
                                     "unit": "mm",
                                 },
+                                # True when either part lacked a courtyard and
+                                # used the approximate bbox fallback — the
+                                # overlap may be a placement artifact, not real.
+                                "fallback": a_ref in fallback_refs or b_ref in fallback_refs,
                             }
                         )
 
@@ -154,6 +164,10 @@ class CourtyardMixin:
                                     "unit": "mm",
                                 },
                                 "exceeds": exceeds,
+                                # True when this part lacked a courtyard and used
+                                # the approximate bbox fallback — the edge
+                                # violation may be a placement artifact.
+                                "fallback": ref in fallback_refs,
                             }
                         )
 
@@ -167,6 +181,10 @@ class CourtyardMixin:
                     "boundary_violation_count": len(boundary_violations),
                     "margin_mm": margin_mm,
                     "virtual_placements": len(virtual),
+                    # Parts with no F/B.Courtyard polygon — their keepout was
+                    # approximated from the (text-excluded) footprint bbox, so
+                    # any overlap/boundary flag involving them is lower-confidence.
+                    "bbox_fallback_refs": sorted(fallback_refs),
                     "board_outline_mm": (
                         None
                         if outline_bbox is None
@@ -223,17 +241,34 @@ class CourtyardMixin:
             return None
 
     def _footprint_courtyard_bbox(self, fp, override_pos):
-        """Return courtyard bbox in mm, optionally relocated to a virtual position.
+        """Return ``(bbox_mm, used_fallback)``, optionally relocated.
+
+        ``bbox_mm`` is ``(x1, y1, x2, y2)`` in mm, or ``None`` when the
+        footprint has no usable geometry.  ``used_fallback`` is ``True`` when
+        the box came from the footprint bounding box (no real courtyard
+        polygon) — the caller surfaces this so a consumer knows the keepout is
+        approximate.
 
         Strategy:
-          1. Use F.Courtyard or B.Courtyard polygon if present.
-          2. Otherwise fall back to footprint.GetBoundingBox() (includes pads,
-             excludes text by default).
+          1. Use the F.Courtyard or B.Courtyard polygon if present (the exact
+             physical keepout).
+          2. Otherwise fall back to ``footprint.GetBoundingBox`` with text
+             EXCLUDED.  The parameterless ``GetBoundingBox()`` INCLUDES field
+             text (Reference / Value), which balloons the box for
+             courtyard-less parts — a 6 mm mounting hole whose
+             "MountingHole_3.2mm" Value text stretched it to ~20 mm, producing
+             false overlaps and false board-edge violations.  The
+             text-excluding overload's arity drifted across KiCad (9.x:
+             ``GetBoundingBox(aIncludeText)``; 10.x adds a second
+             ``aIncludeHiddenText`` flag), so try the widest arity first and
+             degrade defensively — only falling back to the text-inclusive
+             ``GetBoundingBox()`` if no text-excluding overload exists.
           3. If override_pos is given, translate (and optionally rotate) the
              bbox to land at the virtual position — preserving the bbox's
              extents relative to the new anchor.
         """
         bbox_nm = None
+        used_fallback = False
         # Try the courtyard polygons first (front then back)
         for layer in (pcbnew.F_CrtYd, pcbnew.B_CrtYd):
             try:
@@ -247,18 +282,27 @@ class CourtyardMixin:
                 # method-dispatch failure — try the other layer.
                 continue
         if bbox_nm is None:
-            try:
-                box = fp.GetBoundingBox()
-                bbox_nm = (box.GetLeft(), box.GetTop(), box.GetRight(), box.GetBottom())
-            except (AttributeError, RuntimeError):
-                # Footprint has no geometry at all — caller can't compute
-                # a courtyard bbox.  Return None to let it skip cleanly.
-                return None
+            box = None
+            for args in ((False, False), (False,), ()):
+                try:
+                    box = fp.GetBoundingBox(*args)
+                    break
+                except TypeError:
+                    # Wrong arity for this KiCad build — try the next overload.
+                    continue
+                except (AttributeError, RuntimeError):
+                    # Footprint has no geometry at all — caller can't compute
+                    # a courtyard bbox.  Return None to let it skip cleanly.
+                    return None, False
+            if box is None:
+                return None, False
+            bbox_nm = (box.GetLeft(), box.GetTop(), box.GetRight(), box.GetBottom())
+            used_fallback = True
 
         x1, y1, x2, y2 = (self._nm_to_mm(v) for v in bbox_nm)
 
         if override_pos is None:
-            return (x1, y1, x2, y2)
+            return (x1, y1, x2, y2), used_fallback
 
         # Re-anchor at the virtual position. We do this by translating the
         # bbox by (new_pos - current_pos). Rotation override is honoured by
@@ -283,7 +327,7 @@ class CourtyardMixin:
             if abs(delta) > 0.01:
                 lx1, ly1, lx2, ly2 = self._rotate_aabb(lx1, ly1, lx2, ly2, delta)
 
-        return (new_x + lx1, new_y + ly1, new_x + lx2, new_y + ly2)
+        return (new_x + lx1, new_y + ly1, new_x + lx2, new_y + ly2), used_fallback
 
     @staticmethod
     def _rotate_aabb(x1, y1, x2, y2, angle_deg):

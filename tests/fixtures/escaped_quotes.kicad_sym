@@ -1,0 +1,46 @@
+(kicad_symbol_lib
+	(version 20241209)
+	(generator "kicad_symbol_editor")
+	(generator_version "9.0")
+	(symbol "+5V"
+		(power)
+		(pin_names
+			(offset 0)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "#PWR"
+			(at 0 0 0)
+		)
+		(property "Value" "+5V"
+			(at 0 3.556 0)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+5V\""
+			(at 0 0 0)
+		)
+		(property "ki_keywords" "global power \"rail\""
+			(at 0 0 0)
+		)
+	)
+	(symbol "PATHY"
+		(pin_names
+			(offset 0)
+		)
+		(property "Reference" "U"
+			(at 0 0 0)
+		)
+		(property "Value" "PATHY"
+			(at 0 0 0)
+		)
+		(property "Description" "Win path C:\\Users and a \"quoted\" bit"
+			(at 0 0 0)
+		)
+	)
+)

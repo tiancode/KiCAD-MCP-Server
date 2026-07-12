@@ -253,6 +253,95 @@ def test_courtyard_fallback_to_bounding_box():
     assert len(out["overlaps"]) == 1, "fallback to GetBoundingBox() must still detect overlap"
 
 
+# ---------------------------------------------------------------------------
+# B5: courtyard-less fallback must EXCLUDE footprint text from the bbox.
+# pcbnew's parameterless GetBoundingBox() includes Reference/Value field text,
+# which balloons a courtyard-less mounting hole (long "MountingHole_3.2mm"
+# Value) to ~20 mm wide and produces false overlaps / board-edge violations.
+# ---------------------------------------------------------------------------
+
+
+def _make_textinflated_fp(ref, x_mm, y_mm, half_narrow, half_wide, half_h=1.9):
+    """Courtyard-less footprint whose GetBoundingBox is text-INFLATED.
+
+    The parameterless call (text included) returns ``half_wide`` extents; the
+    text-excluding overloads ((False,) / (False, False)) return the true
+    ``half_narrow`` extents — modelling a mounting hole with a long Value field.
+    """
+    fp = MagicMock(name=f"fp_{ref}")
+    fp.GetReference.return_value = ref
+
+    pos = MagicMock()
+    pos.x = _mm_to_nm(x_mm)
+    pos.y = _mm_to_nm(y_mm)
+    fp.GetPosition.return_value = pos
+    fp.GetOrientationDegrees.return_value = 0.0
+
+    empty_ct = MagicMock()
+    empty_ct.OutlineCount.return_value = 0
+    fp.GetCourtyard.return_value = empty_ct
+
+    def _bb(*args):
+        include_text = len(args) == 0  # () includes text; (False, ...) excludes
+        half = half_wide if include_text else half_narrow
+        box = MagicMock()
+        box.GetLeft.return_value = _mm_to_nm(x_mm - half)
+        box.GetRight.return_value = _mm_to_nm(x_mm + half)
+        box.GetTop.return_value = _mm_to_nm(y_mm - half_h)
+        box.GetBottom.return_value = _mm_to_nm(y_mm + half_h)
+        return box
+
+    fp.GetBoundingBox.side_effect = _bb
+    return fp
+
+
+@pytest.mark.unit
+def test_courtyardless_fallback_excludes_text_from_bbox():
+    # MH1 near the right edge: the text-inflated box (half 10 → right edge 55)
+    # would spill past the 50 mm board edge; the real text-excluded box
+    # (half 3 → right edge 48) stays inside.
+    fp = _make_textinflated_fp("MH1", 45, 15, half_narrow=3.0, half_wide=10.0)
+    board = _make_board([fp], outline_mm=(0, 0, 50, 30))
+
+    out = _cmd(board).check_courtyard_overlaps({})
+
+    assert out["success"], out
+    # Text excluded → no false board-edge violation.
+    assert out["boundary_violations"] == [], out["boundary_violations"]
+    # The part is flagged as having used the approximate bbox fallback.
+    assert out["summary"]["bbox_fallback_refs"] == ["MH1"]
+
+    # Prove text-exclusion actually happened: a no-text arity was used and the
+    # text-inclusive parameterless call was never the one that supplied the box.
+    called_args = [c.args for c in fp.GetBoundingBox.call_args_list]
+    assert (False, False) in called_args or (False,) in called_args, called_args
+    assert () not in called_args, "must not fall back to the text-inclusive bbox"
+
+
+@pytest.mark.unit
+def test_fallback_flag_marks_courtyardless_entries():
+    # MH1 (no courtyard) overlaps U2 (real courtyard); the overlap and the
+    # summary must flag MH1 as bbox-fallback so a caller knows it's lower-confidence.
+    mh = _make_textinflated_fp("MH1", 10, 10, half_narrow=3.0, half_wide=3.0)
+    u2 = _make_fp("U2", 12, 10, 2.0, 1.5)  # has a real courtyard
+    board = _make_board([mh, u2], outline_mm=(0, 0, 50, 30))
+
+    out = _cmd(board).check_courtyard_overlaps({})
+
+    assert len(out["overlaps"]) == 1, out["overlaps"]
+    assert out["overlaps"][0]["fallback"] is True
+    assert out["summary"]["bbox_fallback_refs"] == ["MH1"]
+
+
+@pytest.mark.unit
+def test_courtyard_present_is_not_flagged_as_fallback():
+    fp = _make_fp("U1", 10, 10, 2, 1.5)  # real courtyard (OutlineCount == 1)
+    board = _make_board([fp])
+    out = _cmd(board).check_courtyard_overlaps({})
+    assert out["summary"]["bbox_fallback_refs"] == []
+    assert out["boundary_violations"] == []
+
+
 @pytest.mark.unit
 def test_board_outline_override_replaces_edge_cuts_bbox():
     """Custom board outline takes precedence over Edge.Cuts bbox."""
