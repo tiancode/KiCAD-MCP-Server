@@ -64,7 +64,27 @@ class NetMixin:
             bbox = params.get("boundingBox")  # {x1, y1, x2, y2, unit}
             include_vias = params.get("includeVias", False)
 
+            # Resolve the net filter against the board's real nets so a bare
+            # "GND" matches tracks/vias on a hierarchical "/GND" (Bug 2 — parity
+            # with copper_pour).  Read-only: never refuses, only annotates.
+            from ._zones import resolve_query_net_filter
+
+            target_net = net_name
+            net_annotations = {}
+            if net_name:
+                target_net, net_annotations = resolve_query_net_filter(
+                    net_name, self._board_net_names()
+                )
+
             scale = 1000000  # nm to mm conversion factor
+
+            # Output unit: the TS schema documents `unit` for trace
+            # coordinates but it was silently ignored (always mm).
+            out_unit = params.get("unit", "mm")
+            if out_unit not in ("mm", "mil", "inch"):
+                out_unit = "mm"
+            out_scale = {"mm": 1000000, "mil": 25400, "inch": 25400000}[out_unit]
+
             traces = []
             vias = []
 
@@ -77,8 +97,8 @@ class NetMixin:
                     if is_via and not include_vias:
                         continue
 
-                    # Filter by net
-                    if net_name and track.GetNetname() != net_name:
+                    # Filter by net (resolved above)
+                    if target_net and track.GetNetname() != target_net:
                         continue
 
                     # Filter by layer (only for tracks, not vias)
@@ -119,14 +139,14 @@ class NetMixin:
                             {
                                 "uuid": track.m_Uuid.AsString(),
                                 "position": {
-                                    "x": pos.x / scale,
-                                    "y": pos.y / scale,
-                                    "unit": "mm",
+                                    "x": pos.x / out_scale,
+                                    "y": pos.y / out_scale,
+                                    "unit": out_unit,
                                 },
                                 "net": track.GetNetname(),
                                 "netCode": track.GetNetCode(),
-                                "diameter": track.GetWidth() / scale,
-                                "drill": track.GetDrillValue() / scale,
+                                "diameter": track.GetWidth() / out_scale,
+                                "drill": track.GetDrillValue() / out_scale,
                             }
                         )
                     else:
@@ -138,18 +158,18 @@ class NetMixin:
                                 "net": track.GetNetname(),
                                 "netCode": track.GetNetCode(),
                                 "layer": self.board.GetLayerName(track.GetLayer()),
-                                "width": track.GetWidth() / scale,
+                                "width": track.GetWidth() / out_scale,
                                 "start": {
-                                    "x": start.x / scale,
-                                    "y": start.y / scale,
-                                    "unit": "mm",
+                                    "x": start.x / out_scale,
+                                    "y": start.y / out_scale,
+                                    "unit": out_unit,
                                 },
                                 "end": {
-                                    "x": end.x / scale,
-                                    "y": end.y / scale,
-                                    "unit": "mm",
+                                    "x": end.x / out_scale,
+                                    "y": end.y / out_scale,
+                                    "unit": out_unit,
                                 },
-                                "length": track.GetLength() / scale,
+                                "length": track.GetLength() / out_scale,
                             }
                         )
                 except Exception as track_err:
@@ -159,7 +179,13 @@ class NetMixin:
             from utils.pagination import paginate
 
             traces, page = paginate(traces, params)
-            result = {"success": True, "traceCount": page["total"], "traces": traces, **page}
+            result = {
+                "success": True,
+                "traceCount": page["total"],
+                "traces": traces,
+                **page,
+                **net_annotations,
+            }
 
             if include_vias:
                 result["viaCount"] = len(vias)
