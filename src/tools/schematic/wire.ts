@@ -170,8 +170,10 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Connect pin to net
   server.tool(
     "connect_to_net",
-    "Connect a component pin to a named net via a wire stub and net label at the exact pin endpoint. " +
-      "Response includes pin_location, label_location, and wire_stub to confirm placement.",
+    "Connect a component pin to a named net via a wire stub + net label at the pin endpoint. " +
+      "Auto-relocates the stub if the chosen point would merge into a DIFFERENT net; if no free " +
+      "direction exists it refuses with label_collision:{point,existing_net}. A floating power-symbol " +
+      "pin gets a stub wire (no label). Response: pin_location, label_location, wire_stub.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       componentRef: z.string().describe("Component reference (e.g., U1, R1)"),
@@ -254,8 +256,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Get wire connections
   server.tool(
     "get_wire_connections",
-    "Return the net name plus all wires and pins connected at a point (reference + pin, OR x/y in mm). " +
-      "net=null means unnamed. The point must be an exact wire endpoint or junction (midpoints don't match) — " +
+    "Return the net plus all wires and pins connected at a point (reference + pin, OR x/y in mm). " +
+      "net=null means unnamed; 'via' tells how it attaches ('wire' | 'label'). The point must be an " +
+      "exact wire endpoint/junction OR a net label placed on the pin (midpoints don't match) — " +
       "get coordinates from get_schematic_pin_locations.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
@@ -293,6 +296,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
               type: "text",
               text:
                 `Net: ${netLabel}\n` +
+                `Via: ${result.via ?? "—"}\n` +
                 `Query point: (${qp?.x ?? args.x}, ${qp?.y ?? args.y})\n` +
                 `Connected pins:\n${pinList || "  (none found)"}\n\nWire segments:\n${wireList || "  (none)"}`,
             },

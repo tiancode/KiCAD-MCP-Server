@@ -440,3 +440,117 @@ class TestGetWireConnectionsHandlerRefPinMode:
             iface = KiCADInterface.__new__(KiCADInterface)
             KiCADInterface.__init__(iface)
         assert "get_pin_net" not in iface.command_routes
+
+
+# ---------------------------------------------------------------------------
+# TestLabelAtPinConnectivity — Bug 4: a net label placed directly on a pin (no
+# wire) is a valid connection; get_wire_connections must report it (via="label").
+# ---------------------------------------------------------------------------
+
+import tempfile  # noqa: E402
+
+from commands.pin_locator import PinLocator  # noqa: E402
+
+_R_LIB_SEXP = (
+    '(symbol "Device:R" (pin_numbers hide) (pin_names (offset 0))\n'
+    '  (symbol "R_1_1"\n'
+    '    (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))\n'
+    '    (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))))'
+)
+
+
+def _clear_pin_caches() -> None:
+    PinLocator._SCHEMATIC_CACHE.clear()
+    PinLocator._SEXP_CACHE.clear()
+    PinLocator._PINDEF_CACHE.clear()
+
+
+def _write_r_sch(extra: str) -> str:
+    """R1 at (100, 100); pin1 world = (100, 96.19). `extra` is injected before
+    sheet_instances. Returns the file path."""
+    text = (
+        '(kicad_sch (version 20250114) (generator "test")\n'
+        '  (uuid "00000000-0000-0000-0000-0000000000aa")\n  (paper "A4")\n'
+        f"  (lib_symbols\n    {_R_LIB_SEXP}\n  )\n"
+        '  (symbol (lib_id "Device:R") (at 100 100 0) (unit 1)\n'
+        "    (in_bom yes) (on_board yes) (dnp no)\n"
+        '    (uuid "11111111-1111-1111-1111-1111111111aa")\n'
+        '    (property "Reference" "R1" (at 100 100 0))\n'
+        '    (property "Value" "1k" (at 100 100 0))\n'
+        '    (instances (project "t"\n'
+        '      (path "/00000000-0000-0000-0000-0000000000aa" (reference "R1") (unit 1)))))\n'
+        f"{extra}"
+        '  (sheet_instances (path "/" (page "1")))\n)\n'
+    )
+    f = tempfile.NamedTemporaryFile(suffix=".kicad_sch", delete=False, mode="w")
+    f.write(text)
+    f.close()
+    _clear_pin_caches()
+    return f.name
+
+
+@pytest.mark.unit
+class TestLabelAtPinConnectivity:
+    def test_label_directly_on_pin_no_wire_is_reported(self) -> None:
+        from skip import Schematic
+
+        # A VCC label placed exactly on R1 pin1 (100, 96.19), no wire at all.
+        path = _write_r_sch(
+            '  (label "VCC" (at 100 96.19 0) '
+            "(effects (font (size 1.27 1.27)) (justify left bottom)) "
+            '(uuid "22222222-2222-2222-2222-2222222222aa"))\n'
+        )
+        result = get_wire_connections(Schematic(path), path, 100.0, 96.19)
+        assert result is not None
+        assert result["net"] == "VCC"
+        assert result["via"] == "label"
+        assert result["wires"] == []
+        assert {"component": "R1", "pin": "1"} in result["pins"]
+
+    def test_wire_connected_point_reports_via_wire(self) -> None:
+        from skip import Schematic
+
+        # A wire from pin1 (100, 96.19) upward, with a VCC label at the far end.
+        path = _write_r_sch(
+            "  (wire (pts (xy 100 96.19) (xy 100 90)) "
+            '(stroke (width 0) (type default)) (uuid "33333333-3333-3333-3333-3333333333aa"))\n'
+            '  (label "VCC" (at 100 90 0) '
+            "(effects (font (size 1.27 1.27)) (justify left bottom)) "
+            '(uuid "22222222-2222-2222-2222-2222222222aa"))\n'
+        )
+        result = get_wire_connections(Schematic(path), path, 100.0, 96.19)
+        assert result is not None
+        assert result["via"] == "wire"
+        assert result["net"] == "VCC"
+        assert len(result["wires"]) == 1
+
+    def test_bare_point_no_wire_no_label_still_none(self) -> None:
+        from skip import Schematic
+
+        # A wire exists elsewhere, but the query point has neither a wire nor a
+        # label → still None (unchanged "not connected" contract).
+        path = _write_r_sch(
+            "  (wire (pts (xy 50 50) (xy 60 50)) "
+            '(stroke (width 0) (type default)) (uuid "44444444-4444-4444-4444-4444444444aa"))\n'
+        )
+        result = get_wire_connections(Schematic(path), path, 100.0, 96.19)
+        assert result is None
+
+    def test_handler_reports_label_at_pin_via_ref_pin(self) -> None:
+        # End-to-end through the handler using {reference, pin} input mode.
+        path = _write_r_sch(
+            '  (label "VCC" (at 100 96.19 0) '
+            "(effects (font (size 1.27 1.27)) (justify left bottom)) "
+            '(uuid "22222222-2222-2222-2222-2222222222aa"))\n'
+        )
+        with patch("kicad_interface.USE_IPC_BACKEND", False):
+            from kicad_interface import KiCADInterface
+
+            iface = KiCADInterface.__new__(KiCADInterface)
+        _clear_pin_caches()
+        result = iface._handle_get_wire_connections(
+            {"schematicPath": path, "reference": "R1", "pin": "1"}
+        )
+        assert result["success"] is True
+        assert result["net"] == "VCC"
+        assert result["via"] == "label"
