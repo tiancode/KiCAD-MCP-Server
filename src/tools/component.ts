@@ -40,9 +40,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     boardPath: z
       .string()
       .optional()
-      .describe(
-        "Path to the .kicad_pcb file – required when using project-local footprint libraries",
-      ),
+      .describe("Path to the .kicad_pcb — required for project-local footprint libraries"),
   } as const;
 
   type PlaceComponentArgs = {
@@ -66,7 +64,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
 
   server.tool(
     "place_component",
-    "Add a NEW footprint instance to the PCB at the given position. Errors if the reference already exists — use move_component to relocate an existing part. Optionally set reference, value, footprint, rotation and layer.",
+    "Add a NEW footprint instance to the PCB. Errors if the reference already exists — use move_component to relocate an existing part.",
     placeComponentSchema,
     placeComponentHandler,
   );
@@ -219,7 +217,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "get_component_pads",
-    "Return all pads of a PCB component with their exact positions, net assignments and sizes. Use this before routing to get accurate pad coordinates; pass pad to return just that one pad.",
+    "Return all pads of a component with exact positions, nets and sizes — use before routing; pass pad for just one.",
     {
       reference: z.string().describe("Reference designator of the component (e.g., 'U1')"),
       pad: z
@@ -371,13 +369,13 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "check_courtyard_overlaps",
-    "Detect courtyard overlaps between footprints, and optionally flag courtyards past the board outline. Accepts a `positions` dict of hypothetical placements to validate a proposed move/place before committing. Returns overlap pairs with intersection extents (mm) and per-component boundary violations.",
+    "Detect courtyard overlaps between footprints (read-only). Pass `positions` to validate hypothetical placements before committing. Returns overlap pairs with intersection extents (mm) and per-component boundary violations.",
     {
       positions: z
         .record(z.string(), z.array(z.number()).min(2).max(3))
         .optional()
         .describe(
-          "Virtual placements: map of reference designator to [x, y] or [x, y, rotation_degrees] in mm. Each listed ref is checked AS IF it were at the given coordinates. Unspecified refs use their current board position.",
+          "Map ref -> [x, y] or [x, y, rotation_deg] in mm; listed refs are checked AS IF there, others use their board position",
         ),
       refs: z
         .array(z.string())
@@ -387,12 +385,12 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .number()
         .optional()
         .describe(
-          "Extra clearance in mm added around every courtyard (default 0). Useful to enforce a manufacturing keepout wider than the symbol's declared courtyard.",
+          "Extra clearance in mm around every courtyard (default 0), e.g. a manufacturing keepout",
         ),
       include_boundary: z
         .boolean()
         .optional()
-        .describe("Also flag courtyards that extend past the board outline (default true)."),
+        .describe("Also flag courtyards past the board outline (default true)."),
       board_outline: z
         .object({
           x1: z.number(),
@@ -402,7 +400,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
           unit: z.enum(["mm", "inch"]).optional(),
         })
         .optional()
-        .describe("Optional board outline bbox override. Default: derived from Edge.Cuts."),
+        .describe("Board outline bbox override (default: derived from Edge.Cuts)."),
     },
     async (args) => {
       logger.debug(
@@ -450,11 +448,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // Auto-place components by connectivity
   server.tool(
     "auto_place_components",
-    "Auto-place components with a connectivity-driven greedy heuristic: strongly-connected parts cluster together, " +
-      "decoupling capacitors hug their IC, courtyards keep the given spacing, and positions snap to the grid. " +
-      "Power nets (GND/VCC/...) are ignored for affinity so they don't collapse the layout. Returns HPWL wirelength " +
-      "stats; use dryRun to preview placements without moving anything. A starting point for placement, not a finished " +
-      "layout — review with get_board_2d_view and refine with move_component.",
+    "Auto-place components with a connectivity-driven greedy heuristic: connected parts cluster, decoupling caps " +
+      "hug their IC, courtyards keep spacing, positions snap to grid; power nets ignored for affinity. Returns HPWL " +
+      "wirelength stats. A starting point, not a finished layout — review with get_board_2d_view and refine.",
     {
       components: z
         .array(z.string())

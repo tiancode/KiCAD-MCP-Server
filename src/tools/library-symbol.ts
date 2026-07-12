@@ -20,13 +20,13 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
   // rewrites that preserve mtime, manual cache invalidation).
   server.tool(
     "refresh_symbol_libraries",
-    "Force-rebuild the symbol library index from sym-lib-table on disk. Use after editing the global or project sym-lib-table (e.g. to fix the Flatpak default that points to a sandbox-only path) when the automatic mtime-based refresh hasn't picked up the change.",
+    "Force-rebuild the symbol library index from sym-lib-table on disk. Use after an external edit to the global or project table (e.g. fixing the Flatpak sandbox-only default path) when the automatic mtime-based refresh hasn't picked it up.",
     {
       projectPath: z
         .string()
         .optional()
         .describe(
-          "Optional: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path. Defaults to the currently-open project's directory.",
+          "Project dir or .kicad_pro/.kicad_pcb/.kicad_sch path (default: open project's dir)",
         ),
     },
     async (args: { projectPath?: string }) => {
@@ -65,7 +65,7 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
   // ``.kicad_sym`` on disk and rewrites the embedded copy.
   server.tool(
     "refresh_schematic_lib_symbols",
-    "Re-inject every embedded lib_symbols entry in a .kicad_sch from the on-disk .kicad_sym. Silences kicad-cli ERC lib_symbol_mismatch warnings from stale snapshots after a library upgrade or hand-edit. Returns refreshed/unchanged/missing lists by Library:Name. Unlike refresh_symbol_libraries (which only rebuilds the MCP index), this rewrites the schematic.",
+    "Re-inject every embedded lib_symbols entry in a .kicad_sch from the on-disk .kicad_sym, silencing kicad-cli ERC lib_symbol_mismatch warnings from stale snapshots. Returns refreshed/unchanged/missing lists. Unlike refresh_symbol_libraries (index only), this REWRITES the schematic.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file to refresh"),
     },

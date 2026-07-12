@@ -23,7 +23,7 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
   // ------------------------------------------------------
   server.tool(
     "design_rules",
-    "Read or update PCB design rules: call with no parameters to read the current rules; pass any parameter to update it. Rules cover clearance, track width, via/micro-via dimensions, minimums, hole diameter and courtyard requirements.",
+    "Read or update PCB design rules: no parameters reads current rules; any parameter updates it. Covers clearance, track width, via/micro-via sizes, minimums, hole diameter, courtyard.",
     {
       clearance: z.number().optional().describe("Minimum clearance between copper items (mm)"),
       trackWidth: z.number().optional().describe("Default track width (mm)"),
@@ -37,10 +37,7 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
       minMicroViaDiameter: z.number().optional().describe("Minimum micro via diameter (mm)"),
       minMicroViaDrill: z.number().optional().describe("Minimum micro via drill size (mm)"),
       minHoleDiameter: z.number().optional().describe("Minimum hole diameter (mm)"),
-      requireCourtyard: z
-        .boolean()
-        .optional()
-        .describe("Whether to require courtyards for all footprints"),
+      requireCourtyard: z.boolean().optional().describe("Require courtyards for all footprints"),
       courtyardClearance: z
         .number()
         .optional()
@@ -62,7 +59,7 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
   // ------------------------------------------------------
   server.tool(
     "run_drc",
-    "Run the KiCAD Design Rule Check (DRC) on the current PCB and return violations. Optionally save the report to a file.",
+    "Run KiCAD Design Rule Check (DRC) on the current PCB and return violations.",
     {
       reportPath: z.string().optional().describe("Optional path to save the DRC report"),
     },

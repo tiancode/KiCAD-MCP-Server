@@ -29,19 +29,17 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
     layer: z
       .string()
       .optional()
-      .describe(
-        "Layer name (default F.SilkS). Any KiCad layer works: F.Cu, B.Cu, F.SilkS, B.SilkS, F.Fab, B.Fab, F.CrtYd, B.CrtYd, Edge.Cuts, Cmts.User, Dwgs.User, User.1 … User.9.",
-      ),
+      .describe("Any KiCad layer name (default F.SilkS), e.g. F.Cu, F.Fab, Edge.Cuts, User.1."),
   };
 
   server.tool(
     "add_shape",
-    "Draw a graphic shape (no net) on any layer: segment, arc, circle, rectangle, or polygon. Required fields per kind: segment start+end; arc start+mid+end; circle center+radius; rectangle topLeft+bottomRight; polygon points (≥3, auto-closed). filled applies to circle/rectangle/polygon. For copper traces use route_trace (mid point for arcs). IPC-only.",
+    "Draw a graphic shape (no net) on any layer: segment, arc, circle, rectangle, or polygon. For copper traces use route_trace instead. IPC-only.",
     {
       kind: z
         .enum(["segment", "arc", "circle", "rectangle", "polygon"])
         .describe(
-          "Shape kind. Required fields: segment → start, end; arc → start, mid, end; circle → center, radius; rectangle → topLeft, bottomRight; polygon → points.",
+          "kind: required fields — segment: start,end; arc: start,mid,end; circle: center,radius; rectangle: topLeft,bottomRight; polygon: points",
         ),
       start: xySchema.optional().describe("Start point in mm (segment, arc)"),
       end: xySchema.optional().describe("End point in mm (segment, arc)"),
@@ -54,13 +52,11 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
         .array(xySchema)
         .min(3)
         .optional()
-        .describe("Polygon vertices in mm — minimum 3. Polygon is auto-closed."),
+        .describe("Polygon vertices in mm (min 3, auto-closed)"),
       filled: z
         .boolean()
         .optional()
-        .describe(
-          "Fill interior solid (default false — stroked outline only). Circle / rectangle / polygon only.",
-        ),
+        .describe("Fill solid (default false: stroked outline); circle/rectangle/polygon only"),
       ...commonStrokeFields,
     },
     async (
@@ -85,7 +81,7 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
 
   server.tool(
     "list_shapes",
-    "List graphic shapes on the board (id, kind, layer, width, filled, bounding box) with optional layer / kind / boundingBox filters. Use this to find shape ids for delete_shape / edit_shape. IPC-only.",
+    "List graphic shapes (id, kind, layer, width, filled, bbox) with optional layer/kind/boundingBox filters — source of ids for delete_shape/edit_shape. IPC-only.",
     {
       layer: z.string().optional().describe("Filter by layer name (e.g. F.SilkS)"),
       kind: kindSchema.optional(),
@@ -96,7 +92,7 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
 
   server.tool(
     "delete_shape",
-    "Delete graphic shape(s). Select by id/ids (from list_shapes) or by layer / kind / boundingBox filters; when filters match several shapes, pass all=true to delete every match (otherwise the call is refused with the candidate list). IPC-only.",
+    "Delete graphic shape(s) by id/ids (from list_shapes) or by layer/kind/boundingBox filters. IPC-only.",
     {
       id: z.string().optional().describe("Single shape id (from list_shapes)"),
       ids: z.array(z.string()).optional().describe("Multiple shape ids"),
@@ -106,7 +102,7 @@ export function registerShapesTools(server: McpServer, callKicadScript: CommandF
       all: z
         .boolean()
         .optional()
-        .describe("Delete every filter match (default false: refuse on multiple)"),
+        .describe("Delete every filter match (default false: refused with the candidate list)"),
     },
     passthrough("delete_shape"),
   );

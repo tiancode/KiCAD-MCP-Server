@@ -27,17 +27,15 @@ import { CommandFunction, formatKicadResult } from "./tool-response.js";
 export function registerTransactionTools(server: McpServer, callKicadScript: CommandFunction) {
   server.tool(
     "transaction",
-    "Manage a KiCad transaction / undo group (IPC-only). 'begin' opens one so subsequent mutating calls collapse into a single undo step (no nesting — commit/rollback the open one first); 'commit' lands it atomically; 'rollback' discards all changes since begin; 'status' reports the open transaction. begin/commit take an optional `description` label.",
+    "Manage a KiCad transaction / undo group (IPC-only). 'begin' opens one so subsequent mutating calls collapse into a single undo step (no nesting); 'commit' lands it atomically; 'rollback' discards all changes since begin; 'status' reports the open transaction.",
     {
       action: z
         .enum(["begin", "commit", "rollback", "status"])
-        .describe("Transaction operation: begin | commit | rollback | status."),
+        .describe("begin | commit | rollback | status"),
       description: z
         .string()
         .optional()
-        .describe(
-          "Undo-history label. On 'begin' sets the label (default 'MCP Operation'); on 'commit' overrides the begin label. Ignored by 'rollback'/'status'.",
-        ),
+        .describe("Undo label: 'begin' sets it (default 'MCP Operation'); 'commit' overrides it"),
     },
     async (args: { action: "begin" | "commit" | "rollback" | "status"; description?: string }) => {
       const commandByAction = {

@@ -11,22 +11,18 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Create project tool
   server.tool(
     "create_project",
-    "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (unlocks realtime sync + transactions). Pass autoLaunch=false to skip.",
+    "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips. Refuses (errorCode PROJECT_EXISTS) if project files already exist unless overwrite=true.",
     {
       path: z.string().describe("Project directory path"),
       name: z.string().describe("Project name"),
       autoLaunch: z
         .boolean()
         .optional()
-        .describe(
-          "Launch the KiCAD UI for this project after creation so the IPC backend can attach. Defaults to true. Set false for headless / CI runs.",
-        ),
+        .describe("Launch KiCAD UI after creation (default true; false for headless/CI)"),
       overwrite: z
         .boolean()
         .optional()
-        .describe(
-          "Replace an existing project at this path. Defaults to false: if the target .kicad_pro/.kicad_pcb/.kicad_sch already exist, the tool refuses (errorCode PROJECT_EXISTS) instead of clobbering them. Set true only when you intend to overwrite.",
-        ),
+        .describe("Replace existing .kicad_pro/.kicad_pcb/.kicad_sch (default false: refuse)"),
     },
     passthrough("create_project"),
   );
@@ -34,15 +30,13 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Open project tool
   server.tool(
     "open_project",
-    "Open an existing KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (unlocks realtime sync + transactions). Pass autoLaunch=false to skip.",
+    "Open an existing KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips.",
     {
       filename: z.string().describe("Path to .kicad_pro or .kicad_pcb file"),
       autoLaunch: z
         .boolean()
         .optional()
-        .describe(
-          "Launch the KiCAD UI for this project after opening so the IPC backend can attach. Defaults to true. Set false for headless / CI runs.",
-        ),
+        .describe("Launch KiCAD UI after opening (default true; false for headless/CI)"),
     },
     passthrough("open_project"),
   );
@@ -71,18 +65,14 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Snapshot project tool — saves a named checkpoint as PDF/image
   server.tool(
     "snapshot_project",
-    "Save a named checkpoint snapshot of the current project state (renders board to PDF and records step label). Call after completing each major step — e.g. after Step 1 (schematic_ok) and Step 2 (layout_ok). Required by the demo workflow before waiting for user confirmation.",
+    "Save a named checkpoint snapshot of the project (renders board to PDF, records step label). Call after each major step; required by the demo workflow before waiting for user confirmation.",
     {
-      step: z.string().describe("Step number or identifier, e.g. '1' or '2'"),
-      label: z
-        .string()
-        .describe("Short label for this checkpoint, e.g. 'schematic_ok' or 'layout_ok'"),
+      step: z.string().describe("Step number or identifier, e.g. '1'"),
+      label: z.string().describe("Short checkpoint label, e.g. 'schematic_ok'"),
       prompt: z
         .string()
         .optional()
-        .describe(
-          "Full prompt text to save as PROMPT_step{step}_{timestamp}.md alongside the snapshot",
-        ),
+        .describe("Prompt text saved as PROMPT_step{step}_{timestamp}.md alongside the snapshot"),
     },
     passthrough("snapshot_project"),
   );

@@ -11,7 +11,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Draw wire between coordinate waypoints with optional pin snapping
   server.tool(
     "add_schematic_wire",
-    "Draw a wire between two or more points. Call get_schematic_pin_locations first for pin coordinates, then pass them as the first/last waypoints. snapToPins (default on) snaps endpoints to the nearest exact pin coordinate. Add intermediate waypoints to route around parts, e.g. [[x1,y1],[xMid,y1],[xMid,y2],[x2,y2]] goes horizontal then vertical; intermediate waypoints are never snapped.",
+    "Draw a wire through 2+ waypoints. Get pin coordinates from get_schematic_pin_locations and use them as first/last waypoints. snapToPins (default on) snaps only endpoints to the nearest exact pin; intermediate waypoints route around parts (e.g. [[x1,y1],[xMid,y1],[xMid,y2],[x2,y2]]) and are never snapped.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       waypoints: z
@@ -58,10 +58,8 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   server.tool(
     "add_schematic_net_label",
     "Add a net label. KiCad connects a label to a pin ONLY at the exact pin endpoint (0.01 mm off breaks it). " +
-      "Modes: (1) PREFERRED componentRef + pinNumber — snaps to the pin; " +
-      "(2) position [x, y] — auto-snaps to any pin within snapTolerance mm (default 0.05); " +
-      "(3) snapTolerance: 0 — no snapping (labels between pins). " +
-      "Response reports connected_to_pin = {ref, pin} | null; auto-snap adds snapped_to_pin.",
+      "Prefer componentRef + pinNumber (snaps to the pin); or position [x, y], auto-snapped to a pin " +
+      "within snapTolerance. Response reports connected_to_pin = {ref, pin} | null.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
@@ -90,9 +88,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       snapTolerance: z
         .number()
         .optional()
-        .describe(
-          "Auto-snap radius in mm when a raw position is given (default 0.05 — only catches float near-misses). Pass 0 to disable.",
-        ),
+        .describe("Auto-snap radius in mm for raw positions (default 0.05). 0 disables snapping."),
     },
     async (args: {
       schematicPath: string;
@@ -125,8 +121,8 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // delete_no_connect. Dispatches to the original python commands.
   server.tool(
     "set_no_connect",
-    "Add a no-connect flag (X marker) to a pin intentionally left unconnected, suppressing ERC 'Pin not connected' errors — or pass remove=true to delete an existing flag. " +
-      "PREFERRED: supply componentRef + pinNumber to snap to the exact pin endpoint; alternatively supply position [x, y] in mm matching the pin endpoint exactly.",
+    "Add a no-connect flag (X) to an intentionally unconnected pin, suppressing ERC 'Pin not connected' errors; remove=true deletes an existing flag. " +
+      "Prefer componentRef + pinNumber; a raw position [x, y] (mm) must match the pin endpoint exactly.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       position: z
@@ -168,9 +164,8 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Connect pin to net
   server.tool(
     "connect_to_net",
-    "Connect a component pin to a named net by adding a wire stub and net label at the exact pin endpoint. " +
-      "The response includes pin_location (exact pin coords), label_location (where the label was placed), " +
-      "and wire_stub (the wire segment added) so you can confirm the placement.",
+    "Connect a component pin to a named net via a wire stub and net label at the exact pin endpoint. " +
+      "Response includes pin_location, label_location, and wire_stub to confirm placement.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       componentRef: z.string().describe("Component reference (e.g., U1, R1)"),
@@ -239,9 +234,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Get wire connections
   server.tool(
     "get_wire_connections",
-    "Return the net name plus all wires and pins connected at a point, given reference + pin OR x/y in mm. " +
-      "net=null means an unnamed net. The point must be a wire endpoint or junction (midpoints don't match) — " +
-      "get exact coordinates from get_schematic_pin_locations or list_schematic_items (kind=wires).",
+    "Return the net name plus all wires and pins connected at a point (reference + pin, OR x/y in mm). " +
+      "net=null means unnamed. The point must be an exact wire endpoint or junction (midpoints don't match) — " +
+      "get coordinates from get_schematic_pin_locations.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       reference: z
@@ -300,7 +295,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Get pin locations for a schematic component
   server.tool(
     "get_schematic_pin_locations",
-    "Returns the exact x/y coordinates of every pin on a schematic component. Use this before add_schematic_net_label to place labels correctly on pin endpoints.",
+    "Return the exact x/y coordinates of every pin on a schematic component. Use before add_schematic_net_label or add_schematic_wire.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       reference: z.string().describe("Component reference designator (e.g. U1, R1, J2)"),
@@ -340,7 +335,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Connect all pins of source connector to matching pins of target connector (passthrough)
   server.tool(
     "connect_passthrough",
-    "Connects all pins of a source connector (e.g. J1) to matching pins of a target connector (e.g. J2) via shared net labels — pin N gets net '{netPrefix}_{N}'. Use this for FFC/ribbon cable passthrough adapters instead of calling connect_to_net for every pin.",
+    "Connect all pins of a source connector to matching pins of a target connector via shared net labels — pin N gets net '{netPrefix}_{N}'. For FFC/ribbon passthrough adapters, instead of per-pin connect_to_net.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       sourceRef: z.string().describe("Source connector reference (e.g. J1)"),
@@ -436,7 +431,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
 
   server.tool(
     "edit_schematic_net_label",
-    "Edit, move, or delete an existing net label. action='edit' changes type (label <-> global_label <-> hierarchical_label) and/or text in place (pass newLabelType and/or newName); action='move' repositions it (pass newPosition); action='delete' removes it. Disambiguate duplicates with currentPosition (edit/move), position (delete), or labelType (edit/move).",
+    "Edit, move, or delete an existing net label. edit: change type and/or text (newLabelType/newName); move: reposition (newPosition); delete: remove. Disambiguate duplicate names with currentPosition (edit/move), position (delete), or labelType.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       action: z
@@ -447,12 +442,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         .enum(["label", "global_label", "hierarchical_label"])
         .optional()
         .describe(
-          "Only for action='edit': new label type. 'label' = page-local, 'global_label' = cross-page, 'hierarchical_label' = sheet boundary. Omit to keep the current type (rename only).",
+          "edit only: new type — label=page-local, global_label=cross-page, hierarchical_label=sheet boundary. Omit to keep.",
         ),
-      newName: z
-        .string()
-        .optional()
-        .describe("Only for action='edit': new label text. Omit to keep the current text."),
+      newName: z.string().optional().describe("edit only: new label text. Omit to keep."),
       newPosition: z
         .object({ x: z.number(), y: z.number() })
         .optional()
@@ -460,19 +452,15 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       currentPosition: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe(
-          "For action='edit'/'move': current position to disambiguate when multiple labels share the same name.",
-        ),
+        .describe("edit/move: current position, to disambiguate same-named labels."),
       position: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe(
-          "For action='delete': position to disambiguate when multiple labels share the same name.",
-        ),
+        .describe("delete: position, to disambiguate same-named labels."),
       labelType: z
         .enum(["label", "global_label", "hierarchical_label"])
         .optional()
-        .describe("For action='edit'/'move': restrict the search to a specific label type."),
+        .describe("edit/move: restrict the search to a specific label type."),
     },
     async (args: {
       schematicPath: string;
@@ -493,13 +481,11 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
   // Add hierarchical label to a sub-sheet
   server.tool(
     "add_schematic_hierarchical_label",
-    "Add a hierarchical label (sheet interface port) to a sub-sheet schematic. " +
-      "Hierarchical labels are the connection points that link a sub-sheet to its " +
-      "parent via sheet pins. The label text must exactly match the corresponding " +
-      "sheet pin name.",
+    "Add a hierarchical label (sheet interface port) to a sub-sheet schematic; it links " +
+      "the sub-sheet to its parent via a sheet pin whose name must exactly match the label text.",
     {
       schematicPath: z.string().describe("Path to the sub-sheet .kicad_sch file"),
-      text: z.string().describe("Label text (e.g. 'SD_CLK') — must match the sheet pin name"),
+      text: z.string().describe("Label text (e.g. 'SD_CLK')"),
       position: z.array(z.number()).length(2).describe("Position [x, y] in mm"),
       shape: z
         .enum(["input", "output", "bidirectional"])

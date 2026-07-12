@@ -13,17 +13,16 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
   // ── enrich_datasheets ──────────────────────────────────────────────────────
   server.tool(
     "enrich_datasheets",
-    "Fill in missing Datasheet URLs from LCSC part numbers: every symbol with an LCSC property and an empty/'~' " +
-      "Datasheet field gets https://www.lcsc.com/datasheet/<LCSC>.pdf (constructed directly, no network/API key). " +
-      "dry_run=true previews without writing. For a single part's datasheet URL, use get_jlcpcb_part (its " +
-      "'Datasheet' field) instead.",
+    "Fill in missing Datasheet URLs: every symbol with an LCSC property and an empty/'~' Datasheet field gets " +
+      "https://www.lcsc.com/datasheet/<LCSC>.pdf (constructed, no network). For a single part's URL use " +
+      "get_jlcpcb_part instead.",
     {
       schematic_path: z.string().describe("Path to the .kicad_sch file to enrich"),
       dry_run: z
         .boolean()
         .optional()
         .default(false)
-        .describe("If true, show what would be changed without writing to disk (default: false)"),
+        .describe("Preview changes without writing to disk"),
     },
     async (args: { schematic_path: string; dry_run?: boolean }) => {
       const result = await callKicadScript("enrich_datasheets", args);

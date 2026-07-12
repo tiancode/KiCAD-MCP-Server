@@ -28,9 +28,7 @@ const PadSize = z.object({
 
 const PadSchema = z.object({
   number: z.string().describe("Pad number / name, e.g. '1', '2', 'A1'"),
-  type: z
-    .enum(["smd", "thru_hole", "np_thru_hole"])
-    .describe("Pad type: smd | thru_hole | np_thru_hole"),
+  type: z.enum(["smd", "thru_hole", "np_thru_hole"]).describe("Pad type"),
   shape: z
     .enum(["rect", "circle", "oval", "roundrect"])
     .optional()
@@ -47,13 +45,13 @@ const PadSchema = z.object({
   layers: z
     .array(z.string())
     .optional()
-    .describe("Override default layer list, e.g. ['F.Cu','F.Paste','F.Mask']"),
+    .describe("Override default layers, e.g. ['F.Cu','F.Paste','F.Mask']"),
   roundrect_ratio: z
     .number()
     .min(0)
     .max(0.5)
     .optional()
-    .describe("Corner radius ratio for roundrect shape (0.0–0.5, default 0.25)"),
+    .describe("Roundrect corner radius ratio (default 0.25)"),
 });
 
 const RectSchema = z.object({
@@ -76,19 +74,16 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
     {
       libraryPath: z
         .string()
-        .describe(
-          "Path to the .pretty library directory (created if missing). " +
-            "E.g. C:/MyProject/MyLib.pretty",
-        ),
+        .describe("Path to the .pretty library directory (created if missing)"),
       name: z.string().describe("Footprint name, e.g. 'R_0603_Custom'"),
       description: z.string().optional().describe("Human-readable description"),
-      tags: z.string().optional().describe("Space-separated tag string, e.g. 'resistor SMD 0603'"),
+      tags: z.string().optional().describe("Space-separated tags"),
       pads: z
         .array(PadSchema)
         .optional()
-        .describe("List of pads to add (can be empty for outlines-only footprints)"),
+        .describe("Pads to add (empty for outlines-only footprints)"),
       courtyard: RectSchema.optional().describe(
-        "Courtyard rectangle on F.CrtYd (recommended: 0.25 mm clearance around pads)",
+        "Courtyard rect on F.CrtYd (recommend 0.25 mm clearance around pads)",
       ),
       silkscreen: RectSchema.optional().describe("Silkscreen rectangle on F.SilkS"),
       fabLayer: RectSchema.optional().describe(
@@ -97,15 +92,12 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
       refPosition: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe("Position of the REF** text (default: 0, -1.27)"),
+        .describe("REF** text position (default 0, -1.27)"),
       valuePosition: z
         .object({ x: z.number(), y: z.number() })
         .optional()
-        .describe("Position of the Value text (default: 0, 1.27)"),
-      overwrite: z
-        .boolean()
-        .optional()
-        .describe("Replace existing footprint file (default: false)"),
+        .describe("Value text position (default 0, 1.27)"),
+      overwrite: z.boolean().optional().describe("Replace existing footprint file (default false)"),
     },
     passthrough("create_footprint"),
   );
@@ -113,12 +105,9 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
   // ── edit_footprint_pad ────────────────────────────────────────────────── //
   server.tool(
     "edit_footprint_pad",
-    "Edit an existing pad inside a .kicad_mod footprint file. " +
-      "Updates size, position, drill, or shape without recreating the whole footprint.",
+    "Edit one pad in a .kicad_mod footprint file (size/position/drill/shape) without recreating the footprint.",
     {
-      footprintPath: z
-        .string()
-        .describe("Full path to the .kicad_mod file, e.g. C:/MyLib.pretty/R_Custom.kicad_mod"),
+      footprintPath: z.string().describe("Full path to the .kicad_mod file"),
       padNumber: z.union([z.string(), z.number()]).describe("Pad number to edit, e.g. '1' or 2"),
       size: PadSize.optional().describe("New pad size in mm"),
       at: PadPosition.optional().describe("New pad position in mm"),
@@ -137,14 +126,12 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
   // ── list_footprint_libraries ─────────────────────────────────────────── //
   server.tool(
     "list_footprint_libraries",
-    "Discover FOOTPRINT libraries by SCANNING THE FILESYSTEM for .pretty directories, with a preview of the first 20 footprints in each. Use when libraries may not be registered in the fp-lib-table; for registered library names only use list_libraries (type=footprint), and for the full contents of ONE library use list_library_contents (type=footprint).",
+    "Scan the filesystem for .pretty footprint libraries (previews first 20 footprints each). Use when libraries may be missing from the fp-lib-table; for registered names use list_libraries (type=footprint), for one library's full contents use list_library_contents (type=footprint).",
     {
       searchPaths: z
         .array(z.string())
         .optional()
-        .describe(
-          "Override default search paths. Each entry should be a directory that contains .pretty subdirs.",
-        ),
+        .describe("Override default search paths (dirs containing .pretty subdirs)"),
     },
     passthrough("list_footprint_libraries"),
   );

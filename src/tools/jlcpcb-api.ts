@@ -14,9 +14,7 @@ export function registerJLCPCBApiTools(server: McpServer, callKicadScript: Comma
     "download_jlcpcb_database",
     `Populate the local JLCPCB parts DB (used by search_jlcpcb_parts) via the public JLCSearch API (tscircuit) — no credentials.
 
-This path is paginated (100 parts/request -> ~2.5M parts, ~40-60 min) and leaves category/manufacturer BLANK in the DB. RECOMMENDED INSTEAD: run scripts/download_jlcpcb.py, which pulls the prebuilt jlcparts dataset (~7.15M parts, with category/manufacturer and tiered pricing populated) in ~5 min.
-
-An existing non-empty DB is kept; pass force=true to re-download.`,
+This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMENDED INSTEAD: scripts/download_jlcpcb.py (jlcparts dataset, ~7.15M parts with category/manufacturer/pricing, ~5 min). An existing non-empty DB is kept.`,
     {
       force: z
         .boolean()
@@ -59,37 +57,19 @@ An existing non-empty DB is kept; pass force=true to re-download.`,
   // Search JLCPCB parts
   server.tool(
     "search_jlcpcb_parts",
-    `Search the local JLCPCB parts catalog (download_jlcpcb_database first). Returns real pricing, stock, and library type (Basic/Preferred = free or low assembly fee).
-
-MATCHING — read this, it changes how you should call the tool:
-- BEST: if you have a candidate manufacturer part number, pass it as 'mpn'. It does an exact (then prefix) lookup and is by far the most reliable path. Prefer searching by a few candidate MPNs over describing the part.
-- 'query' is full-text over description + MPN. Value/unit words now match safely ('4.7uF', '0.5A', '510kΩ'). Multiple words must ALL appear in the text (AND); a synonym/format mismatch ('buck' vs 'Step-Down', '0.5A' vs '500mA', 'µH' vs 'uH') can still drop the result. If nothing matches it auto-retries OR-style and flags the result as fuzzy.
-- Put package in the 'package' filter, NOT in 'query'.
-- 'category'/'manufacturer' are populated and filter correctly when the DB was built from the jlcparts dataset (scripts/download_jlcpcb.py). They are blank only with the older JLCSearch download, in which case the tool detects that, folds the value into the text search, and returns a warning. Check for a warning instead of assuming they don't work.
-- in_stock defaults true. A zero in-stock result auto-retries without the stock filter; if matches exist they are returned with out_of_stock_only=true. So an empty result now reliably means "not in this catalog" rather than "just out of stock" — distrust 'not found' less.
-
-COST — JLCPCB assembly economics, apply unless the user says otherwise:
-- Prefer Basic, then Preferred, then Extended. Basic parts have no per-part setup fee; Extended parts add a ~$3 one-time fee per unique part number; Preferred are extended parts JLCPCB keeps stocked (better availability, lower/often-waived fee).
-- Basic is a SMALL set (~350 parts total), so a Basic-only search returns nothing for most ICs. Strategy: try library_type='Basic', then 'Preferred', then fall back to 'All'/'Extended' — never conclude "no such part" from a Basic-only miss. There is no combined Basic+Preferred filter, so that is two calls.`,
+    `Search the local JLCPCB catalog (download_jlcpcb_database first). 'query' is AND full-text over description+MPN; synonym/format mismatches can miss — a no-match auto-retries OR-style, flagged fuzzy. category/manufacturer only work with the jlcparts-built DB (scripts/download_jlcpcb.py); with the older JLCSearch DB they fold into text search — check the returned warning. Zero-stock results auto-retry without the stock filter (flagged out_of_stock_only), so empty = not in the catalog. Cost Basic < Preferred < Extended (Basic: no setup fee, ~350 parts; Extended: ~$3/unique part; Preferred: stocked Extended) — try Basic → Preferred → All (no combined Basic+Preferred; two calls); never conclude absence from a Basic-only miss.`,
     {
       query: z
         .string()
         .optional()
-        .describe(
-          "Free-text over description + MPN. All words must match (AND). Best with a candidate MPN; for package use the 'package' filter.",
-        ),
+        .describe("Free-text search; put package in the 'package' filter, not here."),
       mpn: z
         .string()
         .optional()
         .describe(
-          "Manufacturer part number for an exact→prefix lookup (e.g. 'TPS54331DR'). Most reliable; case-insensitive. Takes priority over 'query'.",
+          "MPN exact→prefix lookup — most reliable path; prefer candidate MPNs over free-text. Overrides 'query'.",
         ),
-      category: z
-        .string()
-        .optional()
-        .describe(
-          "Category filter (e.g. 'Resistors'). Works when the DB was built from jlcparts (scripts/download_jlcpcb.py); blank only with the older JLCSearch DB, where it's folded into text search and a warning is returned.",
-        ),
+      category: z.string().optional().describe("Category filter (e.g. 'Resistors')"),
       package: z
         .string()
         .optional()
@@ -98,15 +78,8 @@ COST — JLCPCB assembly economics, apply unless the user says otherwise:
         .enum(["Basic", "Extended", "Preferred", "All"])
         .optional()
         .default("All")
-        .describe(
-          "Filter by library type. Cost order Basic < Preferred < Extended (Basic has no setup fee; Extended adds ~$3 per unique part). Basic is a small set (~350) — try Basic, then Preferred, then All; don't infer 'no part' from a Basic-only miss.",
-        ),
-      manufacturer: z
-        .string()
-        .optional()
-        .describe(
-          "Manufacturer filter (e.g. 'Sunlord'). Works when the DB was built from jlcparts; blank only with the older JLCSearch DB, where it's folded into text search and a warning is returned.",
-        ),
+        .describe("Filter by library type (see cost notes in tool description)"),
+      manufacturer: z.string().optional().describe("Manufacturer filter (e.g. 'Sunlord')"),
       in_stock: z
         .boolean()
         .optional()
@@ -243,17 +216,15 @@ COST — JLCPCB assembly economics, apply unless the user says otherwise:
   // Download a part's datasheet PDF
   server.tool(
     "download_jlcpcb_datasheet",
-    `Download a JLCPCB/LCSC part's datasheet PDF to disk by LCSC number.
-
-Resolves the URL from the local database's stored JLCPCB CDN link (present for ~87% of parts after download_jlcpcb_database) and falls back to the constructed LCSC URL (https://www.lcsc.com/datasheet/<lcsc>.pdf) when no stored link exists. The file is verified to be a real PDF (%PDF magic) before it is kept.
-
-Saves to <output_dir>/<lcsc>.pdf (default: the kicad-mcp data dir's datasheets/ folder). Idempotent: an existing non-empty file is returned as-is unless overwrite=true. Requires network access; returns the saved path, source URL, size in bytes, and source (db | lcsc_fallback | cached).`,
+    `Download a JLCPCB/LCSC part's datasheet PDF by LCSC number to <output_dir>/<lcsc>.pdf. Uses the local DB's stored CDN link, falling back to https://www.lcsc.com/datasheet/<lcsc>.pdf; verified to be a real PDF before keeping. Requires network. Returns saved path, source URL, bytes, and source (db | lcsc_fallback | cached).`,
     {
       lcsc_number: z.string().describe("LCSC part number (e.g., 'C25804', 'C2286')"),
       output_dir: z
         .string()
         .optional()
-        .describe("Directory to save the PDF into (created if missing). Defaults to the data dir."),
+        .describe(
+          "Directory for the PDF (created if missing). Default: data dir's datasheets/ folder.",
+        ),
       overwrite: z
         .boolean()
         .optional()
@@ -337,10 +308,7 @@ Saves to <output_dir>/<lcsc>.pdf (default: the kicad-mcp data dir's datasheets/ 
   // Suggest alternative parts
   server.tool(
     "suggest_jlcpcb_alternatives",
-    `Suggest alternative JLCPCB parts for a given component.
-
-Finds similar parts that may be cheaper, have more stock, or are Basic library type.
-Useful for cost optimization and finding alternatives when parts are out of stock.`,
+    "Suggest similar JLCPCB parts that may be cheaper, better stocked, or Basic library type — for cost optimization or out-of-stock parts.",
     {
       lcsc_number: z.string().describe("Reference LCSC part number to find alternatives for"),
       limit: z.number().optional().default(5).describe("Maximum number of alternatives to return"),
@@ -397,12 +365,12 @@ Useful for cost optimization and finding alternatives when parts are out of stoc
   // Import LCSC/JLCPCB parts as placeable KiCAD symbols + footprints
   server.tool(
     "import_jlcpcb_symbols",
-    `Generate real KiCAD symbols + footprints for one or more LCSC parts (e.g. "C7593") via easyeda2kicad, cached in the shared "easyeda" library. Pre-cache a whole BOM in one call: cached parts are skipped, one bad id never aborts the rest. Then place with add_schematic_component(library="easyeda", componentName=<symbol from the response>). Needs easyeda2kicad + network.`,
+    `Generate KiCAD symbols + footprints for LCSC parts via easyeda2kicad into the shared "easyeda" cache library. Batch a whole BOM: cached parts are skipped, one bad id never aborts the rest. Then place with add_schematic_component(library="easyeda", componentName=<from response>). Needs easyeda2kicad + network.`,
     {
       lcscNumbers: z
         .array(z.string())
         .min(1)
-        .describe('LCSC part numbers, e.g. ["C7593", "C12087"] — a single-element array is fine'),
+        .describe('LCSC part numbers, e.g. ["C7593"] — single-element array is fine'),
       forceRefresh: z
         .boolean()
         .optional()
@@ -430,19 +398,15 @@ Useful for cost optimization and finding alternatives when parts are out of stoc
   // BOM availability check against the local JLCPCB catalog
   server.tool(
     "check_bom_availability",
-    "Check every BOM line of the loaded board against the local JLCPCB parts catalog: groups footprints by " +
-      "value+footprint, matches each line by its LCSC field (exact) or by value+package search, and reports stock, " +
-      "unit price at the required quantity, and estimated cost per board. Requires the local database — run " +
-      "download_jlcpcb_database first. Lines with status not_found / low_stock / out_of_stock need sourcing attention " +
-      "before ordering.",
+    "Check each BOM line of the loaded board against the local JLCPCB catalog (download_jlcpcb_database first): " +
+      "groups by value+footprint, matches by LCSC field (exact) or value+package search, reports stock, unit price " +
+      "at quantity, and cost per board. not_found / low_stock / out_of_stock lines need sourcing attention.",
     {
       boardQty: z
         .number()
         .int()
         .optional()
-        .describe(
-          "How many boards you plan to order (default 1) — drives price breaks and stock sufficiency",
-        ),
+        .describe("Boards to order (default 1) — drives price breaks and stock sufficiency"),
     },
     passthrough("check_bom_availability"),
   );

@@ -19,26 +19,24 @@ import { CommandFunction, formatKicadResult } from "./tool-response.js";
 
 const typeParam = z
   .enum(["footprint", "symbol"])
-  .describe(
-    "Which library kind to operate on: footprint (fp-lib-table / .pretty) or symbol (sym-lib-table / .kicad_sym)",
-  );
+  .describe("footprint (fp-lib-table / .pretty) or symbol (sym-lib-table / .kicad_sym)");
 
 export function registerLibraryTools(server: McpServer, callKicadScript: CommandFunction) {
   // ── list_libraries ────────────────────────────────────────────────────── //
   server.tool(
     "list_libraries",
-    "List the NAMES (nicknames) of installed libraries. type=footprint reads the fp-lib-table; type=symbol reads the global sym-lib-table, plus the project's when projectPath is supplied or a project is open. Names only — to see the parts INSIDE one library use list_library_contents; to discover unregistered .pretty dirs on disk use list_footprint_libraries.",
+    "List the nicknames of installed libraries: fp-lib-table (footprint) or global sym-lib-table plus the project's when projectPath is given or a project is open (symbol). Names only — use list_library_contents to see the parts inside one.",
     {
       type: typeParam,
       search_paths: z
         .array(z.string())
         .optional()
-        .describe("footprint only: optional additional search paths for libraries"),
+        .describe("footprint only: extra library search paths"),
       projectPath: z
         .string()
         .optional()
         .describe(
-          "symbol only: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path. Including this exposes project-scope sym-lib-table libraries.",
+          "symbol only: project dir or .kicad_pro/.kicad_pcb/.kicad_sch path to include project-scope libraries",
         ),
     },
     async (args: {
@@ -55,29 +53,26 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
   // ── search_library_parts ──────────────────────────────────────────────── //
   server.tool(
     "search_library_parts",
-    "Search for parts in local KiCAD libraries. type=footprint: pattern-match footprint names. type=symbol: match by name, LCSC ID, description, manufacturer, MPN or category; query may be plain ('ESP32', 'C8734') or 'Library:Name' to restrict to libraries whose nickname contains 'Library' (e.g. 'Device:LED'); exact-name matches rank above description-substring matches; returns symbol refs usable directly in schematics.",
+    "Search parts in local KiCAD libraries. footprint: pattern-match footprint names. symbol: matches name, LCSC ID, description, manufacturer, MPN or category; exact-name matches rank above description matches; returns symbol refs usable directly in schematics.",
     {
       type: typeParam,
       query: z
         .string()
         .describe(
-          "Search term or pattern. footprint: matched against footprint names. symbol: plain ('ESP32', 'C8734') or library-qualified ('Device:LED', 'Device:R').",
+          "footprint: name pattern. symbol: plain ('ESP32', 'C8734') or 'Library:Name' where Library is a nickname substring (e.g. 'Device:LED').",
         ),
       library: z
         .string()
         .optional()
         .describe(
-          "Optional: restrict to a specific library (name pattern). symbol: takes precedence over an inline 'Library:' prefix in the query.",
+          "Restrict to a library (name pattern); symbol: overrides an inline 'Library:' prefix",
         ),
-      limit: z
-        .number()
-        .optional()
-        .describe("Maximum number of results to return (default: 50 footprint, 20 symbol)"),
+      limit: z.number().optional().describe("Max results (default: 50 footprint, 20 symbol)"),
       projectPath: z
         .string()
         .optional()
         .describe(
-          "symbol only: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path so project-scope sym-lib-table libraries are searched too.",
+          "symbol only: project dir or .kicad_pro/.kicad_pcb/.kicad_sch path to search project-scope libraries too",
         ),
     },
     async (args: {
@@ -111,21 +106,18 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
   // ── list_library_contents ─────────────────────────────────────────────── //
   server.tool(
     "list_library_contents",
-    "List the parts contained in ONE library identified by its NICKNAME (e.g. footprint 'Resistor_SMD', symbol 'Device'), resolved via the fp-lib-table / global+project sym-lib-table. To list the libraries themselves use list_libraries; if you have a .kicad_sym FILE PATH rather than a nickname, use list_symbols_in_library.",
+    "List the parts inside ONE library identified by its NICKNAME, resolved via the fp-lib-table / global+project sym-lib-table. If you have a .kicad_sym FILE PATH rather than a nickname, use list_symbols_in_library instead.",
     {
       type: typeParam,
       library: z
         .string()
         .describe("Library nickname (e.g. 'Resistor_SMD' for footprints, 'Device' for symbols)"),
-      filter: z
-        .string()
-        .optional()
-        .describe("footprint only: optional filter pattern for footprint names"),
+      filter: z.string().optional().describe("footprint only: filter pattern for names"),
       projectPath: z
         .string()
         .optional()
         .describe(
-          "symbol only: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path to resolve project-scope libraries.",
+          "symbol only: project dir or .kicad_pro/.kicad_pcb/.kicad_sch path to resolve project-scope libraries",
         ),
       ...paginationParams,
     },
@@ -157,7 +149,7 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
   // ── get_library_part_info ─────────────────────────────────────────────── //
   server.tool(
     "get_library_part_info",
-    "Get details for one library part. type=footprint: description, keywords, pads (number/type/shape), layers, courtyard size, attributes. type=symbol: properties (value, LCSC, manufacturer, MPN, footprint, datasheet) plus the pin list in the symbol's local frame (.pins[] number/name/x/y/angle/length/type) and pin bounding box — lets you plan placement coordinates before add_schematic_component without a round-trip through get_schematic_pin_locations.",
+    "Get details for one library part. footprint: description, keywords, pads, layers, courtyard size, attributes. symbol: properties (value, LCSC, MPN, footprint, datasheet) plus the pin list in the symbol's local frame and pin bounding box — enough to plan placement before add_schematic_component.",
     {
       type: typeParam,
       library: z
@@ -170,7 +162,7 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
         .string()
         .optional()
         .describe(
-          "symbol only: project directory or .kicad_pro/.kicad_pcb/.kicad_sch path so project-scope libraries are searched.",
+          "symbol only: project dir or .kicad_pro/.kicad_pcb/.kicad_sch path to search project-scope libraries",
         ),
     },
     async (args: {
@@ -197,32 +189,28 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
   // ── register_library ──────────────────────────────────────────────────── //
   server.tool(
     "register_library",
-    "Register a library in KiCAD's library table so its parts can be found: type=footprint adds a .pretty directory to the fp-lib-table, type=symbol adds a .kicad_sym file to the sym-lib-table. Run this after create_footprint / create_symbol when KiCAD shows 'library not found'.",
+    "Register a library in KiCAD's library table: footprint adds a .pretty directory to fp-lib-table, symbol adds a .kicad_sym file to sym-lib-table. Run after create_footprint / create_symbol when KiCAD shows 'library not found'.",
     {
       type: typeParam,
       libraryPath: z
         .string()
-        .describe(
-          "Full path to the library: a .pretty directory (footprint) or a .kicad_sym file (symbol)",
-        ),
+        .describe("Full path to the .pretty directory (footprint) or .kicad_sym file (symbol)"),
       libraryName: z
         .string()
         .optional()
-        .describe(
-          "Nickname for the library in KiCAD (default: file/directory name without extension)",
-        ),
+        .describe("Nickname in KiCAD (default: file/directory name without extension)"),
       description: z.string().optional().describe("Optional description"),
       scope: z
         .enum(["project", "global"])
         .optional()
         .describe(
-          "project = writes the lib table next to the .kicad_pro file (default); global = writes to the user's global KiCAD config",
+          "project (default) = lib table next to the .kicad_pro; global = user's KiCAD config",
         ),
       projectPath: z
         .string()
         .optional()
         .describe(
-          "Path to the .kicad_pro file or its directory (required for scope=project when the library is not in the project folder)",
+          "Path to .kicad_pro or its dir (required for scope=project when the library is outside the project folder)",
         ),
     },
     async (args: {

@@ -33,7 +33,7 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
 
   server.tool(
     "list_schematic_items",
-    "List items of one kind in a schematic: components (refs, values, positions, pins), nets (with connections), wires (start/end coords), labels (net/global/power), or free-form texts. Kind-specific filters: filter (components), netName/labelType (labels), text (texts). Supports pagination.",
+    "List one kind of schematic item: components, nets (with connections), wires, labels, or texts. Kind-specific filters: filter (components), netName/labelType (labels), text (texts). Paginated.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       kind: z
@@ -48,25 +48,16 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
             .describe("Filter by reference prefix (e.g., 'R', 'C', 'U')"),
         })
         .optional()
-        .describe("Optional filters. Only applies to kind='components'."),
+        .describe("kind='components' only: optional filters."),
       netName: z
         .string()
         .optional()
-        .describe(
-          "Only for kind='labels': filter to labels whose name exactly matches this string (case-sensitive).",
-        ),
+        .describe("kind='labels' only: exact, case-sensitive label name filter."),
       labelType: z
         .enum(["net", "global", "power"])
         .optional()
-        .describe(
-          "Only for kind='labels': filter by label type. 'net' = local label, 'global' = global label, 'power' = power symbol.",
-        ),
-      text: z
-        .string()
-        .optional()
-        .describe(
-          "Only for kind='texts': case-insensitive substring filter — only return texts containing this string.",
-        ),
+        .describe("kind='labels' only: net=local label, global=global label, power=power symbol."),
+      text: z.string().optional().describe("kind='texts' only: case-insensitive substring filter."),
       ...paginationParams,
     },
     async (args: {
@@ -96,7 +87,7 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
 
   server.tool(
     "check_schematic_layout",
-    "Run schematic layout sanity checks: overlaps (stacked symbols/labels, collinear wires), wires_crossing_symbols (wires drawn over component bodies), floating_labels (labels not reaching any pin), orphaned_wires (dangling wire endpoints). Runs all four by default; pass 'checks' to run a subset. Returns per-check results.",
+    "Run schematic layout sanity checks: overlaps (stacked symbols/labels, collinear wires), wires_crossing_symbols, floating_labels (not reaching any pin), orphaned_wires (dangling endpoints). All four by default. Returns per-check results.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       checks: z
@@ -107,7 +98,7 @@ export function registerSchematicQueryTools(server: McpServer, callKicadScript: 
         .number()
         .optional()
         .describe(
-          "Only for the 'overlaps' check: distance threshold in mm for label proximity and wire collinearity (default: 0.5).",
+          "'overlaps' only: mm threshold for label proximity and wire collinearity (default 0.5).",
         ),
     },
     async (args: {

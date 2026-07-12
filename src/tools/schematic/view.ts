@@ -11,7 +11,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
   // Get schematic view (rasterized image)
   server.tool(
     "get_schematic_view",
-    "Return a rasterized image of the schematic (PNG by default, or SVG), optionally cropped to a region given in schematic mm. Uses kicad-cli to export SVG, then converts to PNG via cairosvg. Use this for visual feedback after placing or wiring components, or to zoom into a specific area.",
+    "Render the schematic as an image (PNG by default, or SVG), optionally cropped to a region in schematic mm. Use for visual feedback after placing/wiring, or to zoom into an area.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       format: z.enum(["png", "svg"]).optional().describe("Output format (default: png)"),
@@ -83,7 +83,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
   // Get elements in a region
   server.tool(
     "get_elements_in_region",
-    "List all symbols, wires, and labels within a rectangular region of the schematic. Useful for understanding what is in a specific area before modifying it.",
+    "List all symbols, wires, and labels within a rectangular region of the schematic. Useful before modifying an area.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       x1: z.number().describe("Left X coordinate of the region in mm"),
@@ -135,10 +135,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
   // Snap schematic elements to grid
   server.tool(
     "snap_to_grid",
-    "Snap schematic element coordinates to the nearest grid point. " +
-      "KiCAD uses exact integer matching for connectivity, so off-grid coordinates cause wires " +
-      "that look connected to fail ERC checks. " +
-      "Modifies the .kicad_sch file in place. Does not require the KiCAD UI to be running.",
+    "Snap schematic element coordinates to the nearest grid point. KiCAD connectivity uses exact " +
+      "integer matching, so off-grid coordinates make wires that look connected fail ERC. " +
+      "Modifies the .kicad_sch in place.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch schematic file"),
       gridSize: z
@@ -167,8 +166,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
 
   server.tool(
     "get_net_at_point",
-    "Returns the net name at a given (x, y) coordinate in a schematic, or null if no net label " +
-      "or wire endpoint is present at that position.",
+    "Return the net name at (x, y), or null if no net label or wire endpoint is at that position.",
     {
       schematicPath: z.string().describe("Path to the schematic file (.kicad_sch)"),
       x: z.number().describe("X coordinate in mm"),
@@ -208,10 +206,8 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
   // Add free-form text annotation to schematic
   server.tool(
     "add_schematic_text",
-    "Add a free-form text annotation to the schematic. " +
-      "Use this to add notes, labels, section headings, or documentation strings " +
-      "directly on the schematic canvas. Unlike net labels, text annotations have " +
-      "no electrical significance.",
+    "Add a free-form text annotation (notes, section headings, docs) to the schematic canvas. " +
+      "Unlike net labels, it has no electrical significance.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       text: z.string().describe("Text content to display"),
@@ -265,20 +261,16 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
   // Create a hierarchical sheet on the parent schematic
   server.tool(
     "create_hierarchical_sheet",
-    "Create a hierarchical sheet in a parent schematic: inserts the sheet block (Sheetname/Sheetfile properties, page " +
-      "instance) and creates the child .kicad_sch file if missing — this is what makes a multi-page design exist. " +
-      "Optionally authors sheet pins in the same call — each pin is auto-stacked on the requested side and gets a " +
-      "matching hierarchical_label written into the child (for a pin at an explicit position use add_sheet_pin; " +
-      "inter-sheet connectivity also works with same-named global labels on each page). " +
-      "pageNumber pins the child's page number (cannot be combined with pins).",
+    "Create a hierarchical sheet in a parent schematic: inserts the sheet block and creates the child " +
+      ".kicad_sch if missing. Optional pins are auto-stacked on the requested side, each writing a matching " +
+      "hierarchical_label into the child (for explicit pin positions use add_sheet_pin). " +
+      "pageNumber pins the child's page number and cannot be combined with pins.",
     {
       schematicPath: z.string().describe("Path to the parent .kicad_sch file"),
       sheetName: z.string().describe("Sheet name (must be unique in the parent)"),
       childFilename: z
         .string()
-        .describe(
-          "Child schematic filename relative to the parent's directory, e.g. 'power.kicad_sch'",
-        ),
+        .describe("Child filename relative to the parent's directory, e.g. 'power.kicad_sch'"),
       position: z
         .object({ x: z.number(), y: z.number() })
         .optional()
@@ -310,13 +302,11 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
           }),
         )
         .optional()
-        .describe("Sheet pins to author in the same call (cannot be combined with pageNumber)"),
+        .describe("Sheet pins to author in the same call"),
       pageNumber: z
         .union([z.string(), z.number()])
         .optional()
-        .describe(
-          "Explicit page number for the child sheet (default: smallest unused). Cannot be combined with pins.",
-        ),
+        .describe("Explicit page number for the child sheet (default: smallest unused)."),
     },
     async (args) => {
       if (args.pageNumber === undefined) {
@@ -349,15 +339,14 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
 
   server.tool(
     "add_sheet_pin",
-    "Add a pin to a sheet symbol block on the parent schematic. Sheet pins are the " +
-      "parent-side connection points that correspond to hierarchical labels in the " +
-      "sub-sheet. The pinName must exactly match a hierarchical_label in the sub-sheet.",
+    "Add a pin to a sheet symbol block on the parent schematic — the parent-side connection point. " +
+      "pinName must exactly match a hierarchical_label in the sub-sheet.",
     {
       schematicPath: z.string().describe("Path to the PARENT .kicad_sch file"),
       sheetName: z
         .string()
         .describe("Sheet name as it appears in the Sheetname property (e.g. 'Storage')"),
-      pinName: z.string().describe("Pin name — must match a hierarchical_label in the sub-sheet"),
+      pinName: z.string().describe("Pin name"),
       pinType: z
         .enum(["input", "output", "bidirectional"])
         .describe("Signal direction (should match the sub-sheet hierarchical label shape)"),
