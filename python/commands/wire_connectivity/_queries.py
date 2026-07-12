@@ -34,41 +34,95 @@ from ._traversal import (
 def get_wire_connections(
     schematic: Any, schematic_path: str, x_mm: float, y_mm: float
 ) -> Optional[Dict]:
-    """Find the net name and all component pins reachable from a point via connected wires.
+    """Find the net name and all component pins reachable from a point.
 
-    The query point (x_mm, y_mm) must be exactly on a wire endpoint or junction (exact IU match).
-    Interior (mid-segment) points are not matched —
-    use wire endpoint coordinates obtained from the schematic data.
+    The query point (x_mm, y_mm) must be exactly on a wire endpoint/junction OR
+    on a net label anchored directly at the point (exact IU match). Interior
+    (mid-segment) points are not matched — use wire endpoint / pin coordinates
+    obtained from the schematic data.
 
     Net labels and power symbols are traversed: wires on the same named net are
-    treated as connected even when they are not geometrically adjacent.
+    treated as connected even when they are not geometrically adjacent. A net
+    label placed directly on a pin with no wire in between is a valid connection
+    too and is reported with ``via: "label"`` (mirrors get_net_connections / ERC).
 
     Returns dict with keys:
       - "net": str or None (net label/power name, None if unnamed)
       - "pins": list of {"component": str, "pin": str}
       - "wires": list of {"start": {"x", "y"}, "end": {"x", "y"}} in mm
       - "query_point": {"x": float, "y": float}
-    Or None if no wire endpoint found within tolerance of the query point.
+      - "via": "wire" | "label" | None (how the point attaches to the net)
+    Or None if the point is neither on a wire nor at a net label (and the
+    schematic has wires elsewhere — a wire-less schematic returns an empty result).
     """
     all_wires = _parse_wires(schematic)
     query_point = {"x": x_mm, "y": y_mm}
-    if not all_wires:
-        return {"net": None, "pins": [], "wires": [], "query_point": query_point}
+    query_iu = _to_iu(x_mm, y_mm)
 
-    adjacency, iu_to_wires = _build_adjacency(all_wires)
+    # Labels + power-symbol pins are needed for both the wire net-resolution and
+    # the label-at-pin fallback below. Guard the parse: a mock schematic (unit
+    # tests) whose collections aren't real iterables must not crash the query.
+    try:
+        point_to_label, label_to_points = _parse_virtual_connections(schematic, schematic_path)
+    except Exception as e:  # defensive: mock schematics / unreadable files
+        logger.debug(f"get_wire_connections: virtual-connection parse failed: {e}")
+        point_to_label, label_to_points = {}, {}
 
-    point_to_label, label_to_points = _parse_virtual_connections(schematic, schematic_path)
+    def _label_net_at(iu_pt: Tuple[int, int]) -> Optional[str]:
+        """Named net whose label anchor coincides (±1 IU) with iu_pt, or None.
+        PWR_FLAG anchors are not real net names and are skipped."""
+        qx, qy = iu_pt
+        for (ix, iy), name in point_to_label.items():
+            if is_pwrflag_label(name):
+                continue
+            if abs(ix - qx) <= 1 and abs(iy - qy) <= 1:
+                return name
+        return None
 
-    visited, net_points = _find_connected_wires(
-        x_mm,
-        y_mm,
-        all_wires,
-        iu_to_wires,
-        adjacency,
-        point_to_label=point_to_label,
-        label_to_points=label_to_points,
-    )
+    visited: Optional[Set[int]] = None
+    net_points: Optional[Set[Tuple[int, int]]] = None
+    if all_wires:
+        adjacency, iu_to_wires = _build_adjacency(all_wires)
+        visited, net_points = _find_connected_wires(
+            x_mm,
+            y_mm,
+            all_wires,
+            iu_to_wires,
+            adjacency,
+            point_to_label=point_to_label,
+            label_to_points=label_to_points,
+        )
+
     if visited is None:
+        # No wire at the query point. A net label placed directly on the pin
+        # (no wire segment in between) is still a valid connection — report it
+        # with via="label" so this agrees with get_net_connections / ERC.
+        label_net = _label_net_at(query_iu)
+        if label_net is not None:
+            label_net_points: Set[Tuple[int, int]] = set(label_to_points.get(label_net, []))
+            label_net_points.add(query_iu)
+            pins = (
+                _find_pins_on_net(label_net_points, schematic_path, schematic)
+                if hasattr(schematic, "symbol")
+                else []
+            )
+            return {
+                "net": label_net,
+                "pins": pins,
+                "wires": [],
+                "query_point": query_point,
+                "via": "label",
+            }
+        if not all_wires:
+            # Legacy contract: a schematic with no wires at all returns an empty
+            # (net=None) result rather than None.
+            return {
+                "net": None,
+                "pins": [],
+                "wires": [],
+                "query_point": query_point,
+                "via": None,
+            }
         return None
 
     # Resolve net name: first label anchor that falls on this net's IU points.
@@ -76,7 +130,7 @@ def get_wire_connections(
     # detection but carry no real net name.  The actual net comes from a
     # #PWR symbol or a label elsewhere on the same wire.
     net: Optional[str] = None
-    for pt in net_points:
+    for pt in net_points or set():
         label = point_to_label.get(pt)
         if label is not None and not is_pwrflag_label(label):
             net = label
@@ -97,10 +151,22 @@ def get_wire_connections(
     ]
 
     if not hasattr(schematic, "symbol"):
-        return {"net": net, "pins": [], "wires": wires_out, "query_point": query_point}
+        return {
+            "net": net,
+            "pins": [],
+            "wires": wires_out,
+            "query_point": query_point,
+            "via": "wire",
+        }
 
-    pins = _find_pins_on_net(net_points, schematic_path, schematic)
-    return {"net": net, "pins": pins, "wires": wires_out, "query_point": query_point}
+    pins = _find_pins_on_net(net_points or set(), schematic_path, schematic)
+    return {
+        "net": net,
+        "pins": pins,
+        "wires": wires_out,
+        "query_point": query_point,
+        "via": "wire",
+    }
 
 
 def count_pins_on_net(

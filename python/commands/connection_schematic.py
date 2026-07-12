@@ -1,6 +1,7 @@
 import logging
+import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from skip import Schematic
 
@@ -87,43 +88,15 @@ class ConnectionManager:
                 logger.error("Pin locator unavailable")
                 return {"success": False, "message": "Pin locator unavailable"}
 
-            # Power-symbol short-circuit (F4): a power PORT (#PWR…, lib_id
-            # "power:*") already joins the net named by its Value and self-labels
-            # its own pin, so a matching-name connection is a redundant double
-            # label — skip the wire+label entirely. A mismatched name is almost
-            # certainly a mistake (the pin then carries both names); still wire
-            # it but warn. PWR_FLAG (#FLG) is not a named port and never matches.
             lib_id, value = ConnectionManager._lookup_lib_value(schematic_path, component_ref)
-            power_warning: Optional[str] = None
-            if (
+            is_power_port = (
                 component_ref.startswith("#PWR")
                 and not component_ref.startswith("#FLG")
                 and str(lib_id or "").startswith("power:")
-            ):
-                if value is not None and net_name == value:
-                    logger.info(
-                        f"Skipping redundant connect_to_net on power symbol "
-                        f"{component_ref} (its Value '{value}' already names the net)"
-                    )
-                    return {
-                        "success": True,
-                        "already_connected": True,
-                        "skipped_label": True,
-                        "power_symbol": {"ref": component_ref, "value": value},
-                        "message": (
-                            f"{component_ref} is a power symbol; its pin already "
-                            f"joins net '{value}' via its Value, so no wire/label "
-                            f"was added. Power symbols self-label their pin."
-                        ),
-                    }
-                power_warning = (
-                    f"{component_ref} is a power symbol already driving net "
-                    f"'{value}' via its Value; connecting it to '{net_name}' will "
-                    f"not rename that net — its pin ends up on BOTH nets. This is "
-                    f"almost certainly a mistake."
-                )
+            )
 
-            # Get pin location using PinLocator
+            # Get pin location first — needed for the power-connectivity check
+            # (F3) and the stub geometry below.
             pin_loc = locator.get_pin_location(schematic_path, component_ref, pin_name)
             if not pin_loc:
                 # A pin on an UNPLACED unit of a multi-unit part has no real
@@ -144,11 +117,58 @@ class ConnectionManager:
                 logger.error(msg)
                 return {"success": False, "message": msg}
 
-            # Add a small wire stub from the pin (2.54mm = 0.1 inch, standard grid
-            # spacing). get_pin_angle returns the OUTWARD direction (away from the
-            # symbol body) in the (cos θ, -sin θ) screen convention used below, so
-            # the stub — and the label at its far end — always land clear of the
-            # symbol, for every pin orientation under any rotation/mirror.
+            # Power-symbol handling.
+            #  * F4: a power PORT (#PWR…, lib_id "power:*") already joins the net
+            #    named by its Value and self-labels its own pin, so a matching
+            #    net label is redundant — never place one.
+            #  * F3: BUT a floating power pin (no wire touching it, no coincident
+            #    pin) is still electrically dangling — kicad-cli ERC reports "Pin
+            #    not connected". Draw a stub WIRE (no label) so the pin has real
+            #    connectivity; skip only when it genuinely already touches
+            #    something.
+            #  * A mismatched name is almost certainly a mistake (the pin ends up
+            #    on both nets); still wire+label it but warn.
+            power_warning: Optional[str] = None
+            place_label = True
+            if is_power_port:
+                if value is not None and net_name == value:
+                    if ConnectionManager._pin_physically_connected(
+                        schematic_path, component_ref, pin_loc
+                    ):
+                        logger.info(
+                            f"Skipping redundant connect_to_net on power symbol "
+                            f"{component_ref} (Value '{value}' names the net and its "
+                            f"pin is already physically connected)"
+                        )
+                        return {
+                            "success": True,
+                            "already_connected": True,
+                            "skipped_label": True,
+                            "power_symbol": {"ref": component_ref, "value": value},
+                            "message": (
+                                f"{component_ref} is a power symbol whose pin already "
+                                f"joins net '{value}' (its Value) and is physically "
+                                f"connected, so no wire/label was added."
+                            ),
+                        }
+                    # Floating power pin → draw a stub wire, but no label.
+                    place_label = False
+                    logger.info(
+                        f"Power symbol {component_ref} pin is floating; drawing a stub "
+                        f"wire so it has physical connectivity (net '{value}')"
+                    )
+                else:
+                    power_warning = (
+                        f"{component_ref} is a power symbol already driving net "
+                        f"'{value}' via its Value; connecting it to '{net_name}' will "
+                        f"not rename that net — its pin ends up on BOTH nets. This is "
+                        f"almost certainly a mistake."
+                    )
+
+            # Outward pin direction for the stub (away from the symbol body).
+            # get_pin_angle returns the OUTWARD angle in the (cos θ, -sin θ)
+            # screen convention, so the stub and any label always land clear of
+            # the body under every rotation/mirror.
             try:
                 pin_angle_deg = locator.get_pin_angle(schematic_path, component_ref, pin_name) or 0
             except Exception as e:
@@ -156,19 +176,38 @@ class ConnectionManager:
                     f"Could not get pin angle for {component_ref}/{pin_name}, defaulting to 0: {e}"
                 )
                 pin_angle_deg = 0
-            import math as _math
 
-            angle_rad = _math.radians(pin_angle_deg)
-            stub_end = [
-                round(pin_loc[0] + 2.54 * _math.cos(angle_rad), 4),
-                round(pin_loc[1] - 2.54 * _math.sin(angle_rad), 4),
-            ]
+            # Choose a collision-free stub (F2). A stub whose wire/label would
+            # merge into a DIFFERENT existing net (e.g. another cap's label that
+            # happens to sit at the auto-chosen point) is relocated to a free
+            # direction; if EVERY candidate collides, refuse rather than silently
+            # short two nets together.
+            net_points = ConnectionManager._existing_net_points(schematic_path)
+            chosen, conflict_net = ConnectionManager._choose_stub(
+                pin_loc, float(pin_angle_deg), net_name, net_points
+            )
+            default_end = ConnectionManager._stub_candidates(pin_loc, float(pin_angle_deg))[0][0]
+            if chosen is None:
+                msg = (
+                    f"Cannot place the '{net_name}' connection for {component_ref}/{pin_name}: "
+                    f"an existing '{conflict_net}' net is at {default_end} and every "
+                    f"alternative stub direction is also blocked. Move the component or "
+                    f"wire it manually."
+                )
+                logger.error(msg)
+                return {
+                    "success": False,
+                    "message": msg,
+                    "label_collision": {"point": default_end, "existing_net": conflict_net},
+                }
+            stub_end, chosen_angle, _chosen_len = chosen
+            relocated = not (
+                abs(stub_end[0] - default_end[0]) < 1e-6
+                and abs(stub_end[1] - default_end[1]) < 1e-6
+            )
 
-            # Orient the label text so it reads outward from the pin rather than
-            # back over the symbol body. The outward angle is already ~0/90/180/270
-            # for axis-aligned pins; snap to a KiCad label orientation (WireManager
-            # picks the matching horizontal justify from this).
-            label_orientation = int(round(pin_angle_deg / 90.0) * 90) % 360
+            # Orient the label text outward (WireManager picks justify from this).
+            label_orientation = int(round(chosen_angle / 90.0) * 90) % 360
 
             # Create wire stub using WireManager
             wire_success = WireManager.add_wire(schematic_path, pin_loc, stub_end)
@@ -177,27 +216,43 @@ class ConnectionManager:
                 logger.error(msg)
                 return {"success": False, "message": msg}
 
-            # Add label at the end of the stub using WireManager
-            label_success = WireManager.add_label(
-                schematic_path,
-                net_name,
-                stub_end,
-                label_type="label",
-                orientation=label_orientation,
-            )
-            if not label_success:
-                msg = f"Failed to add net label '{net_name}'"
-                logger.error(msg)
-                return {"success": False, "message": msg}
+            # Add label at the end of the stub — skipped for a floating power pin
+            # (the power symbol itself names the net; a label would duplicate it).
+            if place_label:
+                label_success = WireManager.add_label(
+                    schematic_path,
+                    net_name,
+                    stub_end,
+                    label_type="label",
+                    orientation=label_orientation,
+                )
+                if not label_success:
+                    msg = f"Failed to add net label '{net_name}'"
+                    logger.error(msg)
+                    return {"success": False, "message": msg}
 
             logger.info(f"Connected {component_ref}/{pin_name} to net '{net_name}'")
             result: Dict[str, Any] = {
                 "success": True,
                 "message": f"Connected {component_ref}/{pin_name} to net '{net_name}'",
                 "pin_location": pin_loc,
-                "label_location": stub_end,
+                "label_location": stub_end if place_label else None,
                 "wire_stub": [pin_loc, stub_end],
             }
+            if not place_label:
+                result["power_symbol"] = {"ref": component_ref, "value": value}
+                result["drew_stub_wire"] = True
+                result["message"] = (
+                    f"{component_ref} power-symbol pin was floating; drew a stub wire so it "
+                    f"has physical connectivity. Net '{value}' comes from the power symbol; "
+                    f"no duplicate label was placed."
+                )
+            if relocated:
+                result["relocated"] = True
+                result["message"] += (
+                    f" (stub relocated to avoid an existing different-net element at "
+                    f"{default_end})"
+                )
             if power_warning:
                 result["warnings"] = [power_warning]
             return result
@@ -208,6 +263,206 @@ class ConnectionManager:
 
             logger.error(traceback.format_exc())
             return {"success": False, "message": str(e)}
+
+    # --- F2/F3 helpers: collision-free stub selection + power-pin connectivity ---
+
+    _STUB_LEN = 2.54  # standard 0.1" grid step
+    _STUB_COLLISION_GRID = 1.27  # one schematic grid step — "coincident" tolerance
+
+    @staticmethod
+    def _existing_net_points(schematic_path: Path) -> List[Tuple[float, float, str]]:
+        """Return ``[(x_mm, y_mm, net_name)]`` for existing net-bearing points.
+
+        Covers net labels (value = net) and power-port pins (Value = net). The
+        PWR_FLAG anchor sentinel is excluded — it is not a real net. Used by the
+        stub-collision check so a new connection is never dropped on top of a
+        DIFFERENT net.
+        """
+        try:
+            from commands.wire_connectivity import (  # local import: avoid cycle
+                _IU_PER_MM,
+                _parse_virtual_connections,
+                is_pwrflag_label,
+            )
+        except Exception as e:  # pragma: no cover - import guard
+            logger.debug(f"_existing_net_points: import failed: {e}")
+            return []
+        try:
+            sch = Schematic(str(schematic_path))
+        except Exception as e:
+            logger.debug(f"_existing_net_points: could not load {schematic_path}: {e}")
+            return []
+        try:
+            point_to_label, _ = _parse_virtual_connections(sch, str(schematic_path))
+        except Exception as e:
+            logger.debug(f"_existing_net_points: virtual-connection parse failed: {e}")
+            return []
+        out: List[Tuple[float, float, str]] = []
+        for (ix, iy), net in point_to_label.items():
+            if is_pwrflag_label(net):
+                continue
+            out.append((ix / _IU_PER_MM, iy / _IU_PER_MM, net))
+        return out
+
+    @staticmethod
+    def _stub_candidates(
+        pin_loc: List[float], outward_angle: float
+    ) -> List[Tuple[List[float], float, float]]:
+        """Candidate ``(stub_end, angle_deg, length)`` in preference order.
+
+        The standard outward stub is tried first, then a longer outward stub,
+        then perpendicular turns — all of which keep the stub clear of the
+        symbol body while giving the collision search room to relocate.
+        """
+        step = ConnectionManager._STUB_LEN
+        plans = [
+            (0.0, step),
+            (0.0, step * 2),
+            (0.0, step * 3),
+            (90.0, step),
+            (-90.0, step),
+            (90.0, step * 2),
+            (-90.0, step * 2),
+            (180.0, step),
+        ]
+        out: List[Tuple[List[float], float, float]] = []
+        for turn, length in plans:
+            ang = outward_angle + turn
+            rad = math.radians(ang)
+            end = [
+                round(pin_loc[0] + length * math.cos(rad), 4),
+                round(pin_loc[1] - length * math.sin(rad), 4),
+            ]
+            out.append((end, ang, length))
+        return out
+
+    @staticmethod
+    def _point_on_segment_mm(
+        p: Tuple[float, float],
+        a: List[float],
+        b: List[float],
+        tol: float = 0.05,
+    ) -> bool:
+        """True if point ``p`` lies within ``tol`` mm of segment ``a``→``b``."""
+        ax, ay = a[0], a[1]
+        bx, by = b[0], b[1]
+        px, py = p
+        dx, dy = bx - ax, by - ay
+        seg2 = dx * dx + dy * dy
+        if seg2 == 0.0:
+            return math.hypot(px - ax, py - ay) <= tol
+        t = ((px - ax) * dx + (py - ay) * dy) / seg2
+        if t < 0.0 or t > 1.0:
+            return False
+        projx, projy = ax + t * dx, ay + t * dy
+        return math.hypot(px - projx, py - projy) <= tol
+
+    @staticmethod
+    def _stub_collision(
+        pin_loc: List[float],
+        stub_end: List[float],
+        net_name: str,
+        net_points: List[Tuple[float, float, str]],
+        eps: float = 0.01,
+    ) -> Optional[str]:
+        """Return a conflicting DIFFERENT net name, or None.
+
+        A stub ``pin_loc``→``stub_end`` carrying a ``net_name`` label at
+        ``stub_end`` conflicts if a net-bearing point of ANOTHER net sits at
+        ``stub_end`` (within one grid step) or lies on the wire segment. A point
+        at the source pin itself is ignored — that is where the wire starts.
+        """
+        for px, py, net in net_points:
+            if net == net_name:
+                continue
+            if abs(px - pin_loc[0]) <= eps and abs(py - pin_loc[1]) <= eps:
+                continue  # the source pin's own net (e.g. a power port we're wiring)
+            if (
+                math.hypot(px - stub_end[0], py - stub_end[1])
+                <= ConnectionManager._STUB_COLLISION_GRID
+            ):
+                return net
+            if ConnectionManager._point_on_segment_mm((px, py), pin_loc, stub_end):
+                return net
+        return None
+
+    @staticmethod
+    def _choose_stub(
+        pin_loc: List[float],
+        outward_angle: float,
+        net_name: str,
+        net_points: List[Tuple[float, float, str]],
+    ) -> Tuple[Optional[Tuple[List[float], float, float]], Optional[str]]:
+        """Pick the first collision-free stub candidate.
+
+        Returns ``(candidate, None)`` on success or ``(None, conflict_net)`` when
+        every candidate would merge into a different net. With no existing
+        net-points the default candidate is returned unchanged (byte-identical to
+        the pre-F2 behavior).
+        """
+        candidates = ConnectionManager._stub_candidates(pin_loc, outward_angle)
+        if not net_points:
+            return candidates[0], None
+        conflict: Optional[str] = None
+        for cand in candidates:
+            stub_end = cand[0]
+            c = ConnectionManager._stub_collision(pin_loc, stub_end, net_name, net_points)
+            if c is None:
+                return cand, None
+            if conflict is None:
+                conflict = c
+        return None, conflict
+
+    @staticmethod
+    def _pin_physically_connected(
+        schematic_path: Path,
+        component_ref: str,
+        pin_loc: List[float],
+        eps: float = 0.01,
+    ) -> bool:
+        """True if ``pin_loc`` already touches a wire endpoint or a coincident
+        pin of another symbol — i.e. it has real physical connectivity (F3).
+
+        A net label alone does NOT count (matching the ERC "Pin not connected"
+        criterion the task targets): only a wire endpoint or a co-located pin.
+        """
+        import sexpdata
+        from commands.wire_manager import WireManager
+
+        # 1. Wire endpoint touching the pin.
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                sch_data = sexpdata.loads(f.read())
+        except Exception as e:
+            logger.debug(f"_pin_physically_connected: could not read {schematic_path}: {e}")
+            return False
+        for ex, ey in WireManager._collect_wire_endpoints(sch_data):
+            if abs(ex - pin_loc[0]) <= eps and abs(ey - pin_loc[1]) <= eps:
+                return True
+
+        # 2. A coincident pin of any OTHER symbol.
+        locator = ConnectionManager.get_pin_locator()
+        if locator is None:
+            return False
+        try:
+            sch = Schematic(str(schematic_path))
+        except Exception as e:
+            logger.debug(f"_pin_physically_connected: could not load {schematic_path}: {e}")
+            return False
+        for symbol in getattr(sch, "symbol", []):
+            try:
+                if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+                    continue
+                ref = symbol.property.Reference.value.rstrip("_")
+                if ref == component_ref or ref.startswith("_TEMPLATE"):
+                    continue
+                pins = locator.get_all_symbol_pins(Path(schematic_path), ref)
+                for _pn, coords in (pins or {}).items():
+                    if abs(coords[0] - pin_loc[0]) <= eps and abs(coords[1] - pin_loc[1]) <= eps:
+                        return True
+            except Exception:
+                continue
+        return False
 
     @staticmethod
     def connect_passthrough(

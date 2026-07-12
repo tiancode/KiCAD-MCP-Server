@@ -205,14 +205,16 @@ def handle_get_wire_connections(iface: "KiCADInterface", params: Dict[str, Any])
         if not schematic:
             return {"success": False, "message": "Failed to load schematic"}
 
-        if not hasattr(schematic, "wire"):
-            return {"success": False, "message": "Schematic has no wires"}
-
+        # NOTE: no "has wire" guard here — a pin connected only by a net label
+        # placed directly on it (no wire) is a valid connection, and
+        # get_wire_connections resolves it via the label (via="label").
         result = get_wire_connections(schematic, schematic_path, x, y)
         if result is None:
             return {
                 "success": False,
-                "message": f"No wire found at ({x},{y}) — point may not be connected",
+                "message": (
+                    f"No wire or net label found at ({x},{y}) — point may not be connected"
+                ),
             }
 
         return {"success": True, **result}
