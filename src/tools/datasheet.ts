@@ -43,7 +43,10 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
         if (result.details && result.details.length > 0) {
           lines.push("\nComponents updated:");
           for (const d of result.details) {
-            lines.push(`  ${d.reference.padEnd(6)} ${d.lcsc.padEnd(12)} → ${d.url}`);
+            // lib_symbol-sourced fills carry no LCSC number
+            const ref = String(d.reference ?? "?");
+            const lcsc = String(d.lcsc ?? "(lib)");
+            lines.push(`  ${ref.padEnd(6)} ${lcsc.padEnd(12)} → ${d.url}`);
           }
         }
 
