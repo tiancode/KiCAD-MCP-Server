@@ -4,13 +4,19 @@ Matrix tests for PinLocator.get_pin_angle on a Device:R symbol.
 For each combination of (symbol_rotation, mirror, pin), we construct a real
 .kicad_sch fixture, then compare:
   - actual:   PinLocator().get_pin_angle(...)
-  - expected: derived geometrically from WireDragger.pin_world_xy by extending
-              the pin one length unit along its library angle and measuring the
-              world-frame displacement direction.
+  - expected: the OUTWARD stub direction, derived geometrically from
+              WireDragger.pin_world_xy by extending the pin one length unit
+              OPPOSITE its library angle (a library angle points inward toward
+              the body) and measuring the world-frame displacement.
 
-This characterizes the post-PR-#88 angle reflection logic. Cases that disagree
-with the geometric expectation are marked xfail with a "PR #88 regression
-candidate" annotation.
+get_pin_angle's contract is the outward direction — the way a wire stub must
+extend to stay clear of the symbol body. An earlier revision negated the library
+angle for the Y-flip, which only coincides with the outward (+180) mapping for
+pins that end up vertical in world space, so horizontal pins got an inward stub
+(the connect_to_net bug). The expectation below was previously computed along the
+library angle (inward) and so pinned that buggy value for rotations 90/270; it now
+encodes the correct outward direction, plus a transform-independent check that the
+stub actually moves away from the symbol body.
 """
 
 from __future__ import annotations
@@ -106,13 +112,16 @@ def _write_sch(tmp_path: Path, rotation: float, mirror: str | None) -> Path:
 
 
 def _expected_stub_angle(pin_num: str, rotation: float, mirror: str | None) -> float:
-    """Geometrically expected outward angle: extend in library coords by +length
-    along library angle, transform to world, take atan2 of displacement."""
+    """Geometrically expected OUTWARD angle: extend in library coords by +length
+    OPPOSITE the library angle (which points inward toward the body), transform
+    to world, and take the atan2 of the displacement in the convention the stub
+    math consumes — target = (pin_x + d*cos θ, pin_y - d*sin θ), so a screen
+    displacement (dx, dy) maps back to θ = atan2(-dy, dx)."""
     pin = PIN_DEFS[pin_num]
     px, py = pin["x"], pin["y"]
-    lib_angle_rad = math.radians(pin["angle"])
-    ox = px + pin["length"] * math.cos(lib_angle_rad)
-    oy = py + pin["length"] * math.sin(lib_angle_rad)
+    out_angle_rad = math.radians(pin["angle"] + 180.0)  # inward -> outward
+    ox = px + pin["length"] * math.cos(out_angle_rad)
+    oy = py + pin["length"] * math.sin(out_angle_rad)
 
     mirror_x = mirror == "x"
     mirror_y = mirror == "y"
@@ -124,13 +133,9 @@ def _expected_stub_angle(pin_num: str, rotation: float, mirror: str | None) -> f
         ox, oy, SYMBOL_X, SYMBOL_Y, rotation, mirror_x, mirror_y
     )
 
-    deg = math.degrees(math.atan2(wy_out - wy_pin, wx_out - wx_pin)) % 360.0
+    deg = math.degrees(math.atan2(-(wy_out - wy_pin), (wx_out - wx_pin))) % 360.0
     # Snap to 0/90/180/270 (axis-aligned pins; FP noise tolerance)
-    snapped = round(deg / 90.0) * 90.0 % 360.0
-    if abs(((deg - snapped) + 540) % 360 - 180) < 1e-6:
-        # within tolerance
-        return snapped
-    return snapped
+    return round(deg / 90.0) * 90.0 % 360.0
 
 
 # ---------------------------------------------------------------------------
@@ -162,4 +167,25 @@ def test_get_pin_angle_matches_geometric_expectation(tmp_path, rotation, mirror,
     assert abs(((actual_n - expected_n) + 540) % 360 - 180) < 1e-3, (
         f"actual={actual_n}, expected={expected_n} "
         f"(rotation={rotation}, mirror={mirror}, pin={pin_num})"
+    )
+
+    # Transform-independent outward check: a stub from the pin along `actual`
+    # (consumed as (cos θ, -sin θ) in screen coords) must land FARTHER from the
+    # symbol body than the pin endpoint. Device:R's body is centred on its
+    # placement origin (SYMBOL_X, SYMBOL_Y), so "outward" == increasing distance
+    # from that point. This catches an inverted stub even if the expected-angle
+    # derivation shared a bug with the implementation.
+    mirror_x = mirror == "x"
+    mirror_y = mirror == "y"
+    pin = PIN_DEFS[pin_num]
+    wx_pin, wy_pin = WireDragger.pin_world_xy(
+        pin["x"], pin["y"], SYMBOL_X, SYMBOL_Y, rotation, mirror_x, mirror_y
+    )
+    stub_x = wx_pin + 2.54 * math.cos(math.radians(actual_n))
+    stub_y = wy_pin - 2.54 * math.sin(math.radians(actual_n))
+    d_pin = (wx_pin - SYMBOL_X) ** 2 + (wy_pin - SYMBOL_Y) ** 2
+    d_stub = (stub_x - SYMBOL_X) ** 2 + (stub_y - SYMBOL_Y) ** 2
+    assert d_stub > d_pin + 1e-6, (
+        f"stub points inward: d_pin={d_pin:.4f}, d_stub={d_stub:.4f} "
+        f"(rotation={rotation}, mirror={mirror}, pin={pin_num}, angle={actual_n})"
     )
