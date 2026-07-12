@@ -376,7 +376,6 @@ export class KiCADMcpServer {
               '2. Test: "C:\\Program Files\\KiCad\\9.0\\bin\\python.exe" -c "import pcbnew"',
             );
             errors.push("3. Run: .\\setup-windows.ps1 for automatic fix");
-            errors.push("4. See: docs/WINDOWS_TROUBLESHOOTING.md");
           }
         }
       }

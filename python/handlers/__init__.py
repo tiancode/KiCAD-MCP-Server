@@ -11,6 +11,5 @@ lifecycle (board reference, auto-save guard, backend selection, IPC
 recovery) rather than per-tool logic.
 
 This split exists because the dispatcher used to be a 6000-line file
-that mixed every tool's logic with every piece of lifecycle code; see
-docs/ARCHITECTURE.md for the high-level rationale.
+that mixed every tool's logic with every piece of lifecycle code.
 """
