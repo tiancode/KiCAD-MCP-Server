@@ -398,7 +398,12 @@ class _CommonMixin:
         except Exception as e:
             logger.debug(f"get_items_by_id failed; falling back to scan: {e}")
 
-        # Fallback: scan all known item collections.
+        # Fallback: scan all known item collections.  Match on the clean
+        # KIID string (kiid_str) — ``str()`` on a kipy KIID proto prints the
+        # field repr (``value: "<uuid>"``), which never equals the uuid
+        # callers pass in, so the old comparison silently matched nothing.
+        from ._helpers import kiid_str
+
         wanted = set(str(i) for i in ids)
         out: List[Any] = []
         for getter in (
@@ -407,11 +412,12 @@ class _CommonMixin:
             "get_vias",
             "get_zones",
             "get_shapes",
+            "get_text",
             "get_pads",
         ):
             try:
                 for item in getattr(board, getter)():
-                    if str(getattr(item, "id", "")) in wanted:
+                    if kiid_str(getattr(item, "id", None)) in wanted:
                         out.append(item)
             except Exception:
                 continue

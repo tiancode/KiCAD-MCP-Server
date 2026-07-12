@@ -616,7 +616,8 @@ def test_ipc_board_size_keeps_min_max_box2_compatibility(monkeypatch):
 def test_get_backend_info_on_swig_carries_actionable_recommendation(monkeypatch):
     """SWIG-mode get_backend_info must tell the agent exactly what to do,
     not just describe the state.  The previous "requires manual reload"
-    text gave no next step; we now point at launch_kicad_ui and list the
+    text gave no next step; we now point at manage_kicad_ui(action=launch)
+    and list the
     capabilities being given up."""
     import kicad_interface
 
@@ -639,8 +640,11 @@ def test_get_backend_info_on_swig_carries_actionable_recommendation(monkeypatch)
 
     assert result["success"] is True
     assert result["backend"] == "swig"
-    assert "launch_kicad_ui" in result["message"]
-    assert "launch_kicad_ui" in result["recommendation"]
+    # The recommendation must name the real MCP tool, not the internal
+    # Python command (launch_kicad_ui is not callable by the agent).
+    assert "manage_kicad_ui(action=launch)" in result["message"]
+    assert "manage_kicad_ui(action=launch)" in result["recommendation"]
+    assert "launch_kicad_ui" not in result["recommendation"]
     # The new diagnostic branch surfaces whether KiCad is running so the
     # agent gets the right next step (start KiCad vs. enable IPC).
     assert result["kicad_running"] is False

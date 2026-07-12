@@ -262,8 +262,8 @@ def _autolaunch_for_project(
                 f"({actual}); refusing to attach IPC to it because mutations "
                 f"would silently target the wrong board instead of "
                 f"{expected}. Close the other project in KiCAD (or use "
-                "ipc_save / save_project there first) and call "
-                "launch_kicad_ui to retry."
+                "save_project there first) and call "
+                "manage_kicad_ui(action=launch) to retry."
             )
             logger.warning(base["warning"])
             return base

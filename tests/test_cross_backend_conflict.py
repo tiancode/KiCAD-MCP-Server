@@ -79,6 +79,8 @@ def test_ipc_fastpath_blocked_when_swig_wrote_disk(monkeypatch):
     assert result["direction"] == "swig_to_ipc"
     # The handler must NOT have run.
     assert "SWIG" in result["message"]
+    # A deliberate, recoverable refusal — not an INTERNAL_ERROR.
+    assert result["errorCode"] == "NEEDS_RECONCILE"
 
 
 def test_ipc_fastpath_auto_reconciles_when_swig_wrote_disk_and_ipc_clean(monkeypatch):
@@ -146,6 +148,7 @@ def test_ipc_fastpath_two_sided_conflict_still_refuses_verbatim(monkeypatch):
     assert result["success"] is False
     assert result["needs_reconcile"] is True
     assert result["direction"] == "swig_to_ipc"
+    assert result["errorCode"] == "NEEDS_RECONCILE"
     fake_revert.assert_not_called()
     assert called["n"] == 0
     assert "auto_reconciled" not in result
@@ -228,6 +231,7 @@ def test_swig_mutation_blocked_when_ipc_writes_pending():
     assert result["needs_reconcile"] is True
     assert result["direction"] == "ipc_to_swig"
     assert "reconcile_backends" in result["message"]
+    assert result["errorCode"] == "NEEDS_RECONCILE"
     # The SWIG handler must NOT have been invoked.
     assert called["n"] == 0
 

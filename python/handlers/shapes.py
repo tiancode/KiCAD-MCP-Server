@@ -3,7 +3,9 @@ Graphic shape handlers (IPC-only).
 
 These cover the BoardShape primitive types that the existing tool set
 left out — straight segments, arcs, circles, rectangles, and polygons
-on any layer (silk / fab / Edge.Cuts / User.* etc.).
+on any layer (silk / fab / Edge.Cuts / User.* etc.).  The list / edit /
+delete handlers also manage free board TEXT items (kind "text" /
+"textbox", e.g. the gr_text placed by add_board_text).
 
 Naming distinction vs. routing:
 - ``add_segment`` / ``add_arc`` here are *graphic* shapes (no net).
@@ -150,7 +152,7 @@ def _normalize_bbox(bbox):
 
 
 def handle_list_shapes(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """List graphic shapes with optional layer / kind / boundingBox filters."""
+    """List graphic shapes and board text with optional layer/kind/boundingBox filters."""
     gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
@@ -163,7 +165,7 @@ def handle_list_shapes(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
 
 
 def handle_delete_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Delete shapes by id(s) or layer / kind / boundingBox filters."""
+    """Delete shapes / board text by id(s) or layer / kind / boundingBox filters."""
     gate = _require_ipc(iface)
     if gate:
         return gate
@@ -190,7 +192,8 @@ def handle_delete_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
 
 
 def handle_edit_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """Edit one shape (by id): newLayer, width, filled, move {dx, dy}."""
+    """Edit one shape or board-text item (by id): newLayer, width, filled,
+    move {dx, dy}, plus text / size for text items."""
     gate = _require_ipc(iface)
     if gate:
         return gate
@@ -203,4 +206,6 @@ def handle_edit_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
         width=params.get("width"),
         filled=params.get("filled"),
         move=params.get("move"),
+        text=params.get("text"),
+        size=params.get("size"),
     )

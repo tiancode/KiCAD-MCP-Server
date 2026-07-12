@@ -232,6 +232,11 @@ class _ShapeMixin:
 
     # ------------------------------------------------------------------
     # Shape queries / mutation — list, delete, edit existing shapes.
+    #
+    # "Shapes" here include free board TEXT items (the gr_text placed by
+    # add_board_text → kind "text", and text boxes → kind "textbox").
+    # Without them, placed text could not be listed, moved, or removed
+    # through the MCP at all.
     # ------------------------------------------------------------------
 
     _SHAPE_KIND_BY_TYPE = {
@@ -240,28 +245,77 @@ class _ShapeMixin:
         "BoardCircle": "circle",
         "BoardRectangle": "rectangle",
         "BoardPolygon": "polygon",
+        "BoardText": "text",
+        "BoardTextBox": "textbox",
     }
+
+    #: Kinds backed by kipy text wrappers (BoardText / BoardTextBox) rather
+    #: than BoardShape — they carry value/position/TextAttributes instead of
+    #: stroke/fill geometry.
+    _TEXT_KINDS = ("text", "textbox")
+
+    def _shape_kind(self, item: Any) -> str:
+        return self._SHAPE_KIND_BY_TYPE.get(item.__class__.__name__, item.__class__.__name__)
+
+    def _shape_like_items(self, board: Any) -> List[Any]:
+        """All items the shape tools operate on: graphic shapes + board text.
+
+        ``get_text`` is probed defensively — an older kipy without it (or a
+        stub board in tests) simply contributes no text items rather than
+        failing the whole listing.
+        """
+        items: List[Any] = list(board.get_shapes())
+        get_text = getattr(board, "get_text", None)
+        if callable(get_text):
+            try:
+                items.extend(list(get_text()))
+            except Exception as e:
+                logger.debug(f"board.get_text() unavailable; text items not listed: {e}")
+        return items
 
     def _describe_shape(self, board: Any, shape: Any) -> Dict[str, Any]:
         from kipy.util.units import to_mm
 
         from ._helpers import kiid_str, normalize_board_layer
 
+        kind = self._shape_kind(shape)
         info: Dict[str, Any] = {
             "id": kiid_str(getattr(shape, "id", None)),
-            "kind": self._SHAPE_KIND_BY_TYPE.get(
-                shape.__class__.__name__, shape.__class__.__name__
-            ),
+            "kind": kind,
             "layer": normalize_board_layer(getattr(shape, "layer", None)),
         }
-        try:
-            info["width"] = to_mm(shape.attributes.stroke.width)
-        except Exception:
-            pass
-        try:
-            info["filled"] = bool(shape.attributes.fill.filled)
-        except Exception:
-            pass
+        if kind in self._TEXT_KINDS:
+            try:
+                info["text"] = str(shape.value)
+            except Exception:
+                pass
+            try:
+                pos = shape.position
+                info["position"] = {"x": to_mm(pos.x), "y": to_mm(pos.y), "unit": "mm"}
+            except Exception:
+                pass
+            try:
+                size = shape.attributes.size
+                info["size"] = {"width": to_mm(size.x), "height": to_mm(size.y), "unit": "mm"}
+            except Exception:
+                pass
+            try:
+                info["angle"] = float(shape.attributes.angle)
+            except Exception:
+                pass
+            try:
+                info["width"] = to_mm(shape.attributes.stroke_width)
+            except Exception:
+                pass
+        else:
+            try:
+                info["width"] = to_mm(shape.attributes.stroke.width)
+            except Exception:
+                pass
+            try:
+                info["filled"] = bool(shape.attributes.fill.filled)
+            except Exception:
+                pass
         try:
             bbox = board.get_item_bounding_box(shape)
             if bbox:
@@ -285,7 +339,7 @@ class _ShapeMixin:
         kind: Optional[str] = None,
         bbox: Optional[Dict[str, float]] = None,
     ) -> List[Any]:
-        """Resolve shapes by id list and/or layer / kind / bbox-overlap filters."""
+        """Resolve shapes / board text by id list and/or layer / kind / bbox filters."""
         from kipy.util.units import to_mm
 
         from ._helpers import kiid_str
@@ -293,17 +347,13 @@ class _ShapeMixin:
         wanted_ids = set(ids) if ids else None
         layer_enum = self._layer_to_enum(layer) if layer else None
         matches = []
-        for shape in board.get_shapes():
+        for shape in self._shape_like_items(board):
             if wanted_ids is not None and kiid_str(getattr(shape, "id", None)) not in wanted_ids:
                 continue
             if layer_enum is not None and getattr(shape, "layer", None) != layer_enum:
                 continue
-            if kind is not None:
-                shape_kind = self._SHAPE_KIND_BY_TYPE.get(
-                    shape.__class__.__name__, shape.__class__.__name__
-                )
-                if shape_kind != kind:
-                    continue
+            if kind is not None and self._shape_kind(shape) != kind:
+                continue
             if bbox is not None:
                 try:
                     item_box = board.get_item_bounding_box(shape)
@@ -326,7 +376,7 @@ class _ShapeMixin:
         kind: Optional[str] = None,
         bbox: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
-        """List graphic shapes with optional layer / kind / bbox filters."""
+        """List graphic shapes AND board text with optional layer/kind/bbox filters."""
         try:
             board = self._get_board()
             shapes = self._match_shapes(board, layer=layer, kind=kind, bbox=bbox)
@@ -344,7 +394,7 @@ class _ShapeMixin:
         bbox: Optional[Dict[str, float]] = None,
         delete_all: bool = False,
     ) -> Dict[str, Any]:
-        """Delete shapes by id(s) or filters.
+        """Delete shapes / board text by id(s) or filters.
 
         Multiple filter matches require ``delete_all=True`` — otherwise the
         call is refused with the candidate list (mirrors delete_copper_pour).
@@ -386,8 +436,17 @@ class _ShapeMixin:
         width: Optional[float] = None,
         filled: Optional[bool] = None,
         move: Optional[Dict[str, float]] = None,
+        text: Optional[str] = None,
+        size: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Edit one shape: layer, stroke width, fill, or translate by dx/dy mm."""
+        """Edit one shape or board-text item by id.
+
+        Any kind: ``new_layer``, ``move`` {dx, dy}.  Shapes: ``width``
+        (stroke), ``filled``.  Text ("text"/"textbox"): ``text`` (content),
+        ``size`` (glyph size in mm), ``width`` (text stroke width).
+        Properties that don't apply to the item's kind are reported in
+        ``unsupported`` instead of being silently ignored.
+        """
         try:
             board = self._get_board()
             matches = self._match_shapes(board, ids=[shape_id])
@@ -397,7 +456,9 @@ class _ShapeMixin:
                     "message": f"No shape with id {shape_id} — call list_shapes",
                 }
             shape = matches[0]
+            is_text = self._shape_kind(shape) in self._TEXT_KINDS
             changed: List[str] = []
+            unsupported: List[str] = []
 
             from kipy.geometry import Vector2
             from kipy.util.units import from_mm
@@ -405,23 +466,44 @@ class _ShapeMixin:
             if new_layer is not None:
                 shape.layer = self._layer_to_enum(new_layer)
                 changed.append("layer")
+            if text is not None:
+                if is_text:
+                    shape.value = str(text)
+                    changed.append("text")
+                else:
+                    unsupported.append("text")
+            if size is not None:
+                if is_text:
+                    glyph = from_mm(float(size))
+                    shape.attributes.size = Vector2.from_xy(glyph, glyph)
+                    changed.append("size")
+                else:
+                    unsupported.append("size")
             if width is not None:
-                shape.attributes.stroke.width = from_mm(width)
+                if is_text:
+                    # TextAttributes carries stroke_width directly (no .stroke).
+                    shape.attributes.stroke_width = from_mm(width)
+                else:
+                    shape.attributes.stroke.width = from_mm(width)
                 changed.append("width")
             if filled is not None:
-                shape.attributes.fill.filled = bool(filled)
-                changed.append("filled")
+                if is_text:
+                    unsupported.append("filled")
+                else:
+                    shape.attributes.fill.filled = bool(filled)
+                    changed.append("filled")
             if move is not None:
                 dx = from_mm(float(move.get("dx", 0)))
                 dy = from_mm(float(move.get("dy", 0)))
                 moved = False
                 for attr in (
+                    "position",  # BoardText
                     "start",
                     "mid",
                     "end",
                     "center",
                     "radius_point",
-                    "top_left",
+                    "top_left",  # BoardRectangle + BoardTextBox
                     "bottom_right",
                 ):
                     v = getattr(shape, attr, None)
@@ -442,23 +524,33 @@ class _ShapeMixin:
                     changed.append("move")
 
             if not changed:
-                return {
+                result: Dict[str, Any] = {
                     "success": False,
                     "message": (
-                        "No editable property given — pass newLayer, width, "
-                        "filled, or move {dx, dy}"
+                        "No applicable property given — pass newLayer, move {dx, dy}, "
+                        "width/filled (shapes), or text/size (board text)"
                     ),
                     "shape": self._describe_shape(board, shape),
                 }
+                if unsupported:
+                    result["unsupported"] = unsupported
+                    result["message"] = (
+                        f"Property(ies) not applicable to kind "
+                        f"'{self._shape_kind(shape)}': {', '.join(unsupported)}"
+                    )
+                return result
 
             self._apply_update(board, [shape], f"Edited shape ({', '.join(changed)})")
             self._notify("shape_edited", {"id": shape_id, "changed": changed})
-            return {
+            result = {
                 "success": True,
                 "message": f"Edited shape ({', '.join(changed)})",
                 "changed": changed,
                 "shape": self._describe_shape(board, shape),
             }
+            if unsupported:
+                result["unsupported"] = unsupported
+            return result
         except Exception as e:
             logger.error(f"Failed to edit shape: {e}")
             return {"success": False, "message": str(e)}

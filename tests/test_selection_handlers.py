@@ -207,3 +207,77 @@ def test_handlers_fail_cleanly_without_ipc():
         out = getattr(iface, f"_handle_{cmd}")({})
         assert out["success"] is False
         assert "IPC" in out["message"]
+
+
+# ---------------------------------------------------------------------------
+# Papercut 3 (GD32 E2E): reference resolution must yield CLEAN KIID strings.
+# ``str()`` on a kipy KIID proto prints the field repr ``value: "<uuid>"\n``,
+# which leaked into the response's ``requested`` list.
+# ---------------------------------------------------------------------------
+class _ProtoKiid:
+    """Mimics a kipy KIID proto message: .value carries the uuid, str()
+    prints the protobuf field repr."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return f'value: "{self.value}"\n'
+
+
+class _ProtoKiidBoard:
+    def get_footprints(self):
+        return [
+            SimpleNamespace(
+                id=_ProtoKiid("aaaa-1111"),
+                reference_field=SimpleNamespace(text=SimpleNamespace(value="R1")),
+            ),
+            SimpleNamespace(
+                id=_ProtoKiid("bbbb-2222"),
+                reference_field=SimpleNamespace(text=SimpleNamespace(value="U1")),
+            ),
+        ]
+
+
+def test_reference_resolution_yields_clean_kiids_not_proto_repr():
+    api = _FakeAPI()
+    api._get_board = lambda: _ProtoKiidBoard()
+    iface = _make_iface(api)
+
+    out = iface._handle_add_to_selection({"references": ["R1", "U1"]})
+
+    assert out["success"] is True
+    last_call = api.calls[-1]
+    assert last_call[0] == "add_to_selection"
+    assert last_call[1] == ["aaaa-1111", "bbbb-2222"]
+    for item_id in last_call[1]:
+        assert "value:" not in item_id
+        assert "\n" not in item_id
+
+
+def test_mutate_selection_requested_field_is_clean_end_to_end():
+    """Through the real IPCBoardAPI._mutate_selection: the ``requested``
+    field in the manage_selection(add) response must carry the clean KIIDs
+    the handler resolved — never a protobuf repr."""
+    from kicad_api.ipc_backend._board_core import IPCBoardAPI
+
+    api = IPCBoardAPI.__new__(IPCBoardAPI)
+    api._kicad = MagicMock()
+    api._notify = MagicMock()
+    api._current_commit = None
+    fp = SimpleNamespace(
+        id=_ProtoKiid("aaaa-1111"),
+        reference_field=SimpleNamespace(text=SimpleNamespace(value="R1")),
+    )
+    board = MagicMock()
+    board.get_items_by_id.return_value = [fp]
+    board.add_to_selection.return_value = [fp]
+    api._board = board
+
+    out = api.add_to_selection(["aaaa-1111"])
+
+    assert out["success"] is True
+    assert out["requested"] == ["aaaa-1111"]
+    assert out["resolved"] == 1
+    # The described selection carries the clean id too.
+    assert out["selection"][0]["id"] == "aaaa-1111"

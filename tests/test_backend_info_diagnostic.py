@@ -62,9 +62,9 @@ def test_get_backend_info_swig_when_kicad_not_running_points_at_launch(monkeypat
 
     assert out["backend"] == "swig"
     assert out["kicad_running"] is False
-    assert "launch_kicad_ui" in out["message"]
+    assert "manage_kicad_ui(action=launch)" in out["message"]
     assert "KiCad isn't running" in out["message"]
-    assert "launch_kicad_ui" in out["recommendation"]
+    assert "manage_kicad_ui(action=launch)" in out["recommendation"]
 
 
 def test_get_backend_info_swig_when_kicad_running_points_at_preferences(monkeypatch):
@@ -93,8 +93,9 @@ def test_get_backend_info_swig_when_kicad_running_points_at_preferences(monkeypa
     assert "Preferences" in out["message"]
     assert "IPC API Server" in out["message"]
     assert "Preferences" in out["recommendation"]
-    # "launch_kicad_ui" must NOT be suggested here — KiCad is already up.
+    # A launch must NOT be suggested here — KiCad is already up.
     assert "launch_kicad_ui" not in out["recommendation"]
+    assert "manage_kicad_ui" not in out["recommendation"]
 
 
 def test_get_backend_info_ipc_branch_has_no_recommendation(monkeypatch):
