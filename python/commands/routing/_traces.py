@@ -26,7 +26,10 @@ class TraceMixin:
                 }
 
             name = params.get("name")
-            net_class = params.get("class")
+            # The TS schema names this `netClass`; `class` kept as legacy alias
+            # (it used to be the only spelling, silently dropping every
+            # netClass sent by the MCP layer).
+            net_class = params.get("netClass", params.get("class"))
 
             if not name:
                 return {

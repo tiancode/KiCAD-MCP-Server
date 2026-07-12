@@ -274,8 +274,15 @@ def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
     reads zones over IPC instead.  Output shape mirrors the SWIG handler (net,
     layers, priority, isFilled, boundingBox) with the same net / layer /
     boundingBox filters so callers don't have to branch on backend.
+
+    ``filledArea`` is always ``None`` on this path: the IPC API exposes no
+    server-side area computation (kipy zones carry filled polygons, not an
+    area), so ``null`` — never a misleading ``0`` — marks it unobtainable.
+    The SWIG handler reports the real mm² value.
     """
     try:
+        from commands.routing._zones import resolve_query_net_filter
+
         net_filter = params.get("net")
         layer_filter = params.get("layer")
         bbox = params.get("boundingBox")
@@ -291,15 +298,26 @@ def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
         from kipy.util.units import to_mm as nm_to_mm  # type: ignore
 
         board = iface.ipc_board_api._get_board()  # noqa: SLF001 — our wrapper's accessor
+        zones = list(board.get_zones())
+
+        # Resolve the net filter against the board's real nets so a bare "GND"
+        # matches a hierarchical "/GND" zone (Bug 2 — parity with copper_pour).
+        # Read-only: never refuses, only annotates.  When the board nets can't
+        # be enumerated (bare mock), resolve against the zones' own nets.
+        target_net = net_filter
+        net_annotations: Dict[str, Any] = {}
+        if net_filter:
+            available = _ipc_available_net_names(iface)
+            if available is None:
+                available = [n for n in (_zone_net_name(z) for z in zones) if n]
+            if available:
+                target_net, net_annotations = resolve_query_net_filter(net_filter, available)
+
         zones_out = []
-        for zone in board.get_zones():
+        for zone in zones:
             try:
-                z_net = ""
-                try:
-                    z_net = zone.net.name if zone.net else ""
-                except Exception:
-                    z_net = ""
-                if net_filter and z_net != net_filter:
+                z_net = _zone_net_name(zone)
+                if target_net and z_net != target_net:
                     continue
 
                 layer_names = []
@@ -341,6 +359,9 @@ def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
                     "layers": layer_names,
                     "priority": zone.priority if hasattr(zone, "priority") else 0,
                     "isFilled": bool(zone.filled) if hasattr(zone, "filled") else False,
+                    # Not obtainable over IPC (no area API in kipy) — null,
+                    # never a fake 0.  The SWIG path reports real mm².
+                    "filledArea": None,
                 }
                 if bbox_data is not None:
                     entry["boundingBox"] = bbox_data
@@ -349,7 +370,12 @@ def handle_query_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
                 logger.warning(f"Skipping invalid zone object: {zone_err}")
                 continue
 
-        return {"success": True, "zoneCount": len(zones_out), "zones": zones_out}
+        return {
+            "success": True,
+            "zoneCount": len(zones_out),
+            "zones": zones_out,
+            **net_annotations,
+        }
     except Exception as e:
         logger.error(f"IPC query_zones error: {e}")
         return {"success": False, "message": str(e)}
@@ -456,10 +482,17 @@ def _find_zones_ipc(
 
 
 def handle_delete_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
-    """IPC handler for delete_copper_pour — deletes zones from the live board."""
+    """IPC handler for delete_copper_pour — deletes zones from the live board.
+
+    Selects by ``zoneUuid`` (preferred, matches the TS schema; ``uuid`` kept
+    as an alias) or ``net``/``layer`` filters.
+    """
     try:
         matches, err = _find_zones_ipc(
-            iface, params.get("uuid"), params.get("net"), params.get("layer")
+            iface,
+            params.get("zoneUuid") or params.get("uuid"),
+            params.get("net"),
+            params.get("layer"),
         )
         if err:
             return err
@@ -468,7 +501,7 @@ def handle_delete_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -
                 "success": False,
                 "message": (
                     f"{len(matches)} zones matched — pass all=true to delete "
-                    "every match, or refine with uuid (from query_zones)"
+                    "every match, or refine with zoneUuid (from query_zones)"
                 ),
                 "zones": [_zone_brief_ipc(z) for z in matches],
             }
@@ -498,7 +531,8 @@ _ZONE_CONNECTION_STYLES = {
 def handle_edit_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """IPC handler for edit_copper_pour — edits one zone on the live board.
 
-    Same param surface as the SWIG path: select by uuid or net/layer filters
+    Same param surface as the SWIG path: select by zoneUuid (``uuid`` kept as
+    an alias) or net/layer filters
     matching exactly one zone; then any of newNet / newLayer / clearance /
     minWidth / priority / fillType / padConnection / thermalGap /
     thermalBridgeWidth / outline overwrite that zone's settings.
@@ -514,7 +548,10 @@ def handle_edit_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         from kipy.util.units import from_mm
 
         matches, err = _find_zones_ipc(
-            iface, params.get("uuid"), params.get("net"), params.get("layer")
+            iface,
+            params.get("zoneUuid") or params.get("uuid"),
+            params.get("net"),
+            params.get("layer"),
         )
         if err:
             return err
@@ -522,7 +559,7 @@ def handle_edit_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> 
             return {
                 "success": False,
                 "message": (
-                    f"{len(matches)} zones matched — refine with uuid "
+                    f"{len(matches)} zones matched — refine with zoneUuid "
                     "(from query_zones) or a net+layer pair"
                 ),
                 "zones": [_zone_brief_ipc(z) for z in matches],
