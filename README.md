@@ -22,10 +22,6 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 - Real-time KiCAD UI integration via IPC API (experimental)
 - Comprehensive error handling and logging
 
-## Release Notes
-
-See [CHANGELOG.md](CHANGELOG.md) for the full release history and what changed in each version.
-
 ## Available Tools
 
 The server provides 125 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
@@ -1036,8 +1032,6 @@ npm run format
 
 **Current Version:** 2.2.3
 
-See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
-
 **Working Features (125 tools):**
 
 - Project management with snapshot checkpointing
@@ -1064,7 +1058,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 - Hybrid footprint loading (SWIG for library access, IPC for placement)
 
 **Developer Mode:**
-Set `KICAD_MCP_DEV=1` to capture MCP session logs for debugging. See CHANGELOG v2.2.3 for details.
+Set `KICAD_MCP_DEV=1` to capture MCP session logs for debugging.
 
 ## What Do You Want to See Next?
 
@@ -1089,8 +1083,6 @@ Contributions are welcome! Please follow these guidelines:
    - Add tests for new functionality
    - Update documentation
    - Submit PR with clear description
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ## License
 
