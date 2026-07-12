@@ -248,6 +248,56 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   );
 
   // ------------------------------------------------------
+  // Edit Component Pad Tool
+  //
+  // Repairs pads on a PLACED footprint — broken library footprints
+  // (e.g. easyeda BAT-SMD_CR1220-2: thru-hole pads with EMPTY numbers
+  // and copper diameter == drill diameter) are otherwise unfixable:
+  // edit_footprint_pad only patches .kicad_mod files and only numbered
+  // pads. Targets by number OR zero-based index; refuses zero/negative
+  // annular ring unless forced.
+  // ------------------------------------------------------
+  const padSizeSchema = z.union([
+    z.number().describe("Uniform size (round/square)"),
+    z.object({ x: z.number(), y: z.number() }),
+  ]);
+  server.tool(
+    "edit_component_pad",
+    "Edit pads of a PLACED footprint on the PCB (fix broken library footprints): copper size, drill, shape, pad number, pad type. Target by padNumber ('' matches unnumbered pads) or zero-based padIndex; several matches need all=true. Refuses a resulting annular ring <= 0 (copper<=drill) unless force=true. For .kicad_mod library files use edit_footprint_pad.",
+    {
+      reference: z.string().describe("Reference designator of the placed component (e.g. 'BT1')"),
+      padNumber: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe("Pad number to match; pass '' to target pads with empty numbers"),
+      padIndex: z
+        .number()
+        .int()
+        .optional()
+        .describe("Zero-based pad index in get_component_pads order (works for unnumbered pads)"),
+      padType: z
+        .enum(["smd", "through_hole", "thru_hole", "npth", "connector"])
+        .optional()
+        .describe("Filter matches by pad type (or sole selector)"),
+      size: padSizeSchema.optional().describe("New copper size in mm"),
+      drill: padSizeSchema.optional().describe("New drill in mm (number = round, {x,y} = oval)"),
+      shape: z.enum(["circle", "rect", "oval", "roundrect"]).optional().describe("New pad shape"),
+      newPadNumber: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe("Assign a pad number (fixes empty-number pads)"),
+      newPadType: z
+        .enum(["smd", "thru_hole", "npth", "connector"])
+        .optional()
+        .describe("Convert pad type"),
+      all: z.boolean().optional().describe("Edit every matching pad (default: refuse multi-match)"),
+      force: z.boolean().optional().describe("Allow zero/negative annular ring result"),
+      unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for sizes (default mm)"),
+    },
+    passthrough("edit_component_pad"),
+  );
+
+  // ------------------------------------------------------
   // Get Component List Tool
   // ------------------------------------------------------
   server.tool(

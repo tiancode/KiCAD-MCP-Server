@@ -152,7 +152,12 @@ class ViaMixin:
             densifyRefs: list of refs for ``around_refs``. Default [].
             densifyRadius: how many grid cells around each ref to try.
                 Default 2 (5x5 candidate field per ref).
-            edgeMargin: distance from board edge mm. Default 0.5.
+            edgeClearance: copper-to-edge clearance mm (alias: edgeMargin).
+                Default 0.5. The via CENTRE keep-out adds the via radius so
+                the via COPPER keeps this distance from Edge.Cuts.
+            force: place vias even when the GND zones are unfilled (which
+                makes stitching vias dangle). Default False — an unfilled
+                GND zone is refused with needs_zone_fill.
             maxVias: maximum total placements (across all strategies).
                 Default unlimited.
             dryRun: don't write, just return placements.
@@ -204,7 +209,19 @@ class ViaMixin:
         spacing_mm = float(params.get("spacing", 5.0))
         densify_refs = list(params.get("densifyRefs") or [])
         densify_radius = int(params.get("densifyRadius", 2))
-        edge_margin_mm = float(params.get("edgeMargin", 0.5))
+        # Copper-to-edge clearance.  ``edgeClearance`` is the canonical name
+        # (it matches the DRC ``copper_edge_clearance`` rule); ``edgeMargin``
+        # is the legacy alias.  Default 0.5 mm.  Historically the schema only
+        # exposed ``edgeMargin`` and applied it to the via CENTRE, so a caller
+        # passing ``edgeClearance`` was silently dropped by the SDK and the via
+        # copper still landed via_radius closer to the edge than intended
+        # (the GD32 E2E: edgeClearance:1.5 ignored, vias 0.5 mm from the edge →
+        # copper_edge_clearance errors).
+        edge_clearance_raw = params.get("edgeClearance")
+        if edge_clearance_raw is None:
+            edge_clearance_raw = params.get("edgeMargin", 0.5)
+        edge_clearance_mm = max(0.0, float(edge_clearance_raw))
+        force = bool(params.get("force", False))
         max_vias_raw = params.get("maxVias")
         max_vias = int(max_vias_raw) if max_vias_raw is not None else None
         dry_run = bool(params.get("dryRun", False))
@@ -215,7 +232,11 @@ class ViaMixin:
         via_radius_nm = via_size_nm // 2
         clearance_nm = int(clearance_mm * scale)
         spacing_nm = int(spacing_mm * scale)
-        edge_margin_nm = int(edge_margin_mm * scale)
+        edge_clearance_nm = int(edge_clearance_mm * scale)
+        # The via CENTRE keep-out from Edge.Cuts is the requested copper
+        # clearance PLUS the via radius, so the via copper annulus actually
+        # keeps ``edge_clearance_mm`` from the board edge.
+        edge_keepout_nm = edge_clearance_nm + via_radius_nm
 
         # --- Resolve GND net ---
         netinfo = self.board.GetNetInfo()
@@ -254,15 +275,32 @@ class ViaMixin:
                 "message": "Board outline is missing or empty",
                 "errorDetails": "Define Edge.Cuts before stitching vias",
             }
-        x_min = edge_bb.GetLeft() + edge_margin_nm
-        y_min = edge_bb.GetTop() + edge_margin_nm
-        x_max = edge_bb.GetRight() - edge_margin_nm
-        y_max = edge_bb.GetBottom() - edge_margin_nm
+        # GetBoardEdgesBoundingBox includes the Edge.Cuts STROKE, inflating
+        # the bbox by half the line width per side — without compensation a
+        # 0.1 mm outline erodes the effective copper clearance by 0.05 mm
+        # (observed on a real board: requested 0.5 mm, DRC measured 0.45 mm).
+        edge_stroke_half_nm = 0
+        try:
+            edge_layer = self.board.GetLayerID("Edge.Cuts")
+            for drawing in self.board.GetDrawings():
+                try:
+                    if drawing.GetLayer() != edge_layer:
+                        continue
+                    edge_stroke_half_nm = max(edge_stroke_half_nm, int(drawing.GetWidth()) // 2)
+                except Exception:
+                    continue
+        except Exception:
+            edge_stroke_half_nm = 0
+
+        x_min = edge_bb.GetLeft() + edge_stroke_half_nm + edge_keepout_nm
+        y_min = edge_bb.GetTop() + edge_stroke_half_nm + edge_keepout_nm
+        x_max = edge_bb.GetRight() - edge_stroke_half_nm - edge_keepout_nm
+        y_max = edge_bb.GetBottom() - edge_stroke_half_nm - edge_keepout_nm
         if x_max <= x_min or y_max <= y_min:
             return {
                 "success": False,
-                "message": "Edge margin too large for this board",
-                "errorDetails": "Reduce edgeMargin or increase the outline",
+                "message": "Edge clearance too large for this board",
+                "errorDetails": "Reduce edgeClearance or increase the outline",
             }
 
         # --- Gather obstacles (everything on a non-GND net we must dodge) ---
@@ -314,12 +352,54 @@ class ViaMixin:
             f"{len(obstacle_vias)} vias, {len(obstacle_pads)} pads to avoid"
         )
 
-        # --- In-zone test (cached per call) ---
+        # --- GND zones + fill-order guard ---
+        # A stitching via only stops "dangling" when it lands on GND copper
+        # that is actually filled.  If the GND net has zones but none of them
+        # are filled, placing vias now yields via_dangling + copper_edge
+        # DRC errors (observed on the GD32 E2E: 13 -> 42 after stitching two
+        # unfilled GND zones).  Refuse by default; ``force`` overrides.  Boards
+        # with no GND zones at all skip the guard — GND is carried by
+        # tracks/pours elsewhere and there is nothing to fill.
         gnd_zones = [z for z in self.board.Zones() if z.GetNetCode() == gnd_net_code]
+
+        def _zone_is_filled(z: Any) -> bool:
+            try:
+                return bool(z.IsFilled())
+            except Exception:
+                return False
+
+        filled_gnd_zones = [z for z in gnd_zones if _zone_is_filled(z)]
+        zones_unfilled = bool(gnd_zones) and not filled_gnd_zones
+        if zones_unfilled and not force:
+            return {
+                "success": False,
+                "message": "GND zones are not filled",
+                "needs_zone_fill": True,
+                "errorDetails": (
+                    f"Net '{gnd_net_name}' has {len(gnd_zones)} zone(s) but none are "
+                    "filled, so stitching vias would dangle and violate "
+                    "copper_edge_clearance. Fill the zones first — "
+                    "copper_pour(action=refill, force=true) or fill in KiCad — "
+                    "or pass force=true to place anyway."
+                ),
+                "summary": {
+                    "gnd_net": gnd_net_name,
+                    "gnd_zone_count": len(gnd_zones),
+                    "filled_gnd_zone_count": 0,
+                },
+            }
+
+        # When filled GND zones exist, restrict placement to inside their
+        # filled polygons regardless of the requested strategy — a via off the
+        # fill has no copper to connect to and dangles.  ``in_zones`` requests
+        # this explicitly; here it becomes the default whenever a real fill is
+        # present, which is what keeps the vias from dangling.
+        restrict_to_fill = bool(filled_gnd_zones)
+        zone_membership_zones = filled_gnd_zones or gnd_zones
 
         def in_any_gnd_zone(x_nm: int, y_nm: int) -> bool:
             pt = pcbnew.VECTOR2I(x_nm, y_nm)
-            for z in gnd_zones:
+            for z in zone_membership_zones:
                 try:
                     if z.HitTestFilledArea(z.GetLayer(), pt, 0):
                         return True
@@ -400,7 +480,7 @@ class ViaMixin:
                 x += spacing_nm
 
         # --- Filter + place ---
-        in_zones_only = "in_zones" in strategies
+        in_zones_only = ("in_zones" in strategies) or restrict_to_fill
         skipped_by_zone = 0
         skipped_by_collision = 0
         placed_meta: List[Dict[str, Any]] = []
@@ -451,5 +531,11 @@ class ViaMixin:
                 "via_drill_mm": via_drill_mm,
                 "clearance_mm": clearance_mm,
                 "spacing_mm": spacing_mm,
+                "edge_clearance_mm": edge_clearance_mm,
+                "edge_keepout_mm": round(edge_keepout_nm / scale, 4),
+                "gnd_zone_count": len(gnd_zones),
+                "filled_gnd_zone_count": len(filled_gnd_zones),
+                "restricted_to_fill": restrict_to_fill,
+                "forced": force,
             },
         }

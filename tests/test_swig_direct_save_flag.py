@@ -52,6 +52,9 @@ def test_board_mutating_commands_cover_known_mutators() -> None:
         "copy_routing_pattern",
         "duplicate_component",
         "edit_component",
+        # 2026-07: edits pads of a placed footprint (annular-ring repair);
+        # without auto-save the repaired pads vanish on the next reload.
+        "edit_component_pad",
         "modify_trace",
         "place_component_array",
         "route_differential_pair",

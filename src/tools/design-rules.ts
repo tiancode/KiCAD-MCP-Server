@@ -59,13 +59,18 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
   // ------------------------------------------------------
   server.tool(
     "run_drc",
-    "Run KiCAD Design Rule Check (DRC) on the current PCB and return violations.",
+    "Run KiCAD Design Rule Check (DRC) on the current PCB and return violations with per-item offender locations (description + x/y mm). Returns the first maxViolations inline; the full list is written to the violations file.",
     {
       reportPath: z.string().optional().describe("Optional path to save the DRC report"),
+      maxViolations: z
+        .number()
+        .int()
+        .optional()
+        .describe("Max violations returned inline (default 30, 0 = all)."),
     },
-    async ({ reportPath }) => {
+    async ({ reportPath, maxViolations }) => {
       logger.debug("Running DRC check");
-      const result = await callKicadScript("run_drc", { reportPath });
+      const result = await callKicadScript("run_drc", { reportPath, maxViolations });
 
       return formatKicadResult(result);
     },
