@@ -140,6 +140,7 @@ def _compute_symbol_bbox_direct(
     pin_defs: Dict[str, Dict],
     margin: float = 0.0,
     graphics_points: Optional[List[Tuple[float, float]]] = None,
+    graphics_by_unit: Optional[Dict[int, List[Tuple[float, float]]]] = None,
 ) -> Optional[Tuple[float, float, float, float]]:
     """
     Compute bounding box of a symbol from its graphics and pin definitions.
@@ -150,16 +151,28 @@ def _compute_symbol_bbox_direct(
     is available.
 
     Args:
-        sym: Parsed symbol dict with x, y, rotation, mirror_x, mirror_y.
+        sym: Parsed symbol dict with x, y, rotation, mirror_x, mirror_y, unit.
         pin_defs: Pin definitions from PinLocator.get_symbol_pins().
         margin: Shrink bbox by this amount on each side (mm).
-        graphics_points: Local-coordinate points from symbol body graphics.
+        graphics_points: Local-coordinate points from symbol body graphics
+            (all units — legacy path).
+        graphics_by_unit: Local-coordinate body points keyed by unit. When
+            provided, only unit 0 (common) plus THIS instance's ``sym["unit"]``
+            are used, so a multi-unit part's box no longer includes another
+            unit's body drawn at the shared origin (F4). Overrides
+            ``graphics_points``.
 
     Returns (min_x, min_y, max_x, max_y) in mm, or None if no pins.
     """
     pin_positions = _compute_pin_positions_direct(sym, pin_defs)
     if not pin_positions:
         return None
+
+    if graphics_by_unit is not None:
+        sym_unit = sym.get("unit", 1)
+        graphics_points = list(graphics_by_unit.get(0, [])) + list(
+            graphics_by_unit.get(sym_unit, [])
+        )
 
     if graphics_points:
         # Transform graphics points to absolute coordinates
@@ -224,6 +237,11 @@ def _compute_pin_positions_direct(
     lookup in the schematic, so it works correctly when multiple symbols share
     the same reference designator (e.g. unannotated "Q?").
 
+    For a multi-unit part each unit is a separate instance; a pin is included
+    only when it belongs to unit 0 (common) or this instance's ``sym["unit"]``,
+    so unit B's pins — drawn at the shared library origin — don't get attributed
+    to unit A's instance (F4). Pins with no unit tag are always included.
+
     KiCad transform order: mirror (in local coords) → rotate → translate.
     """
     sym_x = sym["x"]
@@ -231,9 +249,13 @@ def _compute_pin_positions_direct(
     rotation = sym["rotation"]
     mirror_x = sym.get("mirror_x", False)
     mirror_y = sym.get("mirror_y", False)
+    sym_unit = sym.get("unit", 1)
 
     result: Dict[str, List[float]] = {}
     for pin_num, pin_data in pin_defs.items():
+        pin_unit = pin_data.get("unit")
+        if pin_unit not in (None, 0) and pin_unit != sym_unit:
+            continue  # belongs to a different unit's instance
         rel_x = float(pin_data["x"])
         rel_y = float(pin_data["y"])
 

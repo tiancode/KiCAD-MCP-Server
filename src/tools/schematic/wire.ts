@@ -324,17 +324,27 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       const result = await callKicadScript("get_schematic_pin_locations", args);
       if (result.success && result.pins) {
         const lines = Object.entries(result.pins as Record<string, any>).map(
-          ([pinNum, data]: [string, any]) =>
-            `  Pin ${pinNum} (${data.name || pinNum}): x=${data.x}, y=${data.y}, angle=${data.angle ?? 0}°` +
-            // Multi-unit parts place each unit separately — surface the unit so
-            // an agent labelling by pin number lands on the right channel.
-            (data.unit != null ? ` [unit ${data.unit}]` : ""),
+          ([pinNum, data]: [string, any]) => {
+            const unitTag = data.unit != null ? ` [unit ${data.unit}]` : "";
+            // A pin whose multi-unit unit isn't placed has no real location —
+            // show it as NOT PLACED (never a fabricated coordinate) so an agent
+            // doesn't try to label/connect a phantom pin (F1).
+            if (data.placed === false) {
+              return `  Pin ${pinNum} (${data.name || pinNum}): NOT PLACED${unitTag}`;
+            }
+            return (
+              `  Pin ${pinNum} (${data.name || pinNum}): x=${data.x}, y=${data.y}, angle=${data.angle ?? 0}°` +
+              unitTag
+            );
+          },
         );
+        let text = `Pin locations for ${args.reference}:\n${lines.join("\n")}`;
+        if (result.warning) text += `\nWARNING: ${result.warning}`;
         return {
           content: [
             {
               type: "text",
-              text: `Pin locations for ${args.reference}:\n${lines.join("\n")}`,
+              text,
             },
           ],
         };

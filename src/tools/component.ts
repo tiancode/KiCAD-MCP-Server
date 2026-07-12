@@ -175,18 +175,23 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "find_component",
-    "Search for a PCB component by reference designator or value and return its position and properties.",
+    "Search components on the loaded PCB (board, not schematic). `query` is a case-insensitive substring matched across reference, value AND footprint-id; the targeted filters narrow further. All supplied criteria combine with AND. Returns position and properties.",
     {
-      reference: z.string().optional().describe("Reference designator to search for"),
-      value: z.string().optional().describe("Component value to search for"),
+      query: z
+        .string()
+        .optional()
+        .describe("Free-text substring matched across reference, value and footprint-id"),
+      reference: z.string().optional().describe("Reference designator substring to match"),
+      value: z.string().optional().describe("Component value substring to match"),
+      footprint: z.string().optional().describe("Footprint-id substring to match"),
     },
-    async ({ reference, value }) => {
-      logger.debug(
-        `Finding component with ${reference ? `reference: ${reference}` : `value: ${value}`}`,
-      );
+    async ({ query, reference, value, footprint }) => {
+      logger.debug(`Finding component (query=${query ?? ""} ref=${reference ?? ""})`);
       const result = await callKicadScript("find_component", {
+        query,
         reference,
         value,
+        footprint,
       });
 
       return formatKicadResult(result);

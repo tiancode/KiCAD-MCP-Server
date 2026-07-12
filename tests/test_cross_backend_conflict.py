@@ -265,6 +265,13 @@ def test_ipc_change_callback_marks_dirty_on_mutation():
 
 
 def test_ipc_change_callback_clears_on_save():
+    """Save clears the pending flag but must NOT refresh the board signature.
+
+    Finding N1: refreshing ``_board_disk_signature`` here made the recorded
+    signature match the freshly-saved disk while the SWIG in-memory board
+    still held the PRE-save content — hiding the divergence from
+    ``_reload_swig_board_if_disk_changed`` and serving stale SWIG reads.  The
+    stale signature IS the reload trigger now."""
     iface = _make_iface(use_ipc=True)
     iface._ipc_writes_pending = True
     iface._record_board_signature = MagicMock()
@@ -272,7 +279,7 @@ def test_ipc_change_callback_clears_on_save():
     iface._on_ipc_change("save", {})
 
     assert iface._ipc_writes_pending is False
-    iface._record_board_signature.assert_called_once()
+    iface._record_board_signature.assert_not_called()
 
 
 def test_ipc_change_callback_ignores_selection_events():

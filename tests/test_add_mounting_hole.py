@@ -74,7 +74,16 @@ def _captured_pad(pcbnew_mock):
 
 
 class TestFootprintLibIdSet:
-    def test_default_fpid_uses_diameter(self, cmds, fresh_pcbnew_mock):
+    def test_default_fpid_uses_diameter(self, cmds, fresh_pcbnew_mock, monkeypatch):
+        # Pin the stock-lib probe to "not found" so this covers the legacy
+        # synthetic-name fallback deterministically (independent of whether the
+        # test host has the KiCAD footprint library installed). The real
+        # stock-lib resolution path is covered in
+        # tests/test_mounting_hole_footprint_resolution.py.
+        import commands.board.outline as _outline
+
+        monkeypatch.setattr(_outline, "_list_mountinghole_footprints", lambda: set())
+
         result = cmds.add_mounting_hole(
             {
                 "position": {"x": 117, "y": 84.5, "unit": "mm"},

@@ -36,9 +36,12 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
     return {"success": False, "message": f"{base} ({reason})" if reason else base}
 
 
-def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    """Gate transactions on IPC + an open PCB editor frame."""
-    return require_ipc(iface, _ipc_unavailable)
+def _require_ipc(iface: "KiCADInterface", *, read_only: bool = False) -> Dict[str, Any]:
+    """Gate transactions on IPC + an open PCB editor frame.
+
+    ``read_only=True`` (get_transaction_status) skips the cross-backend
+    conflict refusal — a status read can't lose data."""
+    return require_ipc(iface, _ipc_unavailable, read_only=read_only)
 
 
 def handle_begin_transaction(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -84,7 +87,7 @@ def handle_get_transaction_status(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Report whether a transaction is currently open."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     return iface.ipc_board_api.get_transaction_status()

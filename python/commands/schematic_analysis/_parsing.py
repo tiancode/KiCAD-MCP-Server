@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import sexpdata
-from commands.pin_locator import PinLocator
+from commands.pin_locator import _UNIT_SUFFIX_RE, PinLocator
 from sexpdata import Symbol
 
 logger = logging.getLogger("kicad_interface")
@@ -82,7 +82,12 @@ def _parse_symbols(sexp_data: list) -> List[Dict[str, Any]]:
     """
     Parse all placed symbol instances from the schematic S-expression.
 
-    Returns list of dicts: {reference, lib_id, x, y, rotation, mirror_x, mirror_y, is_power}
+    Returns list of dicts: {reference, lib_id, x, y, rotation, mirror_x,
+    mirror_y, is_power, unit}. ``unit`` is the placed instance's ``(unit N)``
+    (default 1) — a multi-unit part is placed once per unit under the same
+    reference, and each instance's bounding box must use only *its* unit's pins
+    (see _geometry), or unit-B pins drawn at the shared library origin inflate
+    unit A's box into a phantom overlap (F4).
     """
     symbols = []
     for item in sexp_data:
@@ -97,6 +102,7 @@ def _parse_symbols(sexp_data: list) -> List[Dict[str, Any]]:
         is_power = False
         mirror_x = False
         mirror_y = False
+        unit = 1
 
         for sub in item:
             if isinstance(sub, list) and len(sub) >= 2:
@@ -113,6 +119,11 @@ def _parse_symbols(sexp_data: list) -> List[Dict[str, Any]]:
                         mirror_x = True
                     elif m == "y":
                         mirror_y = True
+                elif sub[0] == Symbol("unit") and len(sub) >= 2:
+                    try:
+                        unit = int(sub[1])
+                    except (TypeError, ValueError):
+                        unit = 1
                 elif sub[0] == Symbol("property") and len(sub) >= 3:
                     prop_name = str(sub[1]).strip('"')
                     if prop_name == "Reference":
@@ -129,47 +140,55 @@ def _parse_symbols(sexp_data: list) -> List[Dict[str, Any]]:
                 "mirror_x": mirror_x,
                 "mirror_y": mirror_y,
                 "is_power": is_power,
+                "unit": unit,
             }
         )
     return symbols
 
 
-def _parse_lib_symbol_graphics(symbol_def: list) -> List[Tuple[float, float]]:
+def _parse_lib_symbol_graphics_by_unit(symbol_def: list) -> Dict[int, List[Tuple[float, float]]]:
     """
-    Parse graphical body elements from a lib_symbol definition and return
-    local-coordinate bounding points.
+    Parse graphical body elements from a lib_symbol definition, grouped by the
+    symbol unit that owns them.
 
-    Extracts points from rectangle, polyline, circle, arc, and bezier
-    elements found in sub-symbols (typically the ``_0_1`` layers that
-    contain body shapes).
+    Body shapes live in ``<base>_<unit>_<style>`` sub-symbols: the ``_0_1``
+    layer holds common graphics drawn on every unit (unit 0), while a
+    multi-unit part draws each unit's body in its own ``_<unit>_1`` sub-symbol.
+    Grouping by unit lets a placed instance's bounding box use only ITS unit's
+    body — otherwise unit B's rectangle, drawn at the shared library origin,
+    inflates unit A's box into a phantom overlap (F4).
 
-    Returns a list of ``(x, y)`` points in local symbol coordinates.
+    Returns ``{unit: [(x, y), ...]}`` in local symbol coordinates.
     """
-    points: List[Tuple[float, float]] = []
+    by_unit: Dict[int, List[Tuple[float, float]]] = {}
 
-    def _extract_graphics_recursive(sexp: list) -> None:
+    def _add(unit: int, pt: Tuple[float, float]) -> None:
+        by_unit.setdefault(unit, []).append(pt)
+
+    def _recurse(sexp: Any, unit: int) -> None:
         if not isinstance(sexp, list) or len(sexp) == 0:
             return
 
         tag = sexp[0]
 
+        # Descending into a unit sub-symbol switches the unit context.
+        if tag == Symbol("symbol") and len(sexp) > 1:
+            match = _UNIT_SUFFIX_RE.search(str(sexp[1]).strip('"'))
+            if match:
+                unit = int(match.group(1))
+
         if tag == Symbol("rectangle"):
-            # (rectangle (start x y) (end x y) ...)
             for sub in sexp[1:]:
                 if isinstance(sub, list) and len(sub) >= 3:
                     if sub[0] in (Symbol("start"), Symbol("end")):
-                        points.append((float(sub[1]), float(sub[2])))
-
+                        _add(unit, (float(sub[1]), float(sub[2])))
         elif tag == Symbol("polyline"):
-            # (polyline (pts (xy x y) (xy x y) ...) ...)
             for sub in sexp[1:]:
                 if isinstance(sub, list) and len(sub) > 0 and sub[0] == Symbol("pts"):
                     for pt in sub[1:]:
                         if isinstance(pt, list) and len(pt) >= 3 and pt[0] == Symbol("xy"):
-                            points.append((float(pt[1]), float(pt[2])))
-
+                            _add(unit, (float(pt[1]), float(pt[2])))
         elif tag == Symbol("circle"):
-            # (circle (center x y) (radius r) ...)
             cx, cy, r = 0.0, 0.0, 0.0
             for sub in sexp[1:]:
                 if isinstance(sub, list) and len(sub) >= 3 and sub[0] == Symbol("center"):
@@ -177,39 +196,44 @@ def _parse_lib_symbol_graphics(symbol_def: list) -> List[Tuple[float, float]]:
                 elif isinstance(sub, list) and len(sub) >= 2 and sub[0] == Symbol("radius"):
                     r = float(sub[1])
             if r > 0:
-                points.extend(
-                    [
-                        (cx - r, cy - r),
-                        (cx + r, cy + r),
-                    ]
-                )
-
+                _add(unit, (cx - r, cy - r))
+                _add(unit, (cx + r, cy + r))
         elif tag == Symbol("arc"):
-            # (arc (start x y) (mid x y) (end x y) ...)
             for sub in sexp[1:]:
                 if isinstance(sub, list) and len(sub) >= 3:
                     if sub[0] in (Symbol("start"), Symbol("mid"), Symbol("end")):
-                        points.append((float(sub[1]), float(sub[2])))
-
+                        _add(unit, (float(sub[1]), float(sub[2])))
         elif tag == Symbol("bezier"):
-            # (bezier (pts (xy x y) ...) ...)
             for sub in sexp[1:]:
                 if isinstance(sub, list) and len(sub) > 0 and sub[0] == Symbol("pts"):
                     for pt in sub[1:]:
                         if isinstance(pt, list) and len(pt) >= 3 and pt[0] == Symbol("xy"):
-                            points.append((float(pt[1]), float(pt[2])))
+                            _add(unit, (float(pt[1]), float(pt[2])))
 
-        else:
-            # Recurse into sub-symbols to find graphics in nested definitions
-            for sub in sexp[1:]:
-                if isinstance(sub, list):
-                    _extract_graphics_recursive(sub)
+        # Recurse into sub-lists, carrying the current unit context.
+        for sub in sexp[1:]:
+            if isinstance(sub, list):
+                _recurse(sub, unit)
 
-    # Search the top-level symbol definition and its sub-symbols
     for item in symbol_def[1:]:
         if isinstance(item, list):
-            _extract_graphics_recursive(item)
+            _recurse(item, 0)
 
+    return by_unit
+
+
+def _parse_lib_symbol_graphics(symbol_def: list) -> List[Tuple[float, float]]:
+    """
+    Parse graphical body elements from a lib_symbol definition and return the
+    flat list of local-coordinate bounding points (all units combined).
+
+    Kept for backward compatibility; unit-aware callers should use
+    ``_parse_lib_symbol_graphics_by_unit`` so a placed instance's box uses only
+    its own unit's body.
+    """
+    points: List[Tuple[float, float]] = []
+    for pts in _parse_lib_symbol_graphics_by_unit(symbol_def).values():
+        points.extend(pts)
     return points
 
 
@@ -219,7 +243,9 @@ def _extract_lib_symbols(sexp_data: list) -> Dict[str, Dict]:
     pin definitions and graphics points for every symbol definition.
 
     Returns:
-        Dict mapping lib_id → {"pins": pin_defs, "graphics_points": [(x,y), ...]}.
+        Dict mapping lib_id → {"pins": pin_defs, "graphics_points": [(x,y), ...],
+        "graphics_by_unit": {unit: [(x,y), ...]}}. ``graphics_by_unit`` lets a
+        multi-unit part's per-instance bounding box use only its unit's body.
     """
     lib_symbols_section = None
     for item in sexp_data:
@@ -234,8 +260,13 @@ def _extract_lib_symbols(sexp_data: list) -> Dict[str, Dict]:
     for item in lib_symbols_section[1:]:
         if isinstance(item, list) and len(item) > 1 and item[0] == Symbol("symbol"):
             symbol_name = str(item[1]).strip('"')
+            graphics_by_unit = _parse_lib_symbol_graphics_by_unit(item)
+            flat: List[Tuple[float, float]] = []
+            for pts in graphics_by_unit.values():
+                flat.extend(pts)
             result[symbol_name] = {
                 "pins": PinLocator.parse_symbol_definition(item),
-                "graphics_points": _parse_lib_symbol_graphics(item),
+                "graphics_points": flat,
+                "graphics_by_unit": graphics_by_unit,
             }
     return result

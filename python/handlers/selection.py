@@ -36,9 +36,13 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
     return {"success": False, "message": f"{base} ({reason})" if reason else base}
 
 
-def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    """Gate selection ops on IPC + an open PCB editor frame."""
-    return require_ipc(iface, _ipc_unavailable)
+def _require_ipc(iface: "KiCADInterface", *, read_only: bool = False) -> Dict[str, Any]:
+    """Gate selection ops on IPC + an open PCB editor frame.
+
+    ``read_only=True`` (get_selection / hit_test) skips the cross-backend
+    conflict refusal — reads can't lose data; the dispatcher stamps
+    staleVsDisk on the result."""
+    return require_ipc(iface, _ipc_unavailable, read_only=read_only)
 
 
 def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
@@ -82,7 +86,7 @@ def _resolve_ids(iface: "KiCADInterface", params: Dict[str, Any]) -> List[str]:
 
 def handle_get_selection(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Return whatever is currently selected in the KiCAD board editor."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     try:
@@ -143,7 +147,7 @@ def handle_hit_test(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str
         {"position": {...}, "id": "<KIID>"}    # test only this item
         {"position": {...}, "reference": "R1"} # test only this footprint
     """
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
 

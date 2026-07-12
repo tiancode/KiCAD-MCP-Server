@@ -389,6 +389,20 @@ def handle_add_schematic_net_label(
             locator = PinLocator()
             pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
             if pin_loc is None:
+                # Distinguish a pin on an UNPLACED multi-unit unit (F1) — which
+                # must never be "connected" to a phantom coordinate — from a
+                # genuinely missing pin. The former gets the exact fix-up call.
+                diag = locator.diagnose_missing_pin(
+                    Path(schematic_path), component_ref, str(pin_number)
+                )
+                if diag.get("reason") == "unplaced_unit":
+                    return {
+                        "success": False,
+                        "message": locator.format_unplaced_unit_error(component_ref, diag),
+                        "needs_unit_placement": True,
+                        "unit": diag.get("pin_unit"),
+                        "unplaced_units": diag.get("unplaced_units", []),
+                    }
                 return {
                     "success": False,
                     "message": (

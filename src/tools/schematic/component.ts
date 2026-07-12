@@ -57,6 +57,14 @@ export function registerSchematicComponentTools(
         .min(1)
         .optional()
         .describe("Unit number for multi-unit symbols (1=A, 2=B, …). Default 1."),
+      placeAllUnits: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default false. true places EVERY unit of a multi-unit symbol in one call (stacked " +
+            "vertically, sharing the reference); response reports each unit's position. Use this " +
+            "for parts like MCUs whose power pins live on a separate unit.",
+        ),
       snapToGrid: z
         .boolean()
         .optional()
@@ -75,6 +83,7 @@ export function registerSchematicComponentTools(
       footprint?: string;
       position?: { x: number; y: number };
       unit?: number;
+      placeAllUnits?: boolean;
       snapToGrid?: boolean;
       snapGridMm?: number;
     }) => {
@@ -87,6 +96,7 @@ export function registerSchematicComponentTools(
         schematicPath: args.schematicPath,
         snapToGrid: args.snapToGrid,
         snapGridMm: args.snapGridMm,
+        placeAllUnits: args.placeAllUnits,
         component: {
           library,
           type: symbolName,
@@ -97,6 +107,7 @@ export function registerSchematicComponentTools(
           x: args.position?.x ?? 0,
           y: args.position?.y ?? 0,
           unit: args.unit ?? 1,
+          placeAllUnits: args.placeAllUnits,
         },
       };
 
@@ -110,6 +121,18 @@ export function registerSchematicComponentTools(
         if (result.snap?.applied) {
           const req = result.snap.requested;
           text += ` [snapped to ${result.snap.gridMm} mm grid from (${req?.x}, ${req?.y})]`;
+        }
+        // Multi-unit symbols (F1): surface the unit situation so the agent
+        // never assumes one placement covered the whole part. Pins on an
+        // unplaced unit have no location and can't be labeled/connected.
+        if (result.units) {
+          const u = result.units;
+          text += `\nUnits: ${u.total} total, placed ${JSON.stringify(u.placed)}`;
+          if (u.unplaced?.length) text += `, UNPLACED ${JSON.stringify(u.unplaced)}`;
+          if (result.unitPositions)
+            text += `\nUnit positions: ${JSON.stringify(result.unitPositions)}`;
+          if (result.warning) text += `\nWARNING: ${result.warning}`;
+          if (result.next) text += `\nNext: ${result.next}`;
         }
         // Append the raw position/snap blocks so structured consumers get them.
         text += `\n${JSON.stringify({ position: pos ?? null, snap: result.snap ?? null })}`;

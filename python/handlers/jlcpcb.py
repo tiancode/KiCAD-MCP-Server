@@ -204,9 +204,12 @@ def handle_import_jlcpcb_symbol(iface: "KiCADInterface", params: Dict[str, Any])
         if not lcsc_number:
             return {"success": False, "message": "Missing lcsc_number parameter (e.g. C7593)"}
         overwrite = bool(params.get("forceRefresh", False))
+        infer_pin_types = params.get("inferPinTypes", True) is not False
 
         try:
-            return easyeda_import.import_lcsc_part(lcsc_number, overwrite=overwrite)
+            return easyeda_import.import_lcsc_part(
+                lcsc_number, overwrite=overwrite, infer_pin_types=infer_pin_types
+            )
         except (easyeda_import.EasyEdaImportError, ValueError) as e:
             return {"success": False, "message": str(e)}
     except Exception as e:
@@ -241,8 +244,11 @@ def handle_import_jlcpcb_symbols(iface: "KiCADInterface", params: Dict[str, Any]
                 "message": "Provide lcsc_numbers as a non-empty list (e.g. ['C7593', 'C12087'])",
             }
         overwrite = bool(params.get("forceRefresh", False))
+        infer_pin_types = params.get("inferPinTypes", True) is not False
 
-        return easyeda_import.import_lcsc_parts(lcsc_numbers, overwrite=overwrite)
+        return easyeda_import.import_lcsc_parts(
+            lcsc_numbers, overwrite=overwrite, infer_pin_types=infer_pin_types
+        )
     except Exception as e:
         import traceback
 

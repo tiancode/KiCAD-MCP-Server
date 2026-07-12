@@ -10,7 +10,94 @@ import pcbnew
 logger = logging.getLogger("kicad_interface")
 
 
+def resolve_net_name(
+    requested: str, available: List[str], cap: int = 12
+) -> Tuple[Optional[str], List[str]]:
+    """Resolve a requested net name against the board's actual net names.
+
+    Boards built from a hierarchical / sheet-prefixed schematic expose their
+    nets as ``/GND`` etc., so a bare ``GND`` request must NOT silently miss —
+    that produced an electrically-dead net-code-0 floating zone (finding F3).
+
+    Resolution order (first hit wins):
+
+      1. exact match
+      2. ``/`` + requested            (sheet-root prefix, the common case)
+      3. case-insensitive variant of #1 or #2
+      4. exactly one net whose last ``/``-segment equals the requested name
+         (e.g. ``Power/GND`` for ``GND``), case-sensitive then -insensitive
+
+    Returns ``(resolved, candidates)``:
+
+      * ``resolved`` is the actual board net name to assign (verbatim, so an
+        exact ``NetsByName`` lookup will find it), or ``None`` when nothing
+        matched or the match was ambiguous.
+      * ``candidates`` is empty on success; on failure it lists the closest
+        net names (ambiguous matches, else substring matches, else a capped
+        sample of the board's real nets) to guide the caller.
+
+    Pure over the net-name list so it is unit-testable without pcbnew.
+    """
+    if not requested:
+        return None, []
+
+    names = list(available)
+    name_set = set(names)
+
+    # 1. exact
+    if requested in name_set:
+        return requested, []
+
+    # 2. sheet-root '/' prefix
+    slash = requested if requested.startswith("/") else "/" + requested
+    if slash != requested and slash in name_set:
+        return slash, []
+
+    # 3. case-insensitive variant of the exact or '/'-prefixed name
+    rl = requested.lower()
+    sl = slash.lower()
+    ci = [n for n in names if n.lower() == rl or n.lower() == sl]
+    if len(ci) == 1:
+        return ci[0], []
+    if len(ci) > 1:
+        # genuine collision (e.g. both 'GND' and '/gnd') — don't guess.
+        return None, sorted(set(ci))[:cap]
+
+    # 4. unique last-path-segment match (handles Power/GND ↔ GND either way)
+    req_seg = requested.rsplit("/", 1)[-1]
+    req_seg_l = req_seg.lower()
+    seg_exact = [n for n in names if n.rsplit("/", 1)[-1] == req_seg]
+    if len(seg_exact) == 1:
+        return seg_exact[0], []
+    seg_ci = [n for n in names if n.rsplit("/", 1)[-1].lower() == req_seg_l]
+    if len(seg_ci) == 1:
+        return seg_ci[0], []
+
+    # Nothing uniquely matched — build the closest-candidate list.
+    ambiguous = seg_exact or seg_ci  # non-empty only when >1 share the segment
+    if ambiguous:
+        return None, sorted(set(ambiguous))[:cap]
+    subs = sorted(n for n in names if n and rl in n.lower())
+    if subs:
+        return None, subs[:cap]
+    meaningful = sorted(n for n in names if n and not n.startswith("unconnected-"))
+    return None, meaningful[:cap]
+
+
 class ZoneMixin:
+    def _board_net_names(self) -> List[str]:
+        """All net names on the SWIG board (reliable across pcbnew versions)."""
+        names: List[str] = []
+        try:
+            netinfo = self.board.GetNetInfo()
+            for code in range(netinfo.GetNetCount()):
+                item = netinfo.GetNetItem(code)
+                if item is not None:
+                    names.append(item.GetNetname())
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Could not enumerate board net names: {e}")
+        return names
+
     def query_zones(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Query copper zones (filled pours) by net, layer, or bounding box.
 
@@ -143,6 +230,47 @@ class ZoneMixin:
             points = params.get("outline", params.get("points", []))
             priority = params.get("priority", 0)
             fill_type = params.get("fillType", "solid")  # solid or hatched
+            allow_unconnected = bool(params.get("allowUnconnected", False))
+
+            # Resolve the requested net against the board's real nets BEFORE
+            # building the zone.  A name mismatch (e.g. "GND" when the board
+            # uses "/GND") previously produced a silent net-code-0 floating
+            # zone — a large electrically-dead plane (finding F3).  We refuse
+            # instead, listing the closest candidates.  A deliberate no-net
+            # zone is still possible via allowUnconnected=true (or net="").
+            resolved_net: Optional[str] = None  # actual board net to assign
+            net_was_resolved = False
+            if net:  # non-empty net requested
+                available = self._board_net_names()
+                resolved_net, candidates = resolve_net_name(net, available)
+                if resolved_net is None:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Net '{net}' not found on the board. A copper pour "
+                            "must attach to a real net — a name mismatch would "
+                            "create an electrically-dead net-0 plane. Pass one of "
+                            "the candidate net names, or allowUnconnected=true "
+                            '(or net="") for a deliberate no-net zone.'
+                        ),
+                        "requestedNet": net,
+                        "candidates": candidates,
+                    }
+                net_was_resolved = resolved_net != net
+            elif net == "" or allow_unconnected:
+                # Deliberate no-net (net-0) zone — explicit empty net or flag.
+                resolved_net = None
+            else:
+                # net is None and no escape hatch: refuse rather than guess.
+                return {
+                    "success": False,
+                    "message": (
+                        "Copper pour needs a net. Pass net=<name>, or "
+                        'allowUnconnected=true (or net="") to deliberately '
+                        "create an unconnected (net-0) zone."
+                    ),
+                    "requestedNet": net,
+                }
 
             # If no outline provided, use board outline
             if not points or len(points) < 3:
@@ -193,13 +321,12 @@ class ZoneMixin:
             zone = pcbnew.ZONE(self.board)
             zone.SetLayer(layer_id)
 
-            # Set net if provided
-            if net:
+            # Set net (resolved to the board's actual net name above).
+            if resolved_net:
                 netinfo = self.board.GetNetInfo()
                 nets_map = netinfo.NetsByName()
-                if nets_map.has_key(net):
-                    net_obj = nets_map[net]
-                    zone.SetNet(net_obj)
+                if nets_map.has_key(resolved_net):
+                    zone.SetNet(nets_map[resolved_net])
 
             # Set zone properties
             scale = 1000000  # mm to nm
@@ -236,19 +363,32 @@ class ZoneMixin:
             # Zones are left unfilled here: the SWIG ZONE_FILLER is unreliable,
             # so filling is deferred until the board is opened/saved in KiCad.
 
-            return {
+            pour: Dict[str, Any] = {
+                "layer": layer,
+                "net": resolved_net if resolved_net is not None else "",
+                "clearance": clearance,
+                "minWidth": min_width,
+                "priority": priority,
+                "fillType": fill_type,
+                "pointCount": len(points),
+            }
+            if net_was_resolved:
+                pour["requestedNet"] = net
+                pour["resolvedNet"] = resolved_net
+            if resolved_net is None:
+                pour["unconnected"] = True
+
+            result: Dict[str, Any] = {
                 "success": True,
                 "message": "Added copper pour",
-                "pour": {
-                    "layer": layer,
-                    "net": net,
-                    "clearance": clearance,
-                    "minWidth": min_width,
-                    "priority": priority,
-                    "fillType": fill_type,
-                    "pointCount": len(points),
-                },
+                "pour": pour,
             }
+            if net_was_resolved:
+                result["resolvedNet"] = resolved_net
+                result["warning"] = (
+                    f"Requested net '{net}' resolved to board net " f"'{resolved_net}'."
+                )
+            return result
 
         except Exception as e:
             logger.error(f"Error adding copper pour: {str(e)}")
@@ -303,7 +443,11 @@ class ZoneMixin:
 
         matches = zones
         if net is not None:
-            matches = [z for z in matches if z.GetNetname() == net]
+            # Resolve the net selector so "GND" matches a zone on "/GND"
+            # (finding F3 — keep delete/edit filters consistent with add).
+            resolved, _ = resolve_net_name(net, [z.GetNetname() for z in matches])
+            target_net = resolved if resolved is not None else net
+            matches = [z for z in matches if z.GetNetname() == target_net]
         if layer is not None:
             layer_id = self.board.GetLayerID(layer)
             matches = [z for z in matches if z.GetLayer() == layer_id]
@@ -351,15 +495,22 @@ class ZoneMixin:
             changed: List[str] = []
 
             new_net = params.get("newNet")
+            resolved_new_net: Optional[str] = None
             if new_net is not None:
-                nets_map = self.board.GetNetInfo().NetsByName()
-                if not nets_map.has_key(new_net):
+                resolved, candidates = resolve_net_name(new_net, self._board_net_names())
+                if resolved is None:
                     return {
                         "success": False,
                         "message": f"Net '{new_net}' does not exist on the board",
+                        "requestedNet": new_net,
+                        "candidates": candidates,
                     }
-                zone.SetNet(nets_map[new_net])
+                nets_map = self.board.GetNetInfo().NetsByName()
+                if nets_map.has_key(resolved):
+                    zone.SetNet(nets_map[resolved])
                 changed.append("net")
+                if resolved != new_net:
+                    resolved_new_net = resolved
 
             new_layer = params.get("newLayer")
             if new_layer is not None:
@@ -456,7 +607,7 @@ class ZoneMixin:
                 except Exception:
                     pass
 
-            return {
+            edit_result: Dict[str, Any] = {
                 "success": True,
                 "message": f"Edited copper pour ({', '.join(changed)})",
                 "changed": changed,
@@ -466,6 +617,12 @@ class ZoneMixin:
                     "on open) before export_gerber"
                 ),
             }
+            if resolved_new_net is not None:
+                edit_result["resolvedNet"] = resolved_new_net
+                edit_result["warning"] = (
+                    f"Requested net '{new_net}' resolved to board net " f"'{resolved_new_net}'."
+                )
+            return edit_result
 
         except Exception as e:
             logger.error(f"Error editing copper pour: {str(e)}")

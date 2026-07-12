@@ -4,11 +4,77 @@ Split out of the former monolithic commands/component.py.
 """
 
 import logging
-from typing import Any, Dict
+import re
+from typing import Any, Dict, List, Optional, Set
 
 import pcbnew
 
 logger = logging.getLogger("kicad_interface")
+
+
+def _unit_scale(unit: str) -> int:
+    """nm per <unit>. mm / mil / inch."""
+    return 1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
+
+
+def _parse_ref(ref: str) -> tuple:
+    """Split a reference into (alpha_prefix, int_suffix). Suffix is None when
+    the reference has no trailing digits (e.g. 'REF' → ('REF', None))."""
+    m = re.match(r"^(.*?)(\d+)$", ref or "")
+    if m:
+        return m.group(1), int(m.group(2))
+    return (ref or ""), None
+
+
+def _allocate_duplicate_refs(
+    source_ref: str, new_reference: Optional[str], count: int, used: Set[str]
+) -> List[str]:
+    """Pick ``count`` fresh, unused references for a duplicate.
+
+    - explicit ``new_reference`` given: it is used verbatim for the first copy
+      (raises ValueError if it already exists); further copies auto-increment
+      its numeric suffix, skipping anything already used.
+    - no ``new_reference``: the source reference's alpha prefix is reused and
+      the numeric suffix advances past the source to the next free value(s)
+      (e.g. R2 → R3, or R98 → R99 as in KiCad's own annotate-next behaviour).
+    """
+    used = set(used)
+    refs: List[str] = []
+    if new_reference:
+        if new_reference in used:
+            raise ValueError(f"A component with reference {new_reference} already exists")
+        prefix, num = _parse_ref(new_reference)
+        refs.append(new_reference)
+        used.add(new_reference)
+        if num is None:
+            n = 2
+            while len(refs) < count:
+                cand = f"{new_reference}_{n}"
+                n += 1
+                if cand in used:
+                    continue
+                refs.append(cand)
+                used.add(cand)
+        else:
+            next_num = num + 1
+            while len(refs) < count:
+                cand = f"{prefix}{next_num}"
+                next_num += 1
+                if cand in used:
+                    continue
+                refs.append(cand)
+                used.add(cand)
+    else:
+        prefix, num = _parse_ref(source_ref)
+        next_num = (num if num is not None else 0) + 1
+        while len(refs) < count:
+            cand = f"{prefix}{next_num}"
+            next_num += 1
+            if cand in used:
+                continue
+            refs.append(cand)
+            used.add(cand)
+    return refs
 
 
 class PlacementMixin:
@@ -336,7 +402,25 @@ class PlacementMixin:
             }
 
     def duplicate_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Duplicate an existing component"""
+        """Duplicate an existing footprint one or more times.
+
+        Params:
+          reference    (required) source footprint to copy.
+          offset       {x, y, unit?} relative shift; copy *i* lands at
+                       source + offset*i (unit defaults to mm). Preferred.
+          position     {x, y, unit?} absolute placement of the first copy
+                       (alternative to offset).
+          newReference optional; auto-annotated from the source when omitted
+                       (R2 → R3 …). For count>1 subsequent copies increment it.
+          count        number of copies (default 1); each is offset*i apart
+                       with a sequential reference.
+          rotation     optional override; by default the source orientation
+                       is preserved.
+
+        The duplicate is a deep copy (keeps value / layer / orientation /
+        footprint-id) but its pads have their nets cleared, matching KiCad's
+        own Duplicate — a copy is not silently wired into the source's nets.
+        """
         try:
             if not self.board:
                 return {
@@ -347,14 +431,22 @@ class PlacementMixin:
 
             reference = params.get("reference")
             new_reference = params.get("newReference")
+            offset = params.get("offset")
             position = params.get("position")
             rotation = params.get("rotation")
 
-            if not reference or not new_reference:
+            try:
+                count = int(params.get("count") or 1)
+            except (TypeError, ValueError):
+                count = 1
+            if count < 1:
+                count = 1
+
+            if not reference:
                 return {
                     "success": False,
                     "message": "Missing parameters",
-                    "errorDetails": "reference and newReference are required",
+                    "errorDetails": "reference is required",
                 }
 
             # Find the source component
@@ -366,67 +458,88 @@ class PlacementMixin:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            # Check if new reference already exists
-            if self.board.FindFootprintByReference(new_reference):
+            # Allocate the fresh reference(s). Explicit newReference that
+            # collides is a hard error; auto mode never collides.
+            used = {fp.GetReference() for fp in self.board.GetFootprints()}
+            try:
+                new_refs = _allocate_duplicate_refs(reference, new_reference, count, used)
+            except ValueError as ve:
                 return {
                     "success": False,
                     "message": "Reference already exists",
-                    "errorDetails": f"A component with reference {new_reference} already exists",
+                    "errorDetails": str(ve),
                 }
 
-            # Create new footprint with the same properties
-            new_module = pcbnew.FOOTPRINT(self.board)
-            # For KiCAD 9.x compatibility, use SetFPID instead of SetFootprintName
-            new_module.SetFPID(source.GetFPID())
-            new_module.SetValue(source.GetValue())
-            new_module.SetReference(new_reference)
-            new_module.SetLayer(source.GetLayer())
-
-            # Copy pads and other items
-            for pad in source.Pads():
-                new_pad = pcbnew.PAD(new_module)
-                new_pad.Copy(pad)
-                new_module.Add(new_pad)
-
-            # Set position if provided, otherwise use offset from original
-            if position:
-                scale = (
-                    1000000
-                    if position.get("unit", "mm") == "mm"
-                    else (25400 if position.get("unit", "mm") == "mil" else 25400000)
-                )  # mm, mil, or inch to nm
-                x_nm = int(position["x"] * scale)
-                y_nm = int(position["y"] * scale)
-                new_module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
+            # Compute per-copy positions.
+            nm_per_mm = 1000000
+            base = source.GetPosition()
+            positions = []
+            if offset is not None:
+                oscale = _unit_scale(offset.get("unit", "mm"))
+                ox = offset["x"] * oscale
+                oy = offset["y"] * oscale
+                for i in range(1, count + 1):
+                    positions.append(pcbnew.VECTOR2I(int(base.x + ox * i), int(base.y + oy * i)))
+            elif position is not None:
+                pscale = _unit_scale(position.get("unit", "mm"))
+                px = position["x"] * pscale
+                py = position["y"] * pscale
+                # Absolute placement of the first copy; stack any extras 5 mm
+                # apart in x so count>1 doesn't pile them on one another.
+                step = 5 * nm_per_mm
+                for i in range(count):
+                    positions.append(pcbnew.VECTOR2I(int(px + step * i), int(py)))
             else:
-                # Offset by 5mm
-                source_pos = source.GetPosition()
-                new_module.SetPosition(pcbnew.VECTOR2I(source_pos.x + 5000000, source_pos.y))
+                # No offset/position given → 5 mm x step from the source.
+                step = 5 * nm_per_mm
+                for i in range(1, count + 1):
+                    positions.append(pcbnew.VECTOR2I(int(base.x + step * i), int(base.y)))
 
-            # Set rotation if provided, otherwise use same as original
-            if rotation is not None:
-                rotation_angle = pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T)
-                new_module.SetOrientation(rotation_angle)
-            else:
-                new_module.SetOrientation(source.GetOrientation())
+            created = []
+            for ref, pos in zip(new_refs, positions):
+                # Deep copy via the copy constructor. FOOTPRINT.Duplicate()
+                # exists on KiCAD 10 but returns a base BOARD_ITEM and needs an
+                # addToParentGroup arg; the copy constructor yields a real
+                # FOOTPRINT directly and keeps value / fpid / orientation /
+                # layer / pad geometry. (PAD.Copy() was removed in KiCAD 10 —
+                # the old per-pad copy path is why this used to crash.)
+                new_module = pcbnew.FOOTPRINT(source)
+                # A duplicate must not inherit net assignments — clear each pad
+                # so the copy lands unconnected, exactly like KiCad's Duplicate.
+                for pad in new_module.Pads():
+                    pad.SetNetCode(0)
+                new_module.SetReference(ref)
+                new_module.SetPosition(pos)
+                if rotation is not None:
+                    new_module.SetOrientation(pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T))
+                # else: copy constructor already preserved the source orientation
 
-            # Add to board
-            self.board.Add(new_module)
+                self.board.Add(new_module)
 
-            # Get final position in mm
-            pos = new_module.GetPosition()
+                final = new_module.GetPosition()
+                created.append(
+                    {
+                        "reference": ref,
+                        "value": new_module.GetValue(),
+                        "footprint": new_module.GetFPIDAsString(),
+                        "position": {
+                            "x": final.x / nm_per_mm,
+                            "y": final.y / nm_per_mm,
+                            "unit": "mm",
+                        },
+                        "rotation": new_module.GetOrientation().AsDegrees(),
+                        "layer": self.board.GetLayerName(new_module.GetLayer()),
+                    }
+                )
 
+            ref_list = ", ".join(c["reference"] for c in created)
             return {
                 "success": True,
-                "message": f"Duplicated component {reference} to {new_reference}",
-                "component": {
-                    "reference": new_reference,
-                    "value": new_module.GetValue(),
-                    "footprint": new_module.GetFPIDAsString(),
-                    "position": {"x": pos.x / 1000000, "y": pos.y / 1000000, "unit": "mm"},
-                    "rotation": new_module.GetOrientation().AsDegrees(),
-                    "layer": self.board.GetLayerName(new_module.GetLayer()),
-                },
+                "message": f"Duplicated {reference} → {ref_list}",
+                "count": len(created),
+                "components": created,
+                # Backward-compatible single-copy field (the first duplicate).
+                "component": created[0],
             }
 
         except Exception as e:

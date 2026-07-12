@@ -41,9 +41,193 @@ FOOTPRINT_LIB_DIR = Path(str(_LIB_BASE) + ".pretty")
 
 _LCSC_RE = re.compile(r"^C\d+$")
 
+# Pin-name prefixes that unambiguously denote a power rail. easyeda2kicad emits
+# every pin as electrical type ``unspecified``, so ERC can't check power driving
+# and floods warnings (F12). Retyping only these by NAME is conservative: it
+# covers VDD*/VDDA, VCC*, VSS*/VSSA, GND*, VBAT and leaves every signal pin
+# untouched.
+_POWER_PIN_PREFIXES = ("VDD", "VCC", "VSS", "GND", "VBAT")
+
+_PIN_HEADER_RE = re.compile(r"\(pin\s+(\S+)\s+(\S+)")
+_PIN_NAME_RE = re.compile(r'\(name\s+"([^"]*)"')
+
 
 class EasyEdaImportError(RuntimeError):
     """A user-facing failure importing an LCSC part (network/tool/parse)."""
+
+
+# ---------------------------------------------------------------------------
+# S-expression span helpers (quote/escape aware so parens inside a property
+# value like "GigaDevice(兆易创新)" don't throw off the paren matcher)
+# ---------------------------------------------------------------------------
+def _match_paren(text: str, start: int) -> int:
+    """Return the index just past the ``)`` that closes the ``(`` at ``start``.
+
+    Skips parentheses inside double-quoted strings (and honours ``\\`` escapes),
+    so a Value/Manufacturer field containing literal parens can't unbalance the
+    scan. Falls back to len(text) if unbalanced.
+    """
+    depth = 0
+    in_str = False
+    i = start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+        i += 1
+    return n
+
+
+def _is_power_pin_name(name: str) -> bool:
+    """True when a pin name unambiguously denotes a power rail (see prefixes)."""
+    if not name:
+        return False
+    return name.strip().upper().startswith(_POWER_PIN_PREFIXES)
+
+
+def _retype_single_pin(pin_block: str) -> "tuple[str, int]":
+    """Return (rewritten_pin_block, changed) for one ``(pin …)`` s-expression.
+
+    Only the electrical-type token is touched, and only when the pin's NAME is a
+    power rail and it isn't already ``power_in``.
+    """
+    header = _PIN_HEADER_RE.match(pin_block)
+    if not header:
+        return pin_block, 0
+    name_match = _PIN_NAME_RE.search(pin_block)
+    name = name_match.group(1) if name_match else ""
+    if header.group(1) != "power_in" and _is_power_pin_name(name):
+        rewritten = pin_block[: header.start(1)] + "power_in" + pin_block[header.end(1) :]
+        return rewritten, 1
+    return pin_block, 0
+
+
+def _rewrite_power_pins(block: str) -> "tuple[str, int]":
+    """Retype every power-named pin inside a symbol block to ``power_in``.
+
+    Walks the text quote-aware so ``(pin `` only matches real s-expression
+    openings, never a substring inside a quoted value.
+    """
+    out: List[str] = []
+    changed = 0
+    i = 0
+    n = len(block)
+    in_str = False
+    while i < n:
+        c = block[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(block[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "(" and block.startswith("(pin ", i):
+            end = _match_paren(block, i)
+            new_pin, ch = _retype_single_pin(block[i:end])
+            out.append(new_pin)
+            changed += ch
+            i = end
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), changed
+
+
+def _symbol_span(content: str, symbol_name: str) -> "tuple[int, int] | None":
+    """Char span of the top-level ``(symbol "<name>" …)`` block, or None.
+
+    Matches the exact top-level name (the trailing ``"`` excludes sub-symbols
+    like ``<name>_1_1``).
+    """
+    marker = f'(symbol "{symbol_name}"'
+    start = content.find(marker)
+    if start == -1:
+        return None
+    return start, _match_paren(content, start)
+
+
+def _count_symbol_units(lib_path: Path, symbol_name: str) -> int:
+    """Number of numbered units the symbol defines (>=1).
+
+    A multi-unit part draws each unit in a ``<name>_<unit>_<style>`` sub-symbol;
+    unit 0 (common graphics) is not counted.
+    """
+    try:
+        content = lib_path.read_text(encoding="utf-8")
+    except OSError:
+        return 1
+    span = _symbol_span(content, symbol_name)
+    if span is None:
+        return 1
+    block = content[span[0] : span[1]]
+    units = {
+        int(m.group(1))
+        for m in re.finditer(r'\(symbol\s+"' + re.escape(symbol_name) + r'_(\d+)_\d+"', block)
+    }
+    units.discard(0)
+    return len(units) or 1
+
+
+def _apply_pin_type_inference(lib_path: Path, symbol_name: str) -> Dict[str, Any]:
+    """Retype unambiguous power pins of ``symbol_name`` to ``power_in`` in place.
+
+    Rewrites only within the target symbol's block (leaving other cached parts
+    untouched), re-parses the whole file to confirm it is still valid, then
+    writes atomically (the cache library is shared). A no-op when nothing
+    matches. Returns ``{"changed": n, ...}``.
+    """
+    try:
+        content = lib_path.read_text(encoding="utf-8")
+    except OSError:
+        return {"changed": 0, "skipped": "unreadable"}
+
+    span = _symbol_span(content, symbol_name)
+    if span is None:
+        return {"changed": 0, "skipped": "symbol_not_found"}
+
+    start, end = span
+    new_block, changed = _rewrite_power_pins(content[start:end])
+    if changed == 0:
+        return {"changed": 0}
+
+    new_content = content[:start] + new_block + content[end:]
+    try:
+        sexpdata.loads(new_content)  # re-parse to confirm validity before commit
+    except Exception as e:  # never write a library we just broke
+        logger.warning(
+            f"Pin-type inference for {symbol_name} produced invalid s-expression; "
+            f"leaving the library unchanged: {e}"
+        )
+        return {"changed": 0, "skipped": "validation_failed"}
+
+    tmp = lib_path.with_name(lib_path.name + ".pintypes.tmp")
+    tmp.write_text(new_content, encoding="utf-8")
+    tmp.replace(lib_path)
+    logger.info(f"Inferred power_in type for {changed} pin(s) of {symbol_name}")
+    return {"changed": changed}
 
 
 # ---------------------------------------------------------------------------
@@ -215,12 +399,24 @@ def _build_response(lcsc: str, sym: Dict[str, Any], *, fetched: bool) -> Dict[st
     name = sym["name"]
     props = sym["properties"]
     registered = _register_libraries()
+    lib_id = f"{EASYEDA_LIB_NICKNAME}:{name}"
+    units = _count_symbol_units(SYMBOL_LIB_PATH, name)
+    # The tool takes symbol="lib:name" — NOT library=/componentName= (F12b).
+    next_hint = f'Place it with add_schematic_component(symbol="{lib_id}")'
+    if units > 1:
+        next_hint += (
+            f". NOTE: this is a MULTI-UNIT symbol ({units} units); that call places only "
+            f"unit 1. Pass placeAllUnits=true to place every unit at once, or repeat with "
+            f"unit=2..{units}. Pins on an unplaced unit have no location and cannot be "
+            f"labeled or connected."
+        )
     return {
         "success": True,
         "lcsc": lcsc,
         "library": EASYEDA_LIB_NICKNAME,
         "symbol": name,
-        "lib_id": f"{EASYEDA_LIB_NICKNAME}:{name}",
+        "lib_id": lib_id,
+        "units": units,
         "footprint": props.get("Footprint"),
         "value": props.get("Value"),
         "mpn": props.get("MPN"),
@@ -231,11 +427,15 @@ def _build_response(lcsc: str, sym: Dict[str, Any], *, fetched: bool) -> Dict[st
         "fetched": fetched,
         "already_cached": not fetched,
         "registered": registered,
-        "next": (
-            f'Place it with add_schematic_component(library="{EASYEDA_LIB_NICKNAME}", '
-            f'componentName="{name}")'
-        ),
+        "next": next_hint,
     }
+
+
+def _maybe_infer_pin_types(symbol_name: str, infer_pin_types: bool) -> int:
+    """Run power-pin inference when enabled; return the number of pins retyped."""
+    if not infer_pin_types:
+        return 0
+    return _apply_pin_type_inference(SYMBOL_LIB_PATH, symbol_name).get("changed", 0)
 
 
 def import_lcsc_part(
@@ -243,6 +443,7 @@ def import_lcsc_part(
     *,
     overwrite: bool = False,
     timeout: float = 90.0,
+    infer_pin_types: bool = True,
 ) -> Dict[str, Any]:
     """Import an LCSC/JLCPCB part as a KiCAD symbol + footprint.
 
@@ -250,6 +451,12 @@ def import_lcsc_part(
     is False, the network/tool call is skipped and the cached symbol is
     returned.  Always (re-)registers the ``easyeda`` nickname so a library
     that exists on disk but is missing from the lib-table is repaired.
+
+    ``infer_pin_types`` (default True) post-processes the imported symbol,
+    retyping unambiguously-named power pins (VDD*/VCC*/VSS*/GND*/VBAT/…) from
+    easyeda2kicad's blanket ``unspecified`` to ``power_in`` so ERC can check
+    power driving (F12). The rewrite is name-based and conservative — signal
+    pins are untouched — and re-validated before it is written atomically.
 
     Raises ``EasyEdaImportError`` for user-facing failures and ``ValueError``
     for a malformed LCSC id.
@@ -260,7 +467,11 @@ def import_lcsc_part(
     symbols_before = _parse_symbols(SYMBOL_LIB_PATH)
     cached = next((s for s in symbols_before if s["properties"].get("LCSC Part") == lcsc), None)
     if cached and not overwrite:
-        return _build_response(lcsc, cached, fetched=False)
+        # Heal an already-cached part imported before pin-typing existed.
+        changed = _maybe_infer_pin_types(cached["name"], infer_pin_types)
+        resp = _build_response(lcsc, cached, fetched=False)
+        resp["pin_types_inferred"] = changed
+        return resp
 
     cmd = [
         sys.executable,
@@ -306,7 +517,10 @@ def import_lcsc_part(
             + (f" Output:\n{combined[:500]}" if combined else "")
         )
 
-    return _build_response(lcsc, target, fetched=True)
+    changed = _maybe_infer_pin_types(target["name"], infer_pin_types)
+    resp = _build_response(lcsc, target, fetched=True)
+    resp["pin_types_inferred"] = changed
+    return resp
 
 
 def import_lcsc_parts(
@@ -314,6 +528,7 @@ def import_lcsc_parts(
     *,
     overwrite: bool = False,
     timeout: float = 90.0,
+    infer_pin_types: bool = True,
 ) -> Dict[str, Any]:
     """Batch-import a list of LCSC parts into the shared cache.
 
@@ -341,7 +556,9 @@ def import_lcsc_parts(
     imported = cached = failed = 0
     for raw in ordered:
         try:
-            r = import_lcsc_part(raw, overwrite=overwrite, timeout=timeout)
+            r = import_lcsc_part(
+                raw, overwrite=overwrite, timeout=timeout, infer_pin_types=infer_pin_types
+            )
             status = "cached" if r["already_cached"] else "imported"
             if r["already_cached"]:
                 cached += 1

@@ -158,3 +158,36 @@ class _ZoneMixin:
         except Exception as e:
             logger.error(f"Failed to refill zones: {e}")
             return False
+
+    def remove_zones(self, zones: List[Any]) -> bool:
+        """Remove kipy Zone objects previously fetched from this board.
+
+        Added for the delete_copper_pour IPC fast path (finding N2): zone
+        add/query already routed IPC while delete/edit only existed as SWIG
+        methods, so an IPC-added zone (KiCad memory only) was invisible to a
+        delete that read the SWIG board.  ``zones`` must be objects from
+        ``_get_board().get_zones()`` of the SAME connection.
+        """
+        try:
+            board = self._get_board()
+            self._apply_remove(board, list(zones), f"Deleted {len(zones)} zone(s)")
+            self._notify("zones_removed", {"count": len(zones)})
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove zones: {e}")
+            return False
+
+    def update_zone(self, zone: Any) -> bool:
+        """Push property edits on a kipy Zone object back to the live board.
+
+        Counterpart of ``remove_zones`` for the edit_copper_pour IPC fast
+        path; the caller mutates the kipy wrapper/proto in place first.
+        """
+        try:
+            board = self._get_board()
+            self._apply_update(board, [zone], "Edited copper zone")
+            self._notify("zone_updated", {})
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update zone: {e}")
+            return False

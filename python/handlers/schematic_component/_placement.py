@@ -31,11 +31,34 @@ logger = logging.getLogger("handlers.schematic_component")
 _SCHEMATIC_GRID_MM = 1.27
 
 
+# placeAllUnits stacks each unit of a multi-unit symbol vertically. The gap is
+# added between a unit's bottom and the next unit's origin so bodies don't
+# overlap; the fallback height is used when a unit's pin span can't be measured.
+_UNIT_STACK_GAP_MM = 7.62
+_DEFAULT_UNIT_HEIGHT_MM = 25.4
+
+
 def _snap_to_schematic_grid(value: float, grid_mm: float = _SCHEMATIC_GRID_MM) -> float:
     """Snap a millimeter coordinate to the nearest schematic-grid multiple."""
     if grid_mm <= 0:
         return value
     return round(value / grid_mm) * grid_mm
+
+
+def _unit_pin_heights(pins: Dict[str, Any]) -> Dict[int, float]:
+    """Vertical pin span (mm) of each numbered unit, for stacking placeAllUnits.
+
+    ``pins`` is PinLocator.get_symbol_pins output (pin_num → {..., unit, y}).
+    Unit 0 (common/graphic) pins are ignored. A unit with fewer than two pins
+    collapses to a zero span; the caller substitutes a sane default.
+    """
+    by_unit: Dict[int, list] = {}
+    for pdata in pins.values():
+        u = pdata.get("unit")
+        if u in (None, 0):
+            continue
+        by_unit.setdefault(int(u), []).append(float(pdata.get("y", 0.0)))
+    return {u: (max(ys) - min(ys)) for u, ys in by_unit.items() if ys}
 
 
 def _apply_grid_snap(x: float, y: float, params: Dict[str, Any]) -> Tuple[float, float, bool]:
@@ -471,7 +494,7 @@ def handle_add_schematic_component(
         footprint = component.get("footprint", "")
         x = component.get("x", 0)
         y = component.get("y", 0)
-        unit = component.get("unit", 1)
+        unit = int(component.get("unit", 1) or 1)
 
         # Opt-in grid snap.  Read from the component dict OR the top-level
         # params so callers can pass it either next to the position or as a
@@ -495,24 +518,62 @@ def handle_add_schematic_component(
                 derived_project_path = ancestor
                 break
 
+        from commands.pin_locator import PinLocator
+
+        place_all = bool(component.get("placeAllUnits") or params.get("placeAllUnits"))
+        lib_id = f"{library}:{comp_type}"
+        grid_mm = float(snap_params.get("snapGridMm") or _SCHEMATIC_GRID_MM)
+        snap_on = snap_params.get("snapToGrid") is not False
+
         loader = DynamicSymbolLoader(project_path=derived_project_path)
-        loader.add_component(
-            schematic_file,
-            library,
-            comp_type,
-            reference=reference,
-            value=value,
-            footprint=footprint,
-            x=x,
-            y=y,
-            unit=unit,
-            project_path=derived_project_path,
-        )
+
+        def _place(unit_n: int, ux: float, uy: float) -> None:
+            loader.add_component(
+                schematic_file,
+                library,
+                comp_type,
+                reference=reference,
+                value=value,
+                footprint=footprint,
+                x=ux,
+                y=uy,
+                unit=unit_n,
+                project_path=derived_project_path,
+            )
+
+        unit_positions: Dict[int, Dict[str, float]] = {}
+
+        if place_all:
+            # Place the first unit to inject the definition, then discover the
+            # full unit roster and stack the remaining units vertically so every
+            # unit is on the sheet (F1) — pins on an unplaced unit have no real
+            # location and can't be labeled/connected.
+            _place(1, x, y)
+            unit_positions[1] = {"x": x, "y": y}
+            try:
+                pins = PinLocator().get_symbol_pins(schematic_file, lib_id) or {}
+            except Exception:  # best-effort: heights only affect stacking spacing
+                pins = {}
+            heights = _unit_pin_heights(pins)
+            defined_units = sorted(
+                {int(p["unit"]) for p in pins.values() if p.get("unit") not in (None, 0)}
+            ) or [1]
+            cursor_y = float(y) + heights.get(1, _DEFAULT_UNIT_HEIGHT_MM) + _UNIT_STACK_GAP_MM
+            for u in defined_units:
+                if u == 1:
+                    continue
+                uy = _snap_to_schematic_grid(cursor_y, grid_mm) if snap_on else cursor_y
+                _place(u, x, uy)
+                unit_positions[u] = {"x": x, "y": round(uy, 4)}
+                cursor_y = uy + heights.get(u, _DEFAULT_UNIT_HEIGHT_MM) + _UNIT_STACK_GAP_MM
+        else:
+            _place(unit, x, y)
+            unit_positions[unit] = {"x": x, "y": y}
 
         response: Dict[str, Any] = {
             "success": True,
             "component_reference": reference,
-            "symbol_source": f"{library}:{comp_type}",
+            "symbol_source": lib_id,
             "position": {"x": x, "y": y},
         }
         if snapped:
@@ -524,6 +585,37 @@ def handle_add_schematic_component(
                 "gridMm": snap_params["snapGridMm"] or _SCHEMATIC_GRID_MM,
                 "requested": {"x": requested_x, "y": requested_y},
             }
+
+        # Multi-unit reporting (F1): tell the caller the unit situation so it
+        # never assumes a single add_schematic_component placed the whole part.
+        try:
+            info = PinLocator().get_unit_placement(schematic_file, reference)
+        except Exception:
+            info = None
+        if info and info["is_multi_unit"]:
+            response["units"] = {
+                "total": info["total_units"],
+                "placed": info["placed_units"],
+                "unplaced": info["unplaced_units"],
+            }
+            if place_all:
+                response["unitPositions"] = {
+                    str(u): unit_positions[u] for u in sorted(unit_positions)
+                }
+            unplaced = info["unplaced_units"]
+            if unplaced:
+                response["warning"] = (
+                    f"{reference} ({lib_id}) is a multi-unit symbol with "
+                    f"{info['total_units']} units; only unit(s) {info['placed_units']} "
+                    f"is/are on the sheet. Unit(s) {unplaced} are NOT placed — their "
+                    f"pins (e.g. power/ground on many MCUs) have no location and "
+                    f"cannot be labeled or connected until placed."
+                )
+                response["next"] = (
+                    f'Place the remaining unit(s): add_schematic_component(symbol="{lib_id}", '
+                    f'reference="{reference}", unit=N) for N in {unplaced}, '
+                    f"or re-run with placeAllUnits=true to place every unit at once."
+                )
         return response
     except Exception as e:
         logger.error(f"Error adding component to schematic: {str(e)}")

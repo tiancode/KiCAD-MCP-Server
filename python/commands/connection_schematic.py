@@ -126,6 +126,20 @@ class ConnectionManager:
             # Get pin location using PinLocator
             pin_loc = locator.get_pin_location(schematic_path, component_ref, pin_name)
             if not pin_loc:
+                # A pin on an UNPLACED unit of a multi-unit part has no real
+                # location (F1) — refuse with the exact placement fix rather
+                # than connecting a wire/label to a fabricated point.
+                diag = locator.diagnose_missing_pin(schematic_path, component_ref, str(pin_name))
+                if diag.get("reason") == "unplaced_unit":
+                    msg = locator.format_unplaced_unit_error(component_ref, diag)
+                    logger.error(msg)
+                    return {
+                        "success": False,
+                        "message": msg,
+                        "needs_unit_placement": True,
+                        "unit": diag.get("pin_unit"),
+                        "unplaced_units": diag.get("unplaced_units", []),
+                    }
                 msg = f"Could not locate pin {component_ref}/{pin_name}"
                 logger.error(msg)
                 return {"success": False, "message": msg}

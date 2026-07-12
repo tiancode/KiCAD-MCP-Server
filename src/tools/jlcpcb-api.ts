@@ -376,9 +376,17 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
         .optional()
         .default(false)
         .describe("Re-fetch and overwrite parts already in the cache library"),
+      inferPinTypes: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe(
+          "Retype unambiguous power pins (VDD*/VCC*/VSS*/GND*/VBAT) from easyeda2kicad's " +
+            "blanket 'unspecified' to 'power_in' so ERC checks power driving. false leaves pins as-is.",
+        ),
     },
-    async (args: { lcscNumbers: string[]; forceRefresh?: boolean }) => {
-      const { lcscNumbers, forceRefresh } = args;
+    async (args: { lcscNumbers: string[]; forceRefresh?: boolean; inferPinTypes?: boolean }) => {
+      const { lcscNumbers, forceRefresh, inferPinTypes } = args;
       // A single part dispatches to the singular Python command (returns the
       // symbol directly); multiple parts use the batch command (per-part
       // "results" array with imported|cached|failed statuses).
@@ -387,10 +395,12 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
           ? await callKicadScript("import_jlcpcb_symbol", {
               lcsc_number: lcscNumbers[0],
               forceRefresh,
+              inferPinTypes,
             })
           : await callKicadScript("import_jlcpcb_symbols", {
               lcsc_numbers: lcscNumbers,
               forceRefresh,
+              inferPinTypes,
             });
       return formatKicadResult(result);
     },

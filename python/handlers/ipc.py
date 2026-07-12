@@ -30,7 +30,7 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
     }
 
 
-def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
+def _require_ipc(iface: "KiCADInterface", *, read_only: bool = False) -> Dict[str, Any]:
     """Ensure IPC + the PCB editor frame are both reachable.
 
     Mirrors the other handler modules: pass the editor-gate response through
@@ -38,8 +38,12 @@ def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
     other IPC-unavailable cases through ``_ipc_unavailable`` so the raw
     reason text stays a short tail clause rather than getting doubly
     prefixed by the upstream "IPC backend not available:" envelope.
+
+    ``read_only=True`` (ipc_list_components / ipc_get_tracks / ipc_get_vias)
+    skips the cross-backend conflict refusal — reads can't lose data; the
+    dispatcher stamps staleVsDisk on the result.
     """
-    return require_ipc(iface, _ipc_unavailable)
+    return require_ipc(iface, _ipc_unavailable, read_only=read_only)
 
 
 def handle_ipc_add_track(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -117,7 +121,7 @@ def handle_ipc_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
 
 def handle_ipc_list_components(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """List components using IPC backend."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     try:
@@ -133,7 +137,7 @@ def handle_ipc_list_components(iface: "KiCADInterface", params: Dict[str, Any]) 
 
 def handle_ipc_get_tracks(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Get tracks using IPC backend."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     try:
@@ -146,7 +150,7 @@ def handle_ipc_get_tracks(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
 
 def handle_ipc_get_vias(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Get vias using IPC backend."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     try:

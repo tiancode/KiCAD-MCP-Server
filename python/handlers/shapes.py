@@ -35,9 +35,12 @@ def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
     return {"success": False, "message": f"{base} ({reason})" if reason else base}
 
 
-def _require_ipc(iface: "KiCADInterface") -> Dict[str, Any]:
-    """Gate shape ops on IPC + an open PCB editor frame."""
-    return require_ipc(iface, _ipc_unavailable)
+def _require_ipc(iface: "KiCADInterface", *, read_only: bool = False) -> Dict[str, Any]:
+    """Gate shape ops on IPC + an open PCB editor frame.
+
+    ``read_only=True`` (list_shapes) skips the cross-backend conflict
+    refusal — reads can't lose data; the dispatcher stamps staleVsDisk."""
+    return require_ipc(iface, _ipc_unavailable, read_only=read_only)
 
 
 def _xy(params: Dict[str, Any], key: str, fallback_x: str, fallback_y: str) -> tuple:
@@ -148,7 +151,7 @@ def _normalize_bbox(bbox):
 
 def handle_list_shapes(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """List graphic shapes with optional layer / kind / boundingBox filters."""
-    gate = _require_ipc(iface)
+    gate = _require_ipc(iface, read_only=True)
     if gate:
         return gate
     bbox = _normalize_bbox(params.get("boundingBox"))

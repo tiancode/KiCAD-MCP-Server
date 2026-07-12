@@ -63,15 +63,25 @@ def find_overlapping_elements(schematic_path: Path, tolerance: float = 0.5) -> D
         s for s in symbols if not s["reference"].startswith("_TEMPLATE") and s["reference"]
     ]
 
-    # Pre-compute bounding boxes for all non-template symbols
+    # Pre-compute bounding boxes for all non-template symbols using real,
+    # unit-filtered symbol bodies (graphics_by_unit). For a multi-unit part each
+    # instance now boxes only ITS unit, so unit B's pins no longer inflate unit
+    # A's box into a phantom overlap with parts tens of mm away (F4). No shrink
+    # margin: _aabb_overlap uses strict inequality, so two parts sharing an edge
+    # are already not flagged, while a genuine body intersection of any size
+    # (e.g. two 0603 caps overlapping by 0.25 mm) is still reported.
     symbol_bboxes = []
     for sym in non_template_symbols:
         lib_data = lib_defs.get(sym["lib_id"], {})
         pin_defs = lib_data.get("pins", {})
-        graphics_points = lib_data.get("graphics_points", [])
+        graphics_by_unit = lib_data.get("graphics_by_unit")
         bbox = None
         if pin_defs:
-            bbox = _compute_symbol_bbox_direct(sym, pin_defs, graphics_points=graphics_points)
+            bbox = _compute_symbol_bbox_direct(
+                sym,
+                pin_defs,
+                graphics_by_unit=graphics_by_unit,
+            )
         symbol_bboxes.append((sym, bbox))
 
     for i in range(len(symbol_bboxes)):
@@ -343,9 +353,9 @@ def find_wires_crossing_symbols(schematic_path: Path) -> List[Dict[str, Any]]:
         if not pin_defs:
             continue
 
-        graphics_points = lib_data.get("graphics_points", [])
+        graphics_by_unit = lib_data.get("graphics_by_unit")
         bbox = _compute_symbol_bbox_direct(
-            sym, pin_defs, margin=margin, graphics_points=graphics_points
+            sym, pin_defs, margin=margin, graphics_by_unit=graphics_by_unit
         )
         if bbox is None:
             continue

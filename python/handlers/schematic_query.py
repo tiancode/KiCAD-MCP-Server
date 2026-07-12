@@ -729,42 +729,73 @@ def handle_get_schematic_pin_locations(
                 "message": "Missing required parameters: schematicPath, reference",
             }
 
+        sch_path = Path(schematic_path)
         locator = PinLocator()
-        all_pins = locator.get_all_symbol_pins(Path(schematic_path), reference)
+        # Only pins whose owning unit is placed on the sheet get real coords.
+        all_pins = locator.get_all_symbol_pins(sch_path, reference)
 
-        if not all_pins:
+        # Full pin roster from the symbol definition, so pins on an UNPLACED
+        # multi-unit unit can be reported as placed:false instead of either
+        # being silently dropped or (the F1 bug) fabricated onto another unit.
+        unit_info = locator.get_unit_placement(sch_path, reference)
+        unplaced_units = set(unit_info["unplaced_units"]) if unit_info else set()
+
+        lib_id = (
+            locator._get_lib_id(sch_path, reference) if hasattr(locator, "_get_lib_id") else None
+        )
+        if not lib_id and unit_info:
+            lib_id = unit_info.get("lib_id")
+        pins_def = locator.get_symbol_pins(sch_path, lib_id) if lib_id else {}
+
+        if not all_pins and not pins_def:
             return {
                 "success": False,
                 "message": f"No pins found for {reference} — check reference and schematic path",
             }
 
-        # Enrich with pin names and angles from the symbol definition
-        pins_def = (
-            locator.get_symbol_pins(
-                Path(schematic_path),
-                locator._get_lib_id(Path(schematic_path), reference),
-            )
-            if hasattr(locator, "_get_lib_id")
-            else {}
-        )
+        # Iterate the full roster when available so unplaced pins are visible;
+        # fall back to the located pins when no definition could be read.
+        pin_numbers = list(pins_def.keys()) if pins_def else list(all_pins.keys())
 
-        result = {}
-        for pin_num, coords in all_pins.items():
-            entry = {"x": coords[0], "y": coords[1]}
-            if pin_num in pins_def:
-                entry["name"] = pins_def[pin_num].get("name", pin_num)
-                entry["angle"] = (
-                    locator.get_pin_angle(Path(schematic_path), reference, pin_num) or 0
-                )
-                # Which symbol unit owns this pin. For multi-unit parts (op-amp,
-                # gate array) different pins live on different units, each placed
-                # at its own location — callers shorting nets by pin number alone
-                # need this to tell unit A's pins from unit B's.
-                if pins_def[pin_num].get("unit") is not None:
-                    entry["unit"] = pins_def[pin_num]["unit"]
+        result: Dict[str, Any] = {}
+        for pin_num in pin_numbers:
+            pdef = pins_def.get(pin_num, {})
+            entry: Dict[str, Any] = {"name": pdef.get("name", pin_num)}
+            unit = pdef.get("unit")
+            if unit is not None:
+                # Which symbol unit owns this pin. For multi-unit parts different
+                # pins live on different units, each placed at its own location —
+                # callers shorting nets by pin number alone need this.
+                entry["unit"] = unit
+            if pin_num in all_pins:
+                coords = all_pins[pin_num]
+                entry["x"] = coords[0]
+                entry["y"] = coords[1]
+                entry["placed"] = True
+                entry["angle"] = locator.get_pin_angle(sch_path, reference, pin_num) or 0
+            else:
+                # No coordinate: the pin's unit is not on the sheet. Mark it
+                # clearly and OMIT x/y so no caller mistakes a phantom location
+                # for a real one.
+                entry["placed"] = False
             result[pin_num] = entry
 
-        return {"success": True, "reference": reference, "pins": result}
+        response: Dict[str, Any] = {"success": True, "reference": reference, "pins": result}
+        if unit_info and unit_info["is_multi_unit"]:
+            response["units"] = {
+                "total": unit_info["total_units"],
+                "placed": unit_info["placed_units"],
+                "unplaced": unit_info["unplaced_units"],
+            }
+        if unplaced_units:
+            response["warning"] = (
+                f"{reference} is a multi-unit symbol with unplaced unit(s) "
+                f"{sorted(unplaced_units)}: their pins are reported placed:false with no "
+                f"coordinates and cannot be labeled or connected until you place them with "
+                f'add_schematic_component(symbol="{lib_id or "<lib>:<name>"}", '
+                f'reference="{reference}", unit=N).'
+            )
+        return response
 
     except Exception as e:
         logger.error(f"Error getting pin locations: {e}")
