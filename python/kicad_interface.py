@@ -682,6 +682,41 @@ class KiCADInterface(BoardPersistenceMixin):
             for _name in _names:
                 self.command_routes[_name] = getattr(_obj, _name)
 
+        # Commands whose SWIG-fallback handler reads or mutates the SWIG
+        # in-memory board (finding N1).  Before dispatching one of these, the
+        # dispatcher runs _reload_swig_board_if_disk_changed() so an IPC-routed
+        # save (or a user Ctrl+S in KiCad, or any external edit) can't leave
+        # SWIG-served reads returning stale data or SWIG mutations clobbering
+        # newer disk content.  Derived from the identity-route table above
+        # (every *_commands handler object holds a .board reference) plus the
+        # handler-module mutators in _BOARD_MUTATING_COMMANDS and the explicit
+        # wrappers below — kept data-driven so new identity routes are covered
+        # automatically.
+        _board_backed_objs = {
+            id(self.board_commands),
+            id(self.routing_commands),
+            id(self.component_commands),
+            id(self.design_rule_commands),
+            id(self.export_commands),
+            id(self.freerouting_commands),
+        }
+        self._swig_board_backed_commands = set(self._BOARD_MUTATING_COMMANDS)
+        for _cmd_name, _route in self.command_routes.items():
+            _bound_self = getattr(_route, "__self__", None)
+            if _bound_self is not None and id(_bound_self) in _board_backed_objs:
+                self._swig_board_backed_commands.add(_cmd_name)
+        self._swig_board_backed_commands.update(
+            {
+                "add_board_text",  # alias → board_commands.add_text
+                "add_copper_pour",  # wrapper → routing_commands.add_copper_pour
+                "save_project",  # writes SWIG memory to disk — must not save stale
+                "get_pcb_overview",  # aggregates SWIG-backed reads
+            }
+        )
+        # Project lifecycle loads a fresh board itself — a pre-reload would be
+        # wasted work (and open_project may target a different file entirely).
+        self._swig_board_backed_commands -= {"open_project", "create_project"}
+
         self.command_routes.update(
             {
                 "add_board_text": self.board_commands.add_text,  # Alias for TypeScript tool
@@ -714,9 +749,14 @@ class KiCADInterface(BoardPersistenceMixin):
         "delete_trace": "_ipc_delete_trace",
         "query_traces": "_ipc_query_traces",
         "get_nets_list": "_ipc_get_nets_list",
-        # Zone commands
+        # Zone commands.  add/query/delete/edit ALL route IPC when it's
+        # active (finding N2): delete/edit used to be SWIG-only, so an
+        # IPC-added zone (KiCad memory) was invisible to the very next
+        # delete ("No zone matched") until a manual reconcile.
         "query_zones": "_ipc_query_zones",
         "add_copper_pour": "_ipc_add_copper_pour",
+        "delete_copper_pour": "_ipc_delete_copper_pour",
+        "edit_copper_pour": "_ipc_edit_copper_pour",
         # MCP-name alias of add_copper_pour — both names go through the
         # same IPC fast-path so the schema isn't a dispatch-time landmine.
         "refill_zones": "_ipc_refill_zones",
@@ -778,13 +818,16 @@ class KiCADInterface(BoardPersistenceMixin):
         """
         if change_type == "save":
             self._ipc_writes_pending = False
-            # After IPC save, disk reflects KiCad memory — refresh the
-            # signature so SWIG auto-save doesn't see it as 'changed
-            # externally' and refuse legitimate follow-up writes.
-            try:
-                self._record_board_signature()
-            except Exception:
-                pass
+            # After an IPC save, disk reflects KiCad memory — but the SWIG
+            # in-memory board still holds the PRE-save content.  Deliberately
+            # do NOT refresh ``_board_disk_signature`` here: that refresh used
+            # to hide the divergence (finding N1 — SWIG reads served stale
+            # component counts after delete_component→save_project routed
+            # IPC).  Leaving the signature at the content SWIG memory actually
+            # reflects makes the next SWIG-path command's
+            # ``_reload_swig_board_if_disk_changed`` detect the newer disk and
+            # reload — which also re-records the signature, so follow-up SWIG
+            # auto-saves don't false-positive on 'changed externally'.
             return
         # Selection state and action_invoked don't change board content; they
         # leave both backends consistent.
@@ -985,6 +1028,100 @@ class KiCADInterface(BoardPersistenceMixin):
             "board matches the recorded landed SWIG write, so KiCad memory == "
             "disk == SWIG (nothing to reconcile)."
         )
+
+    def _reload_swig_board_if_disk_changed(self) -> Optional[Dict[str, Any]]:
+        """Reload the SWIG in-memory board when the on-disk file has newer content.
+
+        Finding N1: an IPC-routed save (``ipc_save_board``, the ``save_project``
+        fast path, or a user Ctrl+S in KiCad) rewrites the ``.kicad_pcb`` while
+        the MCP's own SWIG board object still holds the pre-save content.
+        SWIG-served reads then return stale data with no flag
+        (``get_pcb_overview`` reported 42 components vs disk's 38) and a SWIG
+        mutation would apply to — and auto-save — that stale content,
+        clobbering the newer disk state.  From the SWIG side an IPC save IS an
+        external edit, so this generalizes the existing external-edit handling:
+        compare the disk signature against ``_board_disk_signature`` (the
+        content the SWIG board was last synchronized with) and reload via
+        ``_safe_load_board`` on mismatch.
+
+        Called by the dispatcher before every SWIG-path board command (reads
+        AND mutations — see ``_swig_board_backed_commands``).  Cheap on the hot
+        path: a single ``os.stat`` when nothing changed (mtime_ns equality
+        short-circuits before any hashing).
+
+        Safety: SWIG mutations auto-save immediately after every command
+        (``_BOARD_MUTATING_COMMANDS`` → ``_auto_save_board``), so SWIG memory ==
+        recorded disk content is the steady state and reloading is lossless.
+        The one exception is a *refused/failed* auto-save (external-edit
+        conflict or pcbnew error) — then SWIG memory holds real unsaved edits,
+        and reloading would silently discard them, so we skip the reload and
+        leave the existing refusal semantics in charge.
+
+        Returns ``{"swigReloadedFromDisk": True}`` when a reload happened (the
+        dispatcher merges it into the response), else ``None``.
+        """
+        board = getattr(self, "board", None)
+        if board is None:
+            return None
+        try:
+            board_path = board.GetFileName()
+        except Exception:
+            return None
+        if not board_path:
+            return None
+        expected = getattr(self, "_board_disk_signature", None)
+        if expected is None:
+            # No baseline recorded (pre-guard project state) — keep the
+            # legacy "first save wins" semantics rather than guessing.
+            return None
+        # mtime fast path: unchanged mtime_ns → assume unchanged content.
+        try:
+            st = os.stat(board_path)
+        except OSError:
+            return None
+        if st.st_mtime_ns == expected[0]:
+            return None
+        current = self._disk_signature(board_path)
+        if current is None:
+            return None
+        if current[1] == expected[1]:
+            # touch-only mtime bump: refresh the recorded mtime so subsequent
+            # calls take the fast path again (mirrors _auto_save_board).
+            self._board_disk_signature = current
+            return None
+        # Disk content is newer than what SWIG memory reflects.  Guard:
+        # never discard genuinely-unsaved SWIG edits (a refused or failed
+        # auto-save left memory ahead of disk).
+        last = getattr(self, "_last_auto_save_status", None)
+        if (
+            isinstance(last, dict)
+            and not last.get("saved")
+            and (last.get("memChangesUnsaved") or last.get("error"))
+        ):
+            logger.warning(
+                "SWIG board is stale vs disk but has unsaved in-memory edits "
+                "(last auto-save refused/failed); NOT reloading to avoid "
+                "discarding them."
+            )
+            return None
+        reloaded = self._safe_load_board(board_path)
+        if reloaded is None:
+            logger.warning(
+                f"SWIG board is stale vs disk but reloading {board_path} failed; "
+                "serving the stale in-memory board."
+            )
+            return None
+        self.board = reloaded
+        if getattr(self, "project_commands", None) is not None:
+            self.project_commands.board = reloaded
+        self._update_command_handlers()
+        self._record_board_signature(board_path)
+        self._last_auto_save_status = None
+        logger.info(
+            "Reloaded SWIG board from disk: content changed since the SWIG "
+            "board was loaded (IPC/KiCad save or external edit)."
+        )
+        return {"swigReloadedFromDisk": True}
 
     def _try_enable_ipc_backend(self, force: bool = False) -> bool:
         """Try to switch an already-running interface to IPC when KiCAD is available."""
@@ -1601,10 +1738,25 @@ class KiCADInterface(BoardPersistenceMixin):
                 if conflict is not None:
                     ipc_only_reconcile_info = self._auto_reconcile_swig_to_ipc(conflict)
 
+            # N1: before serving a SWIG-path board command (read OR mutation),
+            # reload the SWIG board if the on-disk file has newer content —
+            # an IPC-routed save (or KiCad Ctrl+S / external edit) is an
+            # external edit from the SWIG board's perspective.  Runs after the
+            # conflict gates (an ipc_to_swig refusal must still win) and is a
+            # single os.stat when nothing changed.
+            swig_reload_info: Optional[Dict[str, Any]] = None
+            if handler is not None and command in getattr(self, "_swig_board_backed_commands", ()):
+                swig_reload_info = self._reload_swig_board_if_disk_changed()
+
             if handler:
                 # Execute the command
                 result = handler(params)
                 logger.debug(f"Command result: {result}")
+
+                # Surface the N1 self-heal so callers can see the read/mutation
+                # was served from freshly reloaded (disk-true) content.
+                if swig_reload_info is not None and isinstance(result, dict):
+                    result.setdefault("swigReloadedFromDisk", True)
 
                 # Surface a dispatcher-level self-heal (F11) with the same
                 # markers the IPC fast path attaches.  These commands aren't in

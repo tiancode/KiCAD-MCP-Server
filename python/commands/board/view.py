@@ -37,6 +37,23 @@ def _fit_within_box(img: "Image.Image", max_w: int, max_h: int) -> "Image.Image"
 class BoardViewCommands:
     """Handles board viewing operations"""
 
+    # Default layer set for get_board_2d_view when the caller passes no
+    # ``layers`` (finding N5).  Plotting EVERY enabled layer in ascending
+    # layer-id order rendered F.Cu first and then drew the B.Cu zone fill,
+    # courtyard, and Fab outlines OVER it in the same colour — a fully
+    # populated board looked like a black rectangle with a few stray shapes.
+    # This curated set is plotted back-to-front (list order == paint order)
+    # so front copper and silkscreen stay visible; pads, vias and filled
+    # zones plot as part of their copper layers.  Explicit ``layers``
+    # behaviour is unchanged.
+    _DEFAULT_VIEW_LAYERS = (
+        "B.Cu",
+        "F.Cu",
+        "B.SilkS",
+        "F.SilkS",
+        "Edge.Cuts",
+    )
+
     def __init__(self, board: Optional[pcbnew.BOARD] = None):
         """Initialize with optional board instance"""
         self.board = board
@@ -141,11 +158,30 @@ class BoardViewCommands:
             plot_opts.SetPlotValue(True)
             plot_opts.SetPlotReference(True)
 
+            # N5: colour plot for the default preview so the stacked layers
+            # stay distinguishable — in monochrome a filled B.Cu zone paints
+            # the whole board black and everything plotted on top vanishes
+            # into it.  Best-effort: falls back to monochrome when colour
+            # settings aren't available headless.  Explicit-`layers` calls
+            # keep the previous monochrome output.
+            if not layers:
+                try:
+                    # "_builtin_default" is KiCad's classic theme and always
+                    # exists; GetColorSettings requires the name explicitly
+                    # under the KiCAD 10 SWIG bindings.
+                    color_settings = pcbnew.GetSettingsManager().GetColorSettings(
+                        "_builtin_default"
+                    )
+                    plot_opts.SetColorSettings(color_settings)
+                    plot_opts.SetBlackAndWhite(False)
+                except Exception as color_err:
+                    logger.debug(f"Colour plot unavailable, using monochrome: {color_err}")
+
             # Plot to SVG first (for vector output)
             # Note: KiCAD 9.0 prepends the project name to the filename, so we use GetPlotFileName() to get the actual path
             plotter.OpenPlotfile("temp_view", pcbnew.PLOT_FORMAT_SVG, "Temporary View")
 
-            # Plot specified layers or all enabled layers
+            # Plot specified layers, or the curated default preview set.
             # Note: In KiCAD 9.0, SetLayer() must be called before PlotLayer()
             if layers:
                 for layer_name in layers:
@@ -154,7 +190,16 @@ class BoardViewCommands:
                         plotter.SetLayer(layer_id)
                         plotter.PlotLayer()
             else:
-                for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
+                # N5: default to a meaningful preview (back-to-front paint
+                # order) instead of all enabled layers — see
+                # _DEFAULT_VIEW_LAYERS for the rationale.
+                for layer_name in self._DEFAULT_VIEW_LAYERS:
+                    layer_id = self.board.GetLayerID(layer_name)
+                    # Real pcbnew returns an int (negative = unknown layer);
+                    # the isinstance guard keeps stubbed boards (unit tests)
+                    # on the plot path like the old range() loop did.
+                    if isinstance(layer_id, int) and layer_id < 0:
+                        continue
                     if self.board.IsLayerEnabled(layer_id):
                         plotter.SetLayer(layer_id)
                         plotter.PlotLayer()

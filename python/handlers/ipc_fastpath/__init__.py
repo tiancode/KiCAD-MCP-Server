@@ -42,6 +42,8 @@ from ._routing import (
 from ._zones import (
     _ipc_board_edge_rect,
     handle_add_copper_pour,
+    handle_delete_copper_pour,
+    handle_edit_copper_pour,
     handle_query_zones,
     handle_refill_zones,
 )
@@ -57,7 +59,9 @@ __all__ = [
     "handle_add_text",
     "handle_add_via",
     "handle_delete_component",
+    "handle_delete_copper_pour",
     "handle_delete_trace",
+    "handle_edit_copper_pour",
     "handle_get_board_info",
     "handle_get_component_list",
     "handle_get_component_pads",

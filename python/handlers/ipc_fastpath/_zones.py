@@ -220,6 +220,32 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         if success and net_was_resolved:
             response["resolvedNet"] = resolved_net
             response["warning"] = f"Requested net '{net}' resolved to board net '{resolved_net}'."
+
+        # autoRefill parity with the SWIG wrapper
+        # (_add_copper_pour_with_optional_refill): default ON so the zone is
+        # filled for the next export; autoRefill=false keeps the legacy
+        # deferred-fill behaviour.  Previously the IPC path silently ignored
+        # the flag and always left the zone unfilled.
+        if success:
+            if bool(params.get("autoRefill", True)):
+                try:
+                    refilled = iface.ipc_board_api.refill_zones()
+                except Exception as refill_err:  # pragma: no cover - best-effort
+                    logger.warning(f"IPC auto-refill after add_copper_pour failed: {refill_err}")
+                    refilled = False
+                response["refillStatus"] = (
+                    "filled"
+                    if refilled
+                    else (
+                        "deferred_after_failure — zone added but the refill "
+                        "failed; call refill_zones (or press B in KiCad)"
+                    )
+                )
+            else:
+                response["refillStatus"] = (
+                    "deferred — zone defined but not filled; "
+                    "call refill_zones before export_gerber"
+                )
         return response
     except Exception as e:
         logger.error(f"IPC add_copper_pour error: {e}")
@@ -342,4 +368,297 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
         }
     except Exception as e:
         logger.error(f"IPC refill_zones error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# delete_copper_pour / edit_copper_pour fast paths (finding N2).
+#
+# Zone ADD and QUERY already routed through IPC while DELETE and EDIT existed
+# only as SWIG methods — so with KiCad open, an added zone lived in KiCad's
+# memory and the very next delete/edit read the SWIG board and refused with
+# "No zone matched".  These fast paths give all four zone ops one coherent
+# backend per session; the SWIG methods remain the fallback when KiCad is
+# closed.  Selection semantics (uuid / net / layer filters, resolve_net_name
+# on the net filter, multi-match refusal without all=true) mirror
+# commands/routing/_zones.py so callers don't branch on backend.
+# ---------------------------------------------------------------------------
+
+
+def _zone_net_name(zone: Any) -> str:
+    try:
+        return zone.net.name if zone.net else ""
+    except Exception:
+        return ""
+
+
+def _zone_layer_names(zone: Any) -> List[str]:
+    try:
+        return [_normalize_zone_layer(layer) for layer in zone.layers]
+    except Exception:
+        return []
+
+
+def _zone_brief_ipc(zone: Any) -> Dict[str, Any]:
+    """Identifying summary — same shape as the SWIG ``_zone_brief``."""
+    layers = _zone_layer_names(zone)
+    return {
+        "uuid": _zone_uuid_str(zone),
+        "net": _zone_net_name(zone),
+        "layer": layers[0] if layers else None,
+        "isFilled": bool(getattr(zone, "filled", False)),
+    }
+
+
+def _find_zones_ipc(
+    iface: "KiCADInterface",
+    uuid: Optional[str],
+    net: Optional[str],
+    layer: Optional[str],
+) -> tuple:
+    """(matches, error_response) over the live IPC board's zones.
+
+    Mirrors the SWIG ``RoutingCommands._find_zones`` contract, including the
+    exact refusal messages and the F3 net-name resolution on the net filter.
+    """
+    from commands.routing._zones import resolve_net_name
+
+    board = iface.ipc_board_api._get_board()  # noqa: SLF001 — our wrapper's accessor
+    zones = list(board.get_zones())
+
+    if uuid:
+        matches = [z for z in zones if _zone_uuid_str(z) == uuid]
+        if not matches:
+            return [], {
+                "success": False,
+                "message": f"No zone with uuid {uuid}",
+                "errorDetails": "Call query_zones to list zone uuids",
+                "zones": [_zone_brief_ipc(z) for z in zones],
+            }
+        return matches, None
+
+    matches = zones
+    if net is not None:
+        zone_nets = [_zone_net_name(z) for z in matches]
+        resolved, _ = resolve_net_name(net, zone_nets)
+        target_net = resolved if resolved is not None else net
+        matches = [z for z, zn in zip(matches, zone_nets) if zn == target_net]
+    if layer is not None:
+        matches = [z for z in matches if layer in _zone_layer_names(z)]
+    if not matches:
+        return [], {
+            "success": False,
+            "message": "No zone matched the given net/layer filters",
+            "errorDetails": "Call query_zones to list zones",
+            "zones": [_zone_brief_ipc(z) for z in zones],
+        }
+    return matches, None
+
+
+def handle_delete_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """IPC handler for delete_copper_pour — deletes zones from the live board."""
+    try:
+        matches, err = _find_zones_ipc(
+            iface, params.get("uuid"), params.get("net"), params.get("layer")
+        )
+        if err:
+            return err
+        if len(matches) > 1 and not bool(params.get("all", False)):
+            return {
+                "success": False,
+                "message": (
+                    f"{len(matches)} zones matched — pass all=true to delete "
+                    "every match, or refine with uuid (from query_zones)"
+                ),
+                "zones": [_zone_brief_ipc(z) for z in matches],
+            }
+        deleted = [_zone_brief_ipc(z) for z in matches]
+        if not iface.ipc_board_api.remove_zones(matches):
+            return {"success": False, "message": "Failed to delete copper pour via IPC"}
+        return {
+            "success": True,
+            "message": f"Deleted {len(deleted)} copper pour(s) (visible in KiCAD UI)",
+            "deleted": deleted,
+        }
+    except Exception as e:
+        logger.error(f"IPC delete_copper_pour error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# padConnection param value → kipy ZoneConnectionStyle name (mirrors the SWIG
+# _PAD_CONNECTION_ATTRS mapping).
+_ZONE_CONNECTION_STYLES = {
+    "solid": "ZCS_FULL",
+    "thermal": "ZCS_THERMAL",
+    "none": "ZCS_NONE",
+    "thru_hole_only": "ZCS_PTH_THERMAL",
+}
+
+
+def handle_edit_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """IPC handler for edit_copper_pour — edits one zone on the live board.
+
+    Same param surface as the SWIG path: select by uuid or net/layer filters
+    matching exactly one zone; then any of newNet / newLayer / clearance /
+    minWidth / priority / fillType / padConnection / thermalGap /
+    thermalBridgeWidth / outline overwrite that zone's settings.
+    """
+    try:
+        from commands.routing._zones import resolve_net_name
+        from kipy.geometry import PolyLine, PolyLineNode
+        from kipy.proto.board.board_types_pb2 import (
+            BoardLayer,
+            ZoneConnectionStyle,
+            ZoneFillMode,
+        )
+        from kipy.util.units import from_mm
+
+        matches, err = _find_zones_ipc(
+            iface, params.get("uuid"), params.get("net"), params.get("layer")
+        )
+        if err:
+            return err
+        if len(matches) > 1:
+            return {
+                "success": False,
+                "message": (
+                    f"{len(matches)} zones matched — refine with uuid "
+                    "(from query_zones) or a net+layer pair"
+                ),
+                "zones": [_zone_brief_ipc(z) for z in matches],
+            }
+        zone = matches[0]
+        changed: List[str] = []
+
+        new_net = params.get("newNet")
+        resolved_new_net: Optional[str] = None
+        if new_net is not None:
+            board = iface.ipc_board_api._get_board()  # noqa: SLF001
+            board_nets = list(board.get_nets())
+            resolved, candidates = resolve_net_name(new_net, [n.name for n in board_nets])
+            if resolved is None:
+                return {
+                    "success": False,
+                    "message": f"Net '{new_net}' does not exist on the board",
+                    "requestedNet": new_net,
+                    "candidates": candidates,
+                }
+            for n in board_nets:
+                if n.name == resolved:
+                    zone.net = n
+                    break
+            changed.append("net")
+            if resolved != new_net:
+                resolved_new_net = resolved
+
+        new_layer = params.get("newLayer")
+        if new_layer is not None:
+            layer_enum = getattr(BoardLayer, "BL_" + new_layer.replace(".", "_"), None)
+            if layer_enum is None:
+                return {"success": False, "message": f"Layer '{new_layer}' does not exist"}
+            zone.layers = [layer_enum]
+            changed.append("layer")
+
+        if params.get("clearance") is not None:
+            zone.clearance = from_mm(float(params["clearance"]))
+            changed.append("clearance")
+
+        if params.get("minWidth") is not None:
+            zone.min_thickness = from_mm(float(params["minWidth"]))
+            changed.append("minWidth")
+
+        if params.get("priority") is not None:
+            zone.priority = int(params["priority"])
+            changed.append("priority")
+
+        fill_type = params.get("fillType")
+        if fill_type is not None:
+            zone._proto.copper_settings.fill_mode = (
+                ZoneFillMode.ZFM_HATCHED if fill_type == "hatched" else ZoneFillMode.ZFM_SOLID
+            )
+            changed.append("fillType")
+
+        pad_connection = params.get("padConnection")
+        if pad_connection is not None:
+            style_name = _ZONE_CONNECTION_STYLES.get(pad_connection)
+            style = getattr(ZoneConnectionStyle, style_name, None) if style_name else None
+            if style is None:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Unknown padConnection '{pad_connection}' — use one of "
+                        f"{sorted(_ZONE_CONNECTION_STYLES)}"
+                    ),
+                }
+            zone._proto.copper_settings.connection.zone_connection = style
+            changed.append("padConnection")
+
+        if params.get("thermalGap") is not None:
+            zone._proto.copper_settings.connection.thermal_spokes.gap = from_mm(
+                float(params["thermalGap"])
+            )
+            changed.append("thermalGap")
+
+        if params.get("thermalBridgeWidth") is not None:
+            zone._proto.copper_settings.connection.thermal_spokes.width = from_mm(
+                float(params["thermalBridgeWidth"])
+            )
+            changed.append("thermalBridgeWidth")
+
+        points = params.get("outline")
+        if points:
+            if len(points) < 3:
+                return {"success": False, "message": "outline needs at least 3 points"}
+            outline = PolyLine()
+            outline.closed = True
+            for point in points:
+                scale = _TO_MM_SCALE.get(str(point.get("unit", "mm")).lower(), 1.0)
+                outline.append(
+                    PolyLineNode.from_xy(
+                        from_mm(float(point["x"]) * scale), from_mm(float(point["y"]) * scale)
+                    )
+                )
+            del zone._proto.outline.polygons[:]
+            zone._proto.outline.polygons.add()
+            zone._proto.outline.polygons[0].outline.CopyFrom(outline._proto)
+            changed.append("outline")
+
+        if not changed:
+            return {
+                "success": False,
+                "message": (
+                    "No editable property given — pass one of newNet, newLayer, "
+                    "clearance, minWidth, priority, fillType, padConnection, "
+                    "thermalGap, thermalBridgeWidth, outline"
+                ),
+                "zone": _zone_brief_ipc(zone),
+            }
+
+        # The stored fill no longer reflects the zone settings.
+        try:
+            zone._proto.filled = False
+        except Exception:
+            pass
+
+        if not iface.ipc_board_api.update_zone(zone):
+            return {"success": False, "message": "Failed to edit copper pour via IPC"}
+
+        edit_result: Dict[str, Any] = {
+            "success": True,
+            "message": f"Edited copper pour ({', '.join(changed)})",
+            "changed": changed,
+            "zone": _zone_brief_ipc(zone),
+            "refillStatus": (
+                "fill marked stale — call refill_zones (or let KiCad refill "
+                "on open) before export_gerber"
+            ),
+        }
+        if resolved_new_net is not None:
+            edit_result["resolvedNet"] = resolved_new_net
+            edit_result["warning"] = (
+                f"Requested net '{new_net}' resolved to board net " f"'{resolved_new_net}'."
+            )
+        return edit_result
+    except Exception as e:
+        logger.error(f"IPC edit_copper_pour error: {e}")
         return {"success": False, "message": str(e)}
