@@ -55,6 +55,11 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
         return {
             "success": False,
             "requires_ipc": True,
+            # Truthful code (P12): this is a deliberate safety refusal (the SWIG
+            # ZONE_FILLER is unsafe headless), not an internal error — an agent
+            # can branch on REQUIRES_IPC to open KiCad / retry via IPC or pass
+            # force=true, rather than treating it as a crash.
+            "errorCode": "REQUIRES_IPC",
             "message": (
                 "refill_zones refused on the SWIG backend: "
                 "pcbnew.ZONE_FILLER has a known segfault/wrong-fill risk "

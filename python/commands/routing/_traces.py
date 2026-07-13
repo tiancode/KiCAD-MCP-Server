@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 import pcbnew
 
-from ._helpers import _refuse_with_obstacles
+from ._helpers import _refuse_with_obstacles, _track_width_error
 
 logger = logging.getLogger("kicad_interface")
 
@@ -146,12 +146,14 @@ class TraceMixin:
                     "success": False,
                     "message": f"Pad not found: {from_ref} pad {from_pad}",
                     "errorDetails": f"Check pad number for {from_ref}",
+                    "errorCode": "NOT_FOUND",
                 }
             if not end_pad:
                 return {
                     "success": False,
                     "message": f"Pad not found: {to_ref} pad {to_pad}",
                     "errorDetails": f"Check pad number for {to_ref}",
+                    "errorCode": "NOT_FOUND",
                 }
 
             start_pos = start_pad.GetPosition()
@@ -166,7 +168,12 @@ class TraceMixin:
             # in design settings, which is usually 0.2mm on a fresh board —
             # too thin for THT power nets and was the user's main complaint.
             if width is None:
-                width = self._netclass_track_width_mm(start_pad)
+                # Same P2 semantics as route_smart: KiCad 9/10 keeps netclass
+                # membership in the .kicad_pro, so consult it before the SWIG
+                # netclass (which reports Default for project-assigned nets).
+                width = self._project_netclass_props(net).get(
+                    "track_width"
+                ) or self._netclass_track_width_mm(start_pad)
 
             # Detect if pads are on different copper layers → need via.
             # SMD pad.GetLayer() reports F.Cu even on flipped B.Cu footprints in
@@ -341,7 +348,15 @@ class TraceMixin:
                     "success": False,
                     "message": "Missing parameters",
                     "errorDetails": "start and end points are required",
+                    "errorCode": "VALIDATION",
                 }
+
+            # Bound an explicit width (P10): a 999 mm track is wider than most
+            # boards and was accepted silently.  Same limit as route_smart /
+            # create_netclass.  Omitted width falls back to the design default.
+            width_err = _track_width_error(width)
+            if width_err is not None:
+                return width_err
 
             # Get layer ID
             layer_id = self.board.GetLayerID(layer)
@@ -350,6 +365,7 @@ class TraceMixin:
                     "success": False,
                     "message": "Invalid layer",
                     "errorDetails": f"Layer '{layer}' does not exist",
+                    "errorCode": "VALIDATION",
                 }
 
             # Get start point
@@ -543,6 +559,7 @@ class TraceMixin:
                         "success": False,
                         "message": "Track not found",
                         "errorDetails": f"Could not find track with UUID: {trace_uuid}",
+                        "errorCode": "NOT_FOUND",
                     }
 
                 self.board.Delete(track)
@@ -599,6 +616,7 @@ class TraceMixin:
                         "success": False,
                         "message": "No track found",
                         "errorDetails": "No track/via found near specified position matching the filters",
+                        "errorCode": "NOT_FOUND",
                     }
 
             # 3) Bulk delete by net name (only when neither uuid nor position
@@ -715,6 +733,7 @@ class TraceMixin:
                     "success": False,
                     "message": "Track not found",
                     "errorDetails": "Could not find track with specified identifier",
+                    "errorCode": "NOT_FOUND",
                 }
 
             # Check if it's a via (some modifications don't apply)

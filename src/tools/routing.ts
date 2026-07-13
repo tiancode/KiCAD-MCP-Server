@@ -48,7 +48,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         })
         .describe("End position"),
       layer: z.string().describe("PCB layer"),
-      width: z.number().describe("Trace width in mm"),
+      width: z.number().describe("Trace width in mm (must be >0 and <=50 mm)"),
       net: z.string().optional().describe("Net name (required for straight segments)"),
     },
     async (args) => {
@@ -325,7 +325,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     "Create or update a net class with custom design rules, persisted to the .kicad_pro (KiCad 9/10 store net classes in project JSON, not the board). Optionally assign nets by name or wildcard pattern.",
     {
       name: z.string().describe("Net class name"),
-      traceWidth: z.number().optional().describe("Default trace width in mm"),
+      traceWidth: z.number().optional().describe("Default trace width in mm (must be >0 and <=50 mm)"),
       clearance: z.number().optional().describe("Clearance in mm"),
       viaDiameter: z.number().optional().describe("Via diameter in mm"),
       viaDrill: z.number().optional().describe("Via drill size in mm"),
@@ -409,7 +409,12 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .describe(
           "1-2 copper layers (default ['F.Cu']); 2 enable via layer changes; direct uses the first",
         ),
-      width: z.number().optional().describe("Trace width in mm (default: netclass width)"),
+      width: z
+        .number()
+        .optional()
+        .describe(
+          "Trace width in mm (default: the net's netclass width from the .kicad_pro, else the board default; must be >0 and <=50 mm)",
+        ),
       net: z
         .string()
         .optional()
