@@ -26,8 +26,17 @@ def handle_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str
         size = params.get("size", 1.0)
         rotation = params.get("rotation", 0)
 
+        # Auto-mirror back-layer text (P13): un-mirrored B.* text trips DRC's
+        # nonmirrored_text_on_back_layer.  Resolve auto → concrete bool here so
+        # the reported state is accurate regardless of the backend internals; an
+        # explicit `mirror` param overrides.
+        mirror_param = params.get("mirror")
+        mirror_auto = mirror_param is None
+        is_back_layer = str(layer).startswith("B.")
+        mirror = is_back_layer if mirror_auto else bool(mirror_param)
+
         success = iface.ipc_board_api.add_text(
-            text=text, x=x, y=y, layer=layer, size=size, rotation=rotation
+            text=text, x=x, y=y, layer=layer, size=size, rotation=rotation, mirror=mirror
         )
 
         return {
@@ -35,6 +44,8 @@ def handle_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str
             "message": (
                 f"Added text '{text}' (visible in KiCAD UI)" if success else "Failed to add text"
             ),
+            "mirror": mirror,
+            "mirrorAuto": mirror_auto and is_back_layer,
         }
     except Exception as e:
         logger.error(f"IPC add_text error: {e}")

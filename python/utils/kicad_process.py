@@ -9,6 +9,7 @@ import logging
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import time
 from ctypes import wintypes
@@ -124,6 +125,112 @@ class KiCADProcessManager:
         """PIDs running any known KiCAD GUI binary (kicad / pcbnew / eeschema)."""
         return KiCADProcessManager._linux_pids_for(KiCADProcessManager._LINUX_KICAD_BINARIES)
 
+    # macOS GUI executable basenames.  The single source of truth for macOS
+    # detection is ``_darwin_kicad_processes`` below; every macOS branch
+    # (is_running / is_pcb_editor_running / get_process_info) routes through it
+    # so they can never disagree (the P5 contradiction: get_backend_info said
+    # "running" while manage_kicad_ui said "not running").
+    _DARWIN_GUI_BINARIES = frozenset({"kicad", "pcbnew", "eeschema"})
+
+    @staticmethod
+    def _darwin_kicad_processes(pcbnew_only: bool = False) -> List[dict]:
+        """Strict macOS KiCad GUI process list (pid / name / command).
+
+        Matches on the executable BASENAME (``kicad`` / ``pcbnew`` /
+        ``eeschema``) resolved from the process's argv[0], NOT on a substring
+        of the whole command line.  The old ``pgrep -f "KiCad|pcbnew"`` matched
+        anything whose arguments merely *mentioned* those words and produced
+        constant false positives:
+
+          * ``kicad-cli`` subprocesses the server itself spawns for ERC / DRC /
+            export (argv[0] basename ``kicad-cli`` — excluded here);
+          * the MCP server process, or any unrelated process whose command line
+            contains "KiCad"/"pcbnew" (a shell sitting in a KiCad repo, or an
+            agent whose system prompt discusses KiCad) — these have basenames
+            like ``zsh`` / ``python`` / ``claude`` and are excluded.
+
+        Real GUI frames run from a macOS app bundle
+        (``…/Contents/MacOS/<bin>``); a bare absolute path to the exact GUI
+        binary name is also accepted so Homebrew / source installs still count.
+        """
+        wanted = (
+            KiCADProcessManager._PCBNEW_ONLY
+            if pcbnew_only
+            else KiCADProcessManager._DARWIN_GUI_BINARIES
+        )
+        procs: List[dict] = []
+        try:
+            result = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True, text=True)
+        except Exception as e:
+            logger.error(f"Error listing macOS processes: {e}")
+            return procs
+        self_pid = str(os.getpid())
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            pid, args = parts[0], parts[1]
+            if pid == self_pid or "kicad_interface.py" in args:
+                continue
+            exe = args.split(None, 1)[0]
+            base = os.path.basename(exe).lower()
+            if base not in wanted:
+                continue
+            # A real GUI binary is either inside an app bundle or an absolute
+            # path — never a relative token accidentally basenamed to "kicad".
+            if "/Contents/MacOS/" not in exe and not exe.startswith("/"):
+                continue
+            procs.append({"pid": pid, "name": base, "command": args})
+        return procs
+
+    # Directories a KiCad IPC endpoint (``api.sock``) can live in.  The sibling
+    # ``api.lock`` is deliberately NOT consulted: KiCad removes ``api.sock`` on
+    # exit but ``api.lock`` can linger after a crash, so keying on the lock is
+    # exactly what makes stale-state detection lie.
+    @staticmethod
+    def _ipc_socket_dirs() -> List[str]:
+        dirs: List[str] = ["/tmp/kicad"]
+        if hasattr(os, "getuid"):
+            dirs.append(f"/run/user/{os.getuid()}/kicad")
+        if platform.system() == "Darwin":
+            dirs.append(os.path.expanduser("~/Library/Caches/kicad"))
+        dirs.append(os.path.expanduser("~/.var/app/org.kicad.KiCad/cache/tmp/kicad"))
+        xdg_cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+        dirs.append(f"{xdg_cache}/kicad")
+        return dirs
+
+    @staticmethod
+    def is_ipc_socket_live() -> bool:
+        """True when a KiCad IPC endpoint socket (``api.sock`` or a PID-suffixed
+        ``api-<pid>.sock``) is present.
+
+        Windows uses a named pipe (no socket file on disk), so this is Unix-only
+        and returns False there — process detection covers Windows.  Used only
+        as a *corroborating* signal for get_backend_info's guidance branch; it
+        is never trusted on its own to declare KiCad "running" (a crash can, in
+        principle, leave a stale socket behind).
+        """
+        if platform.system() == "Windows":
+            return False
+        import glob as _glob
+
+        for d in KiCADProcessManager._ipc_socket_dirs():
+            candidates = [os.path.join(d, "api.sock")]
+            try:
+                candidates.extend(_glob.glob(os.path.join(d, "api-*.sock")))
+            except Exception:
+                pass
+            for sock in candidates:
+                try:
+                    if stat.S_ISSOCK(os.stat(sock).st_mode):
+                        return True
+                except OSError:
+                    continue
+        return False
+
     @staticmethod
     def is_running() -> bool:
         """
@@ -139,10 +246,10 @@ class KiCADProcessManager:
                 return bool(KiCADProcessManager._linux_kicad_pids())
 
             elif system == "Darwin":  # macOS
-                result = subprocess.run(
-                    ["pgrep", "-f", "KiCad|pcbnew"], capture_output=True, text=True
-                )
-                return result.returncode == 0
+                # Strict, argv[0]-basename detection — never the loose
+                # ``pgrep -f`` substring match that flagged kicad-cli / the MCP
+                # server / unrelated processes as a running KiCad (P5).
+                return bool(KiCADProcessManager._darwin_kicad_processes())
 
             elif system == "Windows":
                 processes = KiCADProcessManager._windows_list_processes()
@@ -181,8 +288,8 @@ class KiCADProcessManager:
                 return bool(KiCADProcessManager._linux_pids_for(KiCADProcessManager._PCBNEW_ONLY))
 
             elif system == "Darwin":  # macOS
-                result = subprocess.run(["pgrep", "-f", "pcbnew"], capture_output=True, text=True)
-                return result.returncode == 0
+                # Same strict basename detection, narrowed to the pcbnew frame.
+                return bool(KiCADProcessManager._darwin_kicad_processes(pcbnew_only=True))
 
             elif system == "Windows":
                 for proc in KiCADProcessManager._windows_list_processes():
@@ -226,12 +333,25 @@ class KiCADProcessManager:
                 Path("/usr/bin/pcbnew"),
             ]
         elif system == "Darwin":  # macOS
+            # The GUI project manager lives directly in the outer bundle's
+            # MacOS dir; the standalone pcbnew binary is NESTED inside a
+            # sub-bundle (Contents/Applications/pcbnew.app/...), the same
+            # bundle gap that bit kicad-cli discovery.
             candidates = [
                 Path("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad"),
-                Path("/Applications/KiCad/pcbnew.app/Contents/MacOS/pcbnew"),
+                Path(
+                    os.path.expanduser(
+                        "~/Applications/KiCad/KiCad.app/Contents/MacOS/kicad"
+                    )
+                ),
+                Path(
+                    "/Applications/KiCad/KiCad.app/Contents/Applications/"
+                    "pcbnew.app/Contents/MacOS/pcbnew"
+                ),
             ]
         elif system == "Windows":
             candidates = [
+                Path("C:/Program Files/KiCad/10.0/bin/pcbnew.exe"),
                 Path("C:/Program Files/KiCad/9.0/bin/pcbnew.exe"),
                 Path("C:/Program Files/KiCad/8.0/bin/pcbnew.exe"),
                 Path("C:/Program Files (x86)/KiCad/9.0/bin/pcbnew.exe"),
@@ -304,12 +424,24 @@ class KiCADProcessManager:
         if system == "Linux":
             candidates = [Path("/usr/bin/pcbnew"), Path("/usr/local/bin/pcbnew")]
         elif system == "Darwin":  # macOS
+            # pcbnew is a NESTED sub-bundle on macOS — NOT directly in the
+            # outer bundle's MacOS dir (that path never existed and was the
+            # cause of "PCB editor executable not found", P6b).
             candidates = [
-                Path("/Applications/KiCad/KiCad.app/Contents/MacOS/pcbnew"),
-                Path("/Applications/KiCad/pcbnew.app/Contents/MacOS/pcbnew"),
+                Path(
+                    "/Applications/KiCad/KiCad.app/Contents/Applications/"
+                    "pcbnew.app/Contents/MacOS/pcbnew"
+                ),
+                Path(
+                    os.path.expanduser(
+                        "~/Applications/KiCad/KiCad.app/Contents/Applications/"
+                        "pcbnew.app/Contents/MacOS/pcbnew"
+                    )
+                ),
             ]
         elif system == "Windows":
             candidates = [
+                Path("C:/Program Files/KiCad/10.0/bin/pcbnew.exe"),
                 Path("C:/Program Files/KiCad/9.0/bin/pcbnew.exe"),
                 Path("C:/Program Files/KiCad/8.0/bin/pcbnew.exe"),
                 Path("C:/Program Files (x86)/KiCad/9.0/bin/pcbnew.exe"),
@@ -498,23 +630,10 @@ class KiCADProcessManager:
                     )
 
             elif system == "Darwin":
-                result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
-                for line in result.stdout.split("\n"):
-                    # macOS: match the canonical app-bundle path, not a substring.
-                    if (
-                        ("/KiCad.app/" in line or "/pcbnew" in line)
-                        and "kicad_interface.py" not in line
-                        and "grep" not in line
-                    ):
-                        parts = line.split()
-                        if len(parts) >= 11:
-                            processes.append(
-                                {
-                                    "pid": parts[1],
-                                    "name": parts[10],
-                                    "command": " ".join(parts[10:]),
-                                }
-                            )
+                # Single source of truth shared with is_running() — argv[0]
+                # basename match, so the process list and the boolean running
+                # check can never contradict each other (P5).
+                processes = KiCADProcessManager._darwin_kicad_processes()
 
             elif system == "Windows":
                 for proc in KiCADProcessManager._windows_list_processes():
@@ -541,20 +660,31 @@ def check_and_launch_kicad(project_path: Optional[Path] = None, auto_launch: boo
     """
     manager = KiCADProcessManager()
 
-    is_running = manager.is_running()
-
-    if is_running:
+    # ``is_running`` and ``get_process_info`` now share one strict detector, so
+    # they can't disagree — but guard the invariant explicitly: only report
+    # alreadyRunning when the process list is actually non-empty.  A truthy
+    # ``running`` with an EMPTY process list is the exact P5/P6 contradiction
+    # (get_backend_info claimed running while manage_kicad_ui showed none), and
+    # in that state we must NOT skip the launch.  ``get_process_info`` is only
+    # consulted once ``is_running`` is True so the auto_launch=False / not-
+    # running path stays a single cheap probe (and never spawns a subprocess).
+    if manager.is_running():
         processes = manager.get_process_info()
-        # alreadyRunning is load-bearing: handlers.ui.handle_launch_kicad_ui
-        # only forwards a file-open to the running instance when it sees
-        # alreadyRunning=True and launched=False.
-        return {
-            "running": True,
-            "launched": False,
-            "alreadyRunning": True,
-            "processes": processes,
-            "message": "KiCAD is already running",
-        }
+        if processes:
+            # alreadyRunning is load-bearing: handlers.ui.handle_launch_kicad_ui
+            # only forwards a file-open to the running instance when it sees
+            # alreadyRunning=True and launched=False.
+            return {
+                "running": True,
+                "launched": False,
+                "alreadyRunning": True,
+                "processes": processes,
+                "message": "KiCAD is already running",
+            }
+        logger.info(
+            "is_running() was True but the process list is empty; treating KiCAD "
+            "as not running so the launch is not skipped."
+        )
 
     if not auto_launch:
         return {

@@ -409,9 +409,17 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     # only unavailable_tool_count to keep their responses small.
     response["unavailable_tools"] = list(iface.IPC_REQUIRED_COMMANDS)
     unavailable_count = len(response["unavailable_tools"])
+    # Truthful, non-sticky detection: is_running() shares its strict process
+    # check with manage_kicad_ui (get_process_info), so kicad_running here can
+    # no longer contradict manage_kicad_ui's status (the P5 false positive).
+    # The IPC socket is a corroborating signal for the guidance branch only —
+    # never trusted alone to declare KiCad "running" (a stale api.sock can
+    # linger after a crash), so it does not flip kicad_running.
     kicad_running = KiCADProcessManager.is_running()
+    socket_live = KiCADProcessManager.is_ipc_socket_live()
+    response["kicad_running"] = kicad_running
+    response["ipcSocketPresent"] = socket_live
     if not kicad_running:
-        response["kicad_running"] = False
         response["message"] = (
             "On SWIG backend — KiCad isn't running. "
             f"Start KiCad (or call manage_kicad_ui(action=launch)) to enable "
@@ -427,11 +435,15 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
             "(see unavailable_tools)."
         )
     else:
-        response["kicad_running"] = True
+        socket_note = (
+            ""
+            if socket_live
+            else "  (No IPC socket is present, so the server is most likely off.)"
+        )
         response["message"] = (
             "On SWIG backend — KiCad is running but its IPC API server "
             "isn't reachable.  Enable it in KiCAD: Preferences → Plugins → "
-            "Enable IPC API Server, then re-call get_backend_info."
+            "Enable IPC API Server, then re-call get_backend_info." + socket_note
         )
         response["recommendation"] = (
             "KiCAD is running but the MCP can't reach its IPC API server.  "

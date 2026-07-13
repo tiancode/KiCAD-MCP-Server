@@ -17,6 +17,63 @@ def _unit_scale(unit: str) -> int:
     return 1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
 
 
+# A coordinate more than this many board-widths/heights away can only be a
+# units mistake (e.g. x=5000 mm on a 90 mm board); reject rather than fling the
+# footprint 5 m off the board.  Mirrors the schematic-side page guard's
+# _OFF_PAGE_ABSURD_FACTOR (POSITION_OFF_SHEET) — here the analog is the board
+# outline and POSITION_OFF_BOARD.
+_OFF_BOARD_ABSURD_FACTOR = 10.0
+
+
+def classify_board_position(x_mm: float, y_mm: float, bbox: Optional[tuple]) -> str:
+    """Classify a point (mm) against the board outline bbox.
+
+    ``bbox`` is ``(left, top, right, bottom)`` in mm, or ``None`` when the board
+    has no Edge.Cuts outline.  Returns:
+
+      * ``"no_outline"`` — no (or degenerate) outline: can't judge, don't warn.
+      * ``"absurd"``     — >10× a board dimension away: reject (units error).
+      * ``"off_board"``  — outside the outline but plausibly intentional: warn.
+      * ``"ok"``         — inside the outline.
+    """
+    if bbox is None:
+        return "no_outline"
+    left, top, right, bottom = bbox
+    width = abs(right - left)
+    height = abs(bottom - top)
+    if width <= 0 or height <= 0:
+        return "no_outline"
+    if (
+        abs(x_mm) > _OFF_BOARD_ABSURD_FACTOR * width
+        or abs(y_mm) > _OFF_BOARD_ABSURD_FACTOR * height
+    ):
+        return "absurd"
+    if not (left <= x_mm <= right and top <= y_mm <= bottom):
+        return "off_board"
+    return "ok"
+
+
+def _outline_bbox_mm(board: Any) -> Optional[tuple]:
+    """Return the board's Edge.Cuts bounding box as ``(left, top, right, bottom)``
+    mm, or ``None`` when there is no usable outline.
+
+    ``GetBoardEdgesBoundingBox`` returns a BOX2I in nm; an empty/degenerate box
+    (no outline) collapses to zero width/height, which the caller treats as
+    "can't judge".
+    """
+    try:
+        bb = board.GetBoardEdgesBoundingBox()
+        left = bb.GetLeft() / 1000000.0
+        top = bb.GetTop() / 1000000.0
+        right = bb.GetRight() / 1000000.0
+        bottom = bb.GetBottom() / 1000000.0
+    except (AttributeError, RuntimeError):
+        return None
+    if right - left <= 0 or bottom - top <= 0:
+        return None
+    return (left, top, right, bottom)
+
+
 def _parse_ref(ref: str) -> tuple:
     """Split a reference into (alpha_prefix, int_suffix). Suffix is None when
     the reference has no trailing digits (e.g. 'REF' → ('REF', None))."""
@@ -280,6 +337,41 @@ class PlacementMixin:
             )  # mm, mil, or inch to nm
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
+
+            # Board-awareness (P11): when the board has an Edge.Cuts outline,
+            # reject a target so far outside it that it can only be a units
+            # mistake, and flag a merely-off-board (but plausible) target with a
+            # warning naming the outline bbox.  No outline → can't judge, no
+            # guard.  Classify BEFORE mutating so an absurd move never moves the
+            # part.  Mirrors the schematic move's POSITION_OFF_SHEET guard.
+            bbox = _outline_bbox_mm(self.board)
+            x_mm, y_mm = x_nm / 1000000.0, y_nm / 1000000.0
+            target_class = classify_board_position(x_mm, y_mm, bbox)
+            board_outline = None
+            if bbox is not None:
+                board_outline = {
+                    "x1": round(bbox[0], 4),
+                    "y1": round(bbox[1], 4),
+                    "x2": round(bbox[2], 4),
+                    "y2": round(bbox[3], 4),
+                    "unit": "mm",
+                }
+            if target_class == "absurd":
+                return {
+                    "success": False,
+                    "message": (
+                        f"Target position ({position['x']}, {position['y']}) "
+                        f"{position['unit']} is far outside the board outline "
+                        f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
+                        f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm) — more than "
+                        f"{int(_OFF_BOARD_ABSURD_FACTOR)}× a board dimension away. "
+                        f"This is almost certainly a units error; use millimeters "
+                        f"within (or near) the board."
+                    ),
+                    "errorCode": "POSITION_OFF_BOARD",
+                    "boardOutline": board_outline,
+                }
+
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
 
             # Set new rotation if provided
@@ -295,7 +387,7 @@ class PlacementMixin:
                 elif layer == "F.Cu" and current_layer != "F.Cu":
                     module.Flip(module.GetPosition(), False)
 
-            return {
+            response: Dict[str, Any] = {
                 "success": True,
                 "message": f"Moved component: {reference}",
                 "component": {
@@ -307,6 +399,21 @@ class PlacementMixin:
                     "layer": self.board.GetLayerName(module.GetLayer()),
                 },
             }
+            if board_outline is not None:
+                response["boardOutline"] = board_outline
+            if target_class == "off_board":
+                # The move still applied (KiCad places footprints off-board
+                # freely), but flag it so the caller isn't surprised the part now
+                # sits outside the outline.
+                response["offBoardWarning"] = (
+                    f"{reference} moved to ({position['x']}, {position['y']}) "
+                    f"{position['unit']}, which is outside the board outline "
+                    f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
+                    f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm). The move still applied, but "
+                    f"the footprint now sits off the board; move it back onto the "
+                    f"board or extend the outline."
+                )
+            return response
 
         except Exception as e:
             logger.error(f"Error moving component: {str(e)}")

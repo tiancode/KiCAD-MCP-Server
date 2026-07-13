@@ -211,8 +211,15 @@ class _TrackMixin:
         layer: str = "F.SilkS",
         size: float = 1.0,
         rotation: float = 0,
+        mirror: Optional[bool] = None,
     ) -> bool:
-        """Add text to the board."""
+        """Add text to the board.
+
+        ``mirror`` controls back-layer mirroring (P13): ``None`` auto-mirrors
+        text on any ``B.*`` layer (KiCad convention — un-mirrored back text
+        trips DRC's ``nonmirrored_text_on_back_layer``); an explicit bool
+        overrides.
+        """
         try:
             from kipy.board_types import BoardText
             from kipy.geometry import Angle, Vector2
@@ -236,6 +243,13 @@ class _TrackMixin:
             }
             board_text.layer = layer_map.get(layer, BoardLayer.BL_F_SilkS)
 
+            # Auto-mirror back-layer text unless explicitly overridden.
+            mirror_applied = str(layer).startswith("B.") if mirror is None else bool(mirror)
+            try:
+                board_text.attributes.mirrored = mirror_applied
+            except Exception:  # older kipy without a mirrored attribute
+                logger.debug("BoardText.attributes.mirrored unavailable; skipping")
+
             self._apply_create(board, board_text, f"Added text: {text}")
 
             self._notify("text_added", {"text": text, "position": {"x": x, "y": y}, "layer": layer})
@@ -251,6 +265,8 @@ class _TrackMixin:
         try:
             from kipy.util.units import to_mm
 
+            from ._helpers import normalize_board_layer
+
             board = self._get_board()
             tracks = board.get_tracks()
 
@@ -262,7 +278,10 @@ class _TrackMixin:
                             "start": {"x": to_mm(track.start.x), "y": to_mm(track.start.y)},
                             "end": {"x": to_mm(track.end.x), "y": to_mm(track.end.y)},
                             "width": to_mm(track.width),
-                            "layer": str(track.layer),
+                            # kipy 10 hands back a raw enum int here (3 = F.Cu,
+                            # 34 = B.Cu); str() alone leaked "3"/"34" and broke
+                            # the layer-name filter (P9).  Resolve to "F.Cu".
+                            "layer": normalize_board_layer(track.layer),
                             "net": track.net.name if track.net else "",
                             "id": str(track.id) if hasattr(track, "id") else "",
                         }

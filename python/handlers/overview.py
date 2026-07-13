@@ -83,15 +83,55 @@ def handle_get_schematic_overview(
     }
 
 
+def _pcb_reads_should_use_ipc(iface: "KiCADInterface") -> bool:
+    """True when a ``.kicad_pcb`` document is open over IPC, so the overview
+    should read LIVE KiCad state instead of the possibly-stale SWIG board.
+
+    Without this, ``get_pcb_overview`` called the SWIG command objects
+    (``routing_commands.query_traces`` etc.) directly, which read the on-disk
+    board — so live IPC edits (move_component / route_trace that
+    get_component_properties already reflected) didn't show up in the overview
+    until save_project (P7).  Guarded with getattr defaults so the lightweight
+    SimpleNamespace ifaces in the unit tests fall through to the SWIG path.
+    """
+    if not getattr(iface, "use_ipc", False):
+        return False
+    if getattr(iface, "ipc_board_api", None) is None:
+        return False
+    try:
+        return bool(iface._ipc_has_open_board_document())
+    except Exception:
+        return False
+
+
 def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """One-shot snapshot of the PCB: components, tracks, vias, zones, layers.
 
     Mirrors get_schematic_overview for the PCB side so agents can scan the
-    state without four separate calls.
+    state without four separate calls.  Reads through the same backend-selection
+    gate as the standalone tools: when a board is open over IPC each slice comes
+    from the live IPC fast path (so unsaved edits appear immediately, P7);
+    otherwise the SWIG command objects serve the on-disk board as before.
     """
     rc = iface.routing_commands
     cc = iface.component_commands
     bc = iface.board_commands
+
+    if _pcb_reads_should_use_ipc(iface):
+        from handlers.ipc_fastpath import (
+            handle_get_board_info,
+            handle_get_component_list,
+            handle_get_nets_list,
+            handle_query_traces,
+            handle_query_zones,
+        )
+
+        components = _safe_call_iface("components", handle_get_component_list, iface, {})
+        tracks = _safe_call_iface("tracks", handle_query_traces, iface, {"includeVias": True})
+        zones = _safe_call_iface("zones", handle_query_zones, iface, {})
+        nets = _safe_call_iface("nets", handle_get_nets_list, iface, {})
+        layers = _safe_call_iface("board_info", handle_get_board_info, iface, {})
+        return _assemble_pcb_overview(components, tracks, zones, nets, layers)
 
     components = _safe_call("components", cc.get_component_list, {})
     # includeVias so the summary can report a via_count (F5 audit): vias are
@@ -103,6 +143,20 @@ def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     get_board_info = getattr(bc, "get_board_info", None)
     if callable(get_board_info):
         layers = _safe_call("board_info", get_board_info, {})
+    return _assemble_pcb_overview(components, tracks, zones, nets, layers)
+
+
+def _assemble_pcb_overview(
+    components: Dict[str, Any],
+    tracks: Dict[str, Any],
+    zones: Dict[str, Any],
+    nets: Dict[str, Any],
+    layers: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge the five PCB slices into the overview response + summary counts.
+
+    Shared by the IPC-live and SWIG read paths so the summary shape and the
+    F5 full-total counting stay identical on both backends."""
 
     failed: List[str] = []
     for key, val in (

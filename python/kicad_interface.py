@@ -1203,14 +1203,37 @@ class KiCADInterface(BoardPersistenceMixin):
         return {"swigReloadedFromDisk": True}
 
     def _try_enable_ipc_backend(self, force: bool = False) -> bool:
-        """Try to switch an already-running interface to IPC when KiCAD is available."""
+        """Try to switch an already-running interface to IPC when KiCAD is available.
+
+        Crucially, this is also where a *dropped* IPC connection is noticed and
+        the interface reverts to SWIG.  ``use_ipc`` / ``ipc_board_api`` were
+        previously left set after KiCAD closed (its socket gone), so the
+        dispatcher kept routing board reads/writes to the IPC fast path — which
+        then dead-ended at ``needs_pcb_editor`` (PCB_EDITOR_REQUIRED) and
+        refused the SWIG/file fallback forever (the sticky state behind P5 /
+        P8).  Detecting the disconnect here and clearing the stale state lets
+        query_copper & friends fall back to the file path once KiCad is
+        genuinely gone, while a still-running KiCad without a board document
+        keeps its correct ``needs_pcb_editor`` gate.
+        """
         if KICAD_BACKEND == "swig":
             return False
 
         ipc_backend = getattr(self, "ipc_backend", None)
-        if self.use_ipc and ipc_backend and ipc_backend.is_connected():
+        connected = bool(ipc_backend and ipc_backend.is_connected())
+        if self.use_ipc and connected:
             self._refresh_ipc_board_api()
             return True
+
+        # On IPC but the socket is dead → invalidate the stale IPC state so a
+        # closed KiCad can't keep the interface pinned to a broken fast path.
+        if self.use_ipc and not connected:
+            logger.info(
+                "IPC connection lost (KiCad closed or socket gone); reverting to "
+                "SWIG backend until KiCad returns."
+            )
+            self.use_ipc = False
+            self.ipc_board_api = None
 
         if not force and not KiCADProcessManager.is_running():
             return False
@@ -1686,11 +1709,26 @@ class KiCADInterface(BoardPersistenceMixin):
 
     @staticmethod
     def _normalize_ipc_layer_name(layer: Any) -> str:
-        """Convert KiCad IPC layer enum strings to common layer names."""
-        layer_name = str(layer)
-        if layer_name.startswith("BL_"):
-            return layer_name[3:].replace("_", ".")
-        return layer_name
+        """Convert a kipy IPC layer value to KiCad's dotted name (``F.Cu``).
+
+        Delegates to ``normalize_board_layer`` so it handles ALL the shapes
+        kipy hands back — an enum object with ``.name`` (``BL_F_Cu``), a bare
+        protobuf enum int (``3`` = F.Cu, ``34`` = B.Cu), and their stringified
+        forms (``"3"`` / ``"34"``, which ``get_tracks`` produced via
+        ``str(track.layer)``).  Previously only the ``BL_`` string case was
+        handled, so track queries leaked numeric layer codes and a
+        ``layer="B.Cu"`` filter matched nothing (P9).
+        """
+        from kicad_api.ipc_backend._helpers import normalize_board_layer
+
+        text = str(layer)
+        # ``str(int)`` from the get_tracks path: resolve "3"/"34" → the enum name.
+        if text.lstrip("-").isdigit():
+            try:
+                return normalize_board_layer(int(text))
+            except Exception:
+                pass
+        return normalize_board_layer(layer)
 
     def handle_command(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Dispatch a command and enrich every failure with errorCode/hint.
@@ -2915,7 +2953,12 @@ class KiCADInterface(BoardPersistenceMixin):
     ) -> List[Dict[str, str]]:
         """Return the flat component list from the kicad-cli netlist.
 
-        Each entry: {"reference": str, "value": str, "footprint": str}.
+        Each entry: ``{"reference": str, "value": str, "footprint": str,
+        "fields": {name: value}}``.  ``fields`` carries the symbol's custom
+        properties (MPN, Manufacturer, "LCSC Part", Datasheet, …) verbatim
+        from the netlist ``<fields>`` block so ``sync_schematic_to_board``
+        can propagate the phase-1 sourcing metadata onto the board
+        footprints (KiCad's own "Update PCB from Schematic" copies these).
         Empty list on any failure (kicad-cli missing, parse error, etc.) — the
         caller treats that as "no missing footprints to add".
 
@@ -2931,11 +2974,17 @@ class KiCADInterface(BoardPersistenceMixin):
         try:
             components = []
             for comp in root.findall("./components/comp"):
+                fields: Dict[str, str] = {}
+                for field in comp.findall("./fields/field"):
+                    name = field.get("name")
+                    if name:
+                        fields[name] = field.text or ""
                 components.append(
                     {
                         "reference": comp.get("ref", ""),
                         "value": comp.findtext("value", ""),
                         "footprint": comp.findtext("footprint", ""),
+                        "fields": fields,
                     }
                 )
             return components
@@ -3028,6 +3077,119 @@ class KiCADInterface(BoardPersistenceMixin):
             if h > max_h:
                 max_h = h
         return max_w, max_h
+
+    # Schematic symbol properties that must NOT be copied onto a board
+    # footprint as a custom field.  Reference/Value/Footprint are already set
+    # from the FPID and Set{Reference,Value}; Sheetname/Sheetfile and every
+    # ``ki_*`` key are KiCad-internal bookkeeping (hierarchy paths, symbol
+    # keywords/description/fp-filters), not sourcing data.
+    _NON_PROPAGATED_FIELD_NAMES = frozenset(
+        {"Reference", "Value", "Footprint", "Sheetname", "Sheetfile"}
+    )
+
+    @classmethod
+    def _is_propagatable_field(cls, name: str) -> bool:
+        """True when a schematic field name should be copied to the board.
+
+        Skips the standard Reference/Value/Footprint (set elsewhere),
+        Sheetname/Sheetfile, and any ``ki_*`` internal key.
+        """
+        if not name:
+            return False
+        if name in cls._NON_PROPAGATED_FIELD_NAMES:
+            return False
+        if name.startswith("ki_"):
+            return False
+        return True
+
+    def _apply_schematic_fields_to_footprint(
+        self, fp: Any, fields: Dict[str, str]
+    ) -> List[str]:
+        """Copy schematic custom fields onto one board footprint.
+
+        Returns the names of fields actually written (added or value-changed).
+        Contract:
+          * only propagatable names (see ``_is_propagatable_field``) are touched;
+          * blank schematic values are skipped — they would otherwise clobber a
+            real board value with "";
+          * a field already equal to the schematic value is left alone (no
+            churn on re-sync);
+          * fields that exist ONLY on the board (no schematic counterpart) are
+            never iterated, so board-only edits survive a re-sync.
+        """
+        set_field = getattr(fp, "SetField", None)
+        if not callable(set_field):
+            return []
+        current: Dict[str, str] = {}
+        getter = getattr(fp, "GetFieldsText", None)
+        if callable(getter):
+            try:
+                current = {str(k): str(v) for k, v in dict(getter()).items()}
+            except Exception:
+                current = {}
+        written: List[str] = []
+        for name, value in fields.items():
+            if not self._is_propagatable_field(name):
+                continue
+            if value is None:
+                continue
+            value = str(value)
+            if not value.strip():
+                continue
+            if current.get(name) == value:
+                continue
+            try:
+                set_field(name, value)
+                written.append(name)
+            except Exception as e:  # one bad field must not abort the sync
+                try:
+                    ref = fp.GetReference()
+                except Exception:
+                    ref = "?"
+                logger.warning("could not set field '%s' on %s: %s", name, ref, e)
+        return written
+
+    def _propagate_schematic_fields_to_board(
+        self, board: Any, components: List[Dict[str, Any]]
+    ) -> Dict[str, int]:
+        """Propagate every schematic symbol's custom fields onto its matching
+        board footprint (matched by reference).
+
+        Covers BOTH freshly-added footprints and pre-existing ones, so a
+        re-sync updates changed sourcing metadata in place.  Returns
+        ``{"footprints_updated": int, "fields_written": int}``.
+        """
+        fields_by_ref: Dict[str, Dict[str, str]] = {}
+        for comp in components:
+            ref = comp.get("reference")
+            flds = comp.get("fields") or {}
+            if ref and flds:
+                fields_by_ref[ref] = flds
+        if not fields_by_ref:
+            return {"footprints_updated": 0, "fields_written": 0}
+
+        footprints_updated = 0
+        fields_written = 0
+        for fp in board.GetFootprints():
+            try:
+                ref = fp.GetReference()
+            except Exception:
+                continue
+            flds = fields_by_ref.get(ref)
+            if not flds:
+                continue
+            written = self._apply_schematic_fields_to_footprint(fp, flds)
+            if written:
+                footprints_updated += 1
+                fields_written += len(written)
+        if footprints_updated:
+            logger.info(
+                "propagated schematic sourcing fields to %d footprint(s), "
+                "%d field(s) written",
+                footprints_updated,
+                fields_written,
+            )
+        return {"footprints_updated": footprints_updated, "fields_written": fields_written}
 
     def _add_missing_footprints_from_schematic(
         self, board: Any, schematic_path: str, netlist_root: Optional[Any] = None

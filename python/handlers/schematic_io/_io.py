@@ -188,6 +188,18 @@ def handle_sync_schematic_to_board(
             net_assigned[pad_net_map[_k]] += 1
         dropped_nets = sorted(n for n in net_expected if net_assigned[n] == 0)
 
+        # Propagate the schematic symbols' custom fields (MPN, Manufacturer,
+        # "LCSC Part", Datasheet, …) onto their matching board footprints —
+        # KiCad's own "Update PCB from Schematic" copies these, and without it
+        # the entire phase-1 sourcing pipeline is invisible in a board-based
+        # export_bom.  Reuses the already-exported netlist (parse only, no
+        # extra kicad-cli spawn) and covers BOTH the footprints we just added
+        # and the ones already on the board (re-sync updates changed values).
+        sch_components = iface._extract_components_from_schematic(
+            schematic_path, root=netlist_root
+        )
+        fields_result = iface._propagate_schematic_fields_to_board(board, sch_components)
+
         # Route through the iface helper so the in-memory signature tracks
         # the new on-disk hash; otherwise the dispatcher's follow-up
         # _auto_save_board() sees a mismatch and refuses the next write.
@@ -217,7 +229,8 @@ def handle_sync_schematic_to_board(
 
         logger.info(
             f"sync_schematic_to_board: {len(added_nets)} nets added, "
-            f"{len(added_footprints)} footprints added, {assigned_pads} pads assigned"
+            f"{len(added_footprints)} footprints added, {assigned_pads} pads assigned, "
+            f"{fields_result['footprints_updated']} footprints got sourcing fields"
         )
         # Surface the grid-placement contract so agents know each new
         # footprint landed at a distinct position and which positions
@@ -256,6 +269,10 @@ def handle_sync_schematic_to_board(
             "unmatched_pads_sample": unmatched_pads[:10],
             "footprints_added": added_footprints,
             "footprints_skipped": skipped_footprints,
+            # How many board footprints received (added or value-changed)
+            # custom sourcing fields copied from their schematic symbol.
+            "fields_footprints_updated": fields_result["footprints_updated"],
+            "fields_written": fields_result["fields_written"],
             "layout_note": layout_note,
             # The in-memory SWIG board was reloaded from disk so subsequent
             # place/move/get_component_list calls see the synced footprints.

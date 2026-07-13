@@ -11,6 +11,62 @@ import pcbnew
 logger = logging.getLogger("kicad_interface")
 
 
+def _parse_drc_items(raw_items: Any) -> list:
+    """Parse a kicad-cli violation/unconnected ``items`` array into MCP shape.
+
+    Each offending object carries a ``description`` and (usually) a ``pos``.
+    kicad-cli is invoked with ``--units mm`` so ``pos`` is already mm (the
+    ERC-side IU/10000 bug does not apply to ``pcb drc`` output).  Malformed
+    (non-dict) entries are skipped rather than crashing the whole report.
+    """
+    parsed = []
+    for item in raw_items or []:
+        if not isinstance(item, dict):
+            continue
+        entry: Dict[str, Any] = {"description": item.get("description", "")}
+        pos = item.get("pos")
+        if isinstance(pos, dict):
+            entry["pos"] = {"x": pos.get("x", 0), "y": pos.get("y", 0), "unit": "mm"}
+        # Layer info when the report provides it (some KiCad versions omit it;
+        # it then only appears inside the description text).
+        if "layer" in item:
+            entry["layer"] = item["layer"]
+        elif "layers" in item:
+            entry["layers"] = item["layers"]
+        parsed.append(entry)
+    return parsed
+
+
+def _parse_drc_entry(entry: Dict[str, Any], default_type: str = "unknown") -> tuple:
+    """Normalise one kicad-cli DRC entry (violation or unconnected item).
+
+    Returns ``(parsed_dict, vtype, vseverity)``.  ``parsed_dict`` keeps the
+    per-item offenders (description + mm pos + layer) and a ``location`` that
+    points at the first item's pos, so a caller can locate the offender without
+    grepping the .kicad_pcb.
+    """
+    vtype = entry.get("type", default_type)
+    vseverity = entry.get("severity", "error")
+    parsed_items = _parse_drc_items(entry.get("items", []))
+
+    loc_x, loc_y = 0, 0
+    if parsed_items and "pos" in parsed_items[0]:
+        loc_x = parsed_items[0]["pos"]["x"]
+        loc_y = parsed_items[0]["pos"]["y"]
+
+    return (
+        {
+            "type": vtype,
+            "severity": vseverity,
+            "message": entry.get("description", ""),
+            "location": {"x": loc_x, "y": loc_y, "unit": "mm"},
+            "items": parsed_items,
+        },
+        vtype,
+        vseverity,
+    )
+
+
 class DesignRuleCommands:
     """Handles design rule checking and configuration"""
 
@@ -351,61 +407,16 @@ class DesignRuleCommands:
                 with open(json_output, "r", encoding="utf-8") as f:
                     drc_data = json.load(f)
 
-                # Parse violations from kicad-cli output
+                # Parse violations from kicad-cli output.  Each violation keeps
+                # its per-item offenders (description + mm pos + layer) so a
+                # caller can locate the offender without grepping the .kicad_pcb.
                 violations = []
                 violation_counts: dict[str, int] = {}
                 severity_counts = {"error": 0, "warning": 0, "info": 0}
 
                 for violation in drc_data.get("violations", []):
-                    vtype = violation.get("type", "unknown")
-                    vseverity = violation.get("severity", "error")
-
-                    # Preserve per-violation items — each carries the offending
-                    # object's description and pos.  Without them callers had to
-                    # grep the .kicad_pcb to locate offenders.  kicad-cli was
-                    # invoked with --units mm, so items[].pos is already mm (the
-                    # ERC-side IU/10000 bug does not apply to pcb drc output).
-                    items = violation.get("items", [])
-                    parsed_items = []
-                    for item in items:
-                        if not isinstance(item, dict):
-                            continue
-                        entry: Dict[str, Any] = {"description": item.get("description", "")}
-                        pos = item.get("pos")
-                        if isinstance(pos, dict):
-                            entry["pos"] = {
-                                "x": pos.get("x", 0),
-                                "y": pos.get("y", 0),
-                                "unit": "mm",
-                            }
-                        # Layer info when the report provides it (some KiCad
-                        # versions omit it; it then only appears inside the
-                        # description text).
-                        if "layer" in item:
-                            entry["layer"] = item["layer"]
-                        elif "layers" in item:
-                            entry["layers"] = item["layers"]
-                        parsed_items.append(entry)
-
-                    # Location = first item's pos (kicad-cli JSON format)
-                    loc_x, loc_y = 0, 0
-                    if parsed_items and "pos" in parsed_items[0]:
-                        loc_x = parsed_items[0]["pos"]["x"]
-                        loc_y = parsed_items[0]["pos"]["y"]
-
-                    violations.append(
-                        {
-                            "type": vtype,
-                            "severity": vseverity,
-                            "message": violation.get("description", ""),
-                            "location": {
-                                "x": loc_x,
-                                "y": loc_y,
-                                "unit": "mm",
-                            },
-                            "items": parsed_items,
-                        }
-                    )
+                    parsed, vtype, vseverity = _parse_drc_entry(violation)
+                    violations.append(parsed)
 
                     # Count violations by type
                     violation_counts[vtype] = violation_counts.get(vtype, 0) + 1
@@ -414,12 +425,29 @@ class DesignRuleCommands:
                     if vseverity in severity_counts:
                         severity_counts[vseverity] += 1
 
+                # Unconnected / "Missing connection between items" reports live in
+                # a SEPARATE top-level ``unconnected_items`` array in the kicad-cli
+                # JSON — they are NOT in ``violations`` and were previously dropped
+                # entirely, so a user got no signal that N connections are unrouted
+                # (GD32 E2E finding P4).  Surface them additively: same per-item
+                # shape as a violation, reported as a separate count + sample so
+                # the existing violation fields stay unchanged.
+                unconnected_items = []
+                for uc in drc_data.get("unconnected_items", []):
+                    parsed, _uctype, _ucsev = _parse_drc_entry(
+                        uc, default_type="unconnected_items"
+                    )
+                    unconnected_items.append(parsed)
+                total_unconnected = len(unconnected_items)
+
                 # Determine where to save the violations file
                 board_dir = os.path.dirname(board_file)
                 board_name = os.path.splitext(os.path.basename(board_file))[0]
                 violations_file = os.path.join(board_dir, f"{board_name}_drc_violations.json")
 
-                # Always save violations to JSON file (for large result sets)
+                # Always save violations to JSON file (for large result sets).
+                # The unconnected items go in their own array + count so the
+                # file is a complete record even when the inline lists are capped.
                 with open(violations_file, "w", encoding="utf-8") as f:
                     json.dump(
                         {
@@ -429,6 +457,8 @@ class DesignRuleCommands:
                             "violation_counts": violation_counts,
                             "severity_counts": severity_counts,
                             "violations": violations,
+                            "total_unconnected": total_unconnected,
+                            "unconnected_items": unconnected_items,
                         },
                         f,
                         indent=2,
@@ -468,9 +498,24 @@ class DesignRuleCommands:
                     shown_violations = violations
                 truncated = len(shown_violations) < total_violations
 
+                # Cap the inline unconnected sample the same way (its own budget,
+                # same maxViolations value); the file always keeps the full list.
+                if max_violations and total_unconnected > max_violations:
+                    shown_unconnected = unconnected_items[:max_violations]
+                else:
+                    shown_unconnected = unconnected_items
+                unconnected_truncated = len(shown_unconnected) < total_unconnected
+
                 message = f"Found {total_violations} DRC violations"
                 if truncated:
                     message += f" (showing {len(shown_violations)} of {total_violations})"
+                if total_unconnected:
+                    # A separate, explicit signal — these are unrouted
+                    # connections, not rule violations, and were invisible before.
+                    message += (
+                        f" and {total_unconnected} unconnected "
+                        f"(missing-connection) item(s)"
+                    )
 
                 return {
                     "success": True,
@@ -482,8 +527,15 @@ class DesignRuleCommands:
                         "max_violations": max_violations,
                         "by_severity": severity_counts,
                         "by_type": violation_counts,
+                        # Additive: unconnected items are NOT part of the
+                        # violation totals above (kicad-cli reports them apart).
+                        "unconnected": total_unconnected,
                     },
                     "violations": shown_violations,
+                    # Additive: separate count + sample of unrouted connections.
+                    "unconnected": total_unconnected,
+                    "unconnectedItems": shown_unconnected,
+                    "unconnectedTruncated": unconnected_truncated,
                     "violationsFile": violations_file,
                     "reportPath": report_path if report_path else None,
                 }
