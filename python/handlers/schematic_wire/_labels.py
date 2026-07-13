@@ -403,11 +403,11 @@ def handle_add_schematic_net_label(
                         "unit": diag.get("pin_unit"),
                         "unplaced_units": diag.get("unplaced_units", []),
                     }
+                # S10: distinguish a missing COMPONENT from a missing PIN.
                 return {
                     "success": False,
-                    "message": (
-                        f"Could not locate pin {pin_number} on {component_ref}. "
-                        "Check the reference and pin number."
+                    "message": locator.format_missing_pin_error(
+                        component_ref, str(pin_number), diag
                     ),
                 }
             position = pin_loc

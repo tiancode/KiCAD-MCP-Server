@@ -70,12 +70,22 @@ class ConnectionManager:
             pin_name: Pin name/number
             net_name: Name of the net to connect to (e.g., "VCC", "GND", "SIGNAL_1")
 
+        The stub/label are placed at a point that is electrically FREE: never on
+        another component's pin and never on a wire/label of a different net (nor
+        crossing either along the wire path). If the default outward point is
+        occupied the stub is relocated to another direction/length; if EVERY
+        candidate is blocked the call refuses (``success: False``) with a
+        ``label_collision: {point, existing_net}`` payload rather than silently
+        merging the requested net into a neighbour's net (S3).
+
         Returns:
             Dict with keys:
               success        – bool
               pin_location   – [x, y] exact pin endpoint used (present on success)
               label_location – [x, y] where the net label was placed (present on success)
               wire_stub      – [[x1,y1],[x2,y2]] the wire segment added (present on success)
+              relocated      – True when the stub dodged an occupied point (optional)
+              label_collision – {point, existing_net} when it refused (present on that failure)
               message        – human-readable status
         """
         try:
@@ -113,9 +123,18 @@ class ConnectionManager:
                         "unit": diag.get("pin_unit"),
                         "unplaced_units": diag.get("unplaced_units", []),
                     }
-                msg = f"Could not locate pin {component_ref}/{pin_name}"
+                # S10: distinguish a missing COMPONENT from a missing PIN so the
+                # caller sees which one is wrong (and, for a missing pin, which
+                # pins DO exist) instead of one identical "could not locate" line.
+                msg = locator.format_missing_pin_error(component_ref, str(pin_name), diag)
                 logger.error(msg)
-                return {"success": False, "message": msg}
+                err_result: Dict[str, Any] = {"success": False, "message": msg}
+                if diag.get("reason") == "no_symbol":
+                    err_result["component_not_found"] = True
+                elif diag.get("reason") == "not_found":
+                    err_result["pin_not_found"] = True
+                    err_result["valid_pins"] = diag.get("valid_pins", [])
+                return err_result
 
             # Power-symbol handling.
             #  * F4: a power PORT (#PWR…, lib_id "power:*") already joins the net
@@ -190,29 +209,43 @@ class ConnectionManager:
                 )
                 pin_angle_deg = 0
 
-            # Choose a collision-free stub (F2). A stub whose wire/label would
-            # merge into a DIFFERENT existing net (e.g. another cap's label that
-            # happens to sit at the auto-chosen point) is relocated to a free
-            # direction; if EVERY candidate collides, refuse rather than silently
-            # short two nets together.
+            # Choose a collision-free stub (F2 / S3). A stub whose wire OR label
+            # would merge the requested net into a DIFFERENT existing net, or land
+            # on / cross ANOTHER component's pin (which would silently short that
+            # pin onto this net — the S3 bug), is relocated to a free direction.
+            # If EVERY candidate collides, refuse rather than silently short.
             net_points = ConnectionManager._existing_net_points(schematic_path)
-            chosen, conflict_net = ConnectionManager._choose_stub(
-                pin_loc, float(pin_angle_deg), net_name, net_points
+            pin_obstacles = ConnectionManager._component_pin_obstacles(
+                schematic_path, exclude=[pin_loc]
+            )
+            chosen, blocker = ConnectionManager._choose_stub(
+                pin_loc, float(pin_angle_deg), net_name, net_points, pin_obstacles
             )
             default_end = ConnectionManager._stub_candidates(pin_loc, float(pin_angle_deg))[0][0]
             if chosen is None:
-                msg = (
-                    f"Cannot place the '{net_name}' connection for {component_ref}/{pin_name}: "
-                    f"an existing '{conflict_net}' net is at {default_end} and every "
-                    f"alternative stub direction is also blocked. Move the component or "
-                    f"wire it manually."
-                )
+                kind = blocker.get("kind") if blocker else "label"
+                existing_net = blocker.get("net") if blocker else None
+                colliding = blocker.get("point") if blocker else default_end
+                payload: Dict[str, Any] = {"point": default_end, "existing_net": existing_net}
+                if kind == "pin":
+                    payload["colliding_pin"] = colliding
+                    msg = (
+                        f"Cannot place the '{net_name}' connection for "
+                        f"{component_ref}/{pin_name}: another component's pin is at "
+                        f"{colliding} and every alternative stub direction is also "
+                        f"blocked (placing the label there would short net "
+                        f"'{net_name}' onto that pin). Move the component or wire it "
+                        f"manually."
+                    )
+                else:
+                    msg = (
+                        f"Cannot place the '{net_name}' connection for "
+                        f"{component_ref}/{pin_name}: an existing '{existing_net}' net "
+                        f"is at {colliding} and every alternative stub direction is "
+                        f"also blocked. Move the component or wire it manually."
+                    )
                 logger.error(msg)
-                return {
-                    "success": False,
-                    "message": msg,
-                    "label_collision": {"point": default_end, "existing_net": conflict_net},
-                }
+                return {"success": False, "message": msg, "label_collision": payload}
             stub_end, chosen_angle, _chosen_len = chosen
             relocated = not (
                 abs(stub_end[0] - default_end[0]) < 1e-6
@@ -222,8 +255,19 @@ class ConnectionManager:
             # Orient the label text outward (WireManager picks justify from this).
             label_orientation = int(round(chosen_angle / 90.0) * 90) % 360
 
-            # Create wire stub using WireManager
-            wire_success = WireManager.add_wire(schematic_path, pin_loc, stub_end)
+            # Create wire stub using WireManager.
+            # S5: never emit a second wire coincident with one already on the
+            # sheet (e.g. a prior connect to the same pin/point). A duplicate
+            # overlapping wire is invisible in the editor yet needs two
+            # delete_schematic_wire calls to clear, so cleanup silently
+            # half-works — skip drawing it and reuse the existing segment.
+            if ConnectionManager._wire_exists(schematic_path, pin_loc, stub_end):
+                wire_success = True
+                logger.info(
+                    f"Reusing existing wire {pin_loc}->{stub_end}; not drawing a duplicate"
+                )
+            else:
+                wire_success = WireManager.add_wire(schematic_path, pin_loc, stub_end)
             if not wire_success:
                 msg = "Failed to create wire stub for net connection"
                 logger.error(msg)
@@ -243,6 +287,38 @@ class ConnectionManager:
                     msg = f"Failed to add net label '{net_name}'"
                     logger.error(msg)
                     return {"success": False, "message": msg}
+
+                # Post-write self-check (S3): re-read the file and confirm the
+                # stub we just placed carries ONLY this net and touches no
+                # foreign pin. The pre-write collision check should already
+                # guarantee this; if a divergence ever slips through, roll back
+                # (delete our wire + label) and refuse rather than leave a short.
+                if net_points or pin_obstacles:
+                    foreign = ConnectionManager._foreign_short_after_write(
+                        schematic_path, pin_loc, stub_end, net_name
+                    )
+                    if foreign is not None:
+                        logger.error(
+                            f"Self-check caught a foreign {foreign.get('kind')} at "
+                            f"{foreign.get('point')} on the {net_name} stub for "
+                            f"{component_ref}/{pin_name}; rolling back."
+                        )
+                        WireManager.delete_label(schematic_path, net_name, stub_end)
+                        WireManager.delete_wire(schematic_path, list(pin_loc), list(stub_end))
+                        return {
+                            "success": False,
+                            "message": (
+                                f"Refused to connect {component_ref}/{pin_name} to "
+                                f"'{net_name}': the only reachable stub point at {stub_end} "
+                                f"collides with a {foreign.get('kind')} of "
+                                f"'{foreign.get('net')}'. Move the component or wire it "
+                                f"manually."
+                            ),
+                            "label_collision": {
+                                "point": foreign.get("point"),
+                                "existing_net": foreign.get("net"),
+                            },
+                        }
 
             logger.info(f"Connected {component_ref}/{pin_name} to net '{net_name}'")
             result: Dict[str, Any] = {
@@ -400,31 +476,149 @@ class ConnectionManager:
         return None
 
     @staticmethod
+    def _stub_blocker(
+        pin_loc: List[float],
+        stub_end: List[float],
+        net_name: str,
+        net_points: List[Tuple[float, float, str]],
+        pin_obstacles: Optional[List[Tuple[float, float]]] = None,
+        eps: float = 0.01,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a blocker dict, or None if the stub ``pin_loc``→``stub_end`` is
+        electrically free.
+
+        The stub carries a ``net_name`` label at ``stub_end``. It is blocked when:
+
+          * a net-bearing point of a DIFFERENT net sits at ``stub_end`` (within
+            one grid step) or on the wire path — merging the two nets; OR
+          * ANOTHER component's pin sits at ``stub_end`` or on the wire path —
+            silently shorting that pin onto this net (the S3 bug).
+
+        A label collision is reported in preference to a pin collision (it names
+        the offending net, which is the more actionable of the two). The returned
+        dict is ``{"kind": "label"|"pin", "net": str|None, "point": [x, y]}``.
+        """
+        # 1. Different-net label / wire point.
+        net = ConnectionManager._stub_collision(pin_loc, stub_end, net_name, net_points, eps)
+        if net is not None:
+            point: List[float] = list(stub_end)
+            for px, py, n in net_points:
+                if n != net:
+                    continue
+                if abs(px - pin_loc[0]) <= eps and abs(py - pin_loc[1]) <= eps:
+                    continue
+                if (
+                    math.hypot(px - stub_end[0], py - stub_end[1])
+                    <= ConnectionManager._STUB_COLLISION_GRID
+                    or ConnectionManager._point_on_segment_mm((px, py), pin_loc, stub_end)
+                ):
+                    point = [round(px, 4), round(py, 4)]
+                    break
+            return {"kind": "label", "net": net, "point": point}
+        # 2. Another component pin.
+        for ox, oy in pin_obstacles or []:
+            if abs(ox - pin_loc[0]) <= eps and abs(oy - pin_loc[1]) <= eps:
+                continue  # the source pin itself — the wire legitimately starts here
+            if (
+                math.hypot(ox - stub_end[0], oy - stub_end[1])
+                <= ConnectionManager._STUB_COLLISION_GRID
+                or ConnectionManager._point_on_segment_mm((ox, oy), pin_loc, stub_end)
+            ):
+                return {"kind": "pin", "net": None, "point": [round(ox, 4), round(oy, 4)]}
+        return None
+
+    @staticmethod
     def _choose_stub(
         pin_loc: List[float],
         outward_angle: float,
         net_name: str,
         net_points: List[Tuple[float, float, str]],
-    ) -> Tuple[Optional[Tuple[List[float], float, float]], Optional[str]]:
+        pin_obstacles: Optional[List[Tuple[float, float]]] = None,
+    ) -> Tuple[Optional[Tuple[List[float], float, float]], Optional[Dict[str, Any]]]:
         """Pick the first collision-free stub candidate.
 
-        Returns ``(candidate, None)`` on success or ``(None, conflict_net)`` when
-        every candidate would merge into a different net. With no existing
-        net-points the default candidate is returned unchanged (byte-identical to
-        the pre-F2 behavior).
+        Returns ``(candidate, None)`` on success or ``(None, blocker)`` when every
+        candidate would merge into a different net or land on / cross another
+        component's pin (``blocker`` is the :meth:`_stub_blocker` dict for the
+        first — label-preferred — obstruction found). With no existing net-points
+        AND no pin obstacles the default candidate is returned unchanged
+        (byte-identical to the pre-F2 behavior).
         """
         candidates = ConnectionManager._stub_candidates(pin_loc, outward_angle)
-        if not net_points:
+        if not net_points and not pin_obstacles:
             return candidates[0], None
-        conflict: Optional[str] = None
+        first_blocker: Optional[Dict[str, Any]] = None
         for cand in candidates:
             stub_end = cand[0]
-            c = ConnectionManager._stub_collision(pin_loc, stub_end, net_name, net_points)
-            if c is None:
+            blk = ConnectionManager._stub_blocker(
+                pin_loc, stub_end, net_name, net_points, pin_obstacles
+            )
+            if blk is None:
                 return cand, None
-            if conflict is None:
-                conflict = c
-        return None, conflict
+            if first_blocker is None or (
+                blk.get("kind") == "label" and first_blocker.get("kind") != "label"
+            ):
+                first_blocker = blk
+        return None, first_blocker
+
+    @staticmethod
+    def _wire_exists(
+        schematic_path: Path, a: List[float], b: List[float], eps: float = 0.05
+    ) -> bool:
+        """True if a wire coincident with segment ``a``↔``b`` (either direction)
+        already exists on the sheet. Used to avoid emitting duplicate overlapping
+        wires (S5)."""
+        import sexpdata as _sx
+
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                data = _sx.loads(f.read())
+        except (OSError, ValueError) as e:
+            logger.debug(f"_wire_exists: could not read {schematic_path}: {e}")
+            return False
+        for item in data:
+            parsed = WireManager._parse_wire(item)
+            if parsed is None:
+                continue
+            (x1, y1), (x2, y2), _, _ = parsed
+            fwd = (
+                abs(x1 - a[0]) <= eps
+                and abs(y1 - a[1]) <= eps
+                and abs(x2 - b[0]) <= eps
+                and abs(y2 - b[1]) <= eps
+            )
+            rev = (
+                abs(x1 - b[0]) <= eps
+                and abs(y1 - b[1]) <= eps
+                and abs(x2 - a[0]) <= eps
+                and abs(y2 - a[1]) <= eps
+            )
+            if fwd or rev:
+                return True
+        return False
+
+    @staticmethod
+    def _foreign_short_after_write(
+        schematic_path: Path,
+        pin_loc: List[float],
+        stub_end: List[float],
+        net_name: str,
+        eps: float = 0.01,
+    ) -> Optional[Dict[str, Any]]:
+        """Re-read the just-written sheet and report a foreign element that the
+        stub ``pin_loc``→``stub_end`` shorts into, or None when it is clean.
+
+        Reuses the SAME collision predicates as the pre-write check, but on the
+        current on-disk state, so a bug in obstacle collection would still be
+        caught. Our own same-net label at ``stub_end`` is ignored (that is the
+        intended connection, not a foreign short)."""
+        net_points = ConnectionManager._existing_net_points(schematic_path)
+        obstacles = ConnectionManager._component_pin_obstacles(
+            schematic_path, exclude=[pin_loc]
+        )
+        return ConnectionManager._stub_blocker(
+            pin_loc, stub_end, net_name, net_points, obstacles, eps
+        )
 
     @staticmethod
     def _pin_physically_connected(

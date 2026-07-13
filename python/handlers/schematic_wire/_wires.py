@@ -34,9 +34,14 @@ def handle_delete_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]
         start_point = [start.get("x", 0), start.get("y", 0)]
         end_point = [end.get("x", 0), end.get("y", 0)]
 
-        deleted = WireManager.delete_wire(Path(schematic_path), start_point, end_point)
-        if deleted:
-            return {"success": True}
+        # Sweep ALL coincident wires (a stray duplicate overlapping pair is
+        # removed in one call) and report how many were cleared (S5).
+        removed = WireManager.delete_wires(Path(schematic_path), start_point, end_point)
+        if removed:
+            msg = f"Deleted {removed} wire(s)"
+            if removed > 1:
+                msg += " (swept coincident duplicates)"
+            return {"success": True, "removed": removed, "message": msg}
         else:
             return {"success": False, "message": "No matching wire found"}
 
@@ -185,9 +190,15 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
             locator = PinLocator()
             pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
             if pin_loc is None:
+                # S10: say whether the COMPONENT or the PIN is the missing one.
+                diag = locator.diagnose_missing_pin(
+                    Path(schematic_path), component_ref, str(pin_number)
+                )
                 return {
                     "success": False,
-                    "message": f"Could not locate pin {pin_number} on {component_ref}",
+                    "message": locator.format_missing_pin_error(
+                        component_ref, str(pin_number), diag
+                    ),
                 }
             position = pin_loc
             snapped_to_pin = {"component": component_ref, "pin": str(pin_number)}
@@ -247,9 +258,15 @@ def handle_delete_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) ->
             locator = PinLocator()
             pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
             if pin_loc is None:
+                # S10: say whether the COMPONENT or the PIN is the missing one.
+                diag = locator.diagnose_missing_pin(
+                    Path(schematic_path), component_ref, str(pin_number)
+                )
                 return {
                     "success": False,
-                    "message": f"Could not locate pin {pin_number} on {component_ref}",
+                    "message": locator.format_missing_pin_error(
+                        component_ref, str(pin_number), diag
+                    ),
                 }
             position = pin_loc
             snapped_to_pin = {"component": component_ref, "pin": str(pin_number)}
