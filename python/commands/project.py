@@ -136,31 +136,78 @@ class ProjectCommands:
         self.board = board
 
     def create_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new KiCAD project"""
+        """Create a new KiCAD project.
+
+        ``path`` is the *directory* in which to create ``<name>.kicad_pro``.
+        As a convenience we also accept the full ``.kicad_pro`` FILE path in
+        ``path`` (a common caller mistake) and split it back into
+        (directory, name); otherwise ``os.path.join(path, name)`` produced a
+        doubled sub-path and left a stray directory literally named
+        ``<name>.kicad_pro`` that then blocked retries (E2E round 6 S1).
+        """
+        # Track what THIS call creates so a mid-way failure cleans up after
+        # itself instead of leaving partial artifacts (E2E round 6 S1b).
+        created_files: list[str] = []
+        created_dir_root: Optional[str] = None
+        leaf_dir: Optional[str] = None
         try:
             # Accept both 'name' (from MCP tool) and 'projectName' (legacy)
-            project_name = params.get("name") or params.get("projectName", "New_Project")
-            path = params.get("path", os.getcwd())
+            project_name = params.get("name") or params.get("projectName")
+            path = params.get("path")
             template = params.get("template")
 
-            # Generate the full project path
-            project_path = os.path.join(path, project_name)
-            if not project_path.endswith(".kicad_pro"):
-                project_path += ".kicad_pro"
+            # Normalise a caller that passed the .kicad_pro FILE as ``path``
+            # instead of its containing directory (E2E round 6 S1a).
+            if path and str(path).endswith(".kicad_pro"):
+                derived_name = os.path.splitext(os.path.basename(path))[0]
+                if project_name:
+                    given = project_name
+                    if given.endswith(".kicad_pro"):
+                        given = given[: -len(".kicad_pro")]
+                    if given != derived_name:
+                        return {
+                            "success": False,
+                            "message": (
+                                f'Conflicting project names: path implies "{derived_name}" '
+                                f"(from {os.path.basename(path)}) but name=\"{project_name}\". "
+                                "Pass `path` as the directory and `name` as the project "
+                                "name, or make the two agree."
+                            ),
+                            "errorCode": "PROJECT_NAME_CONFLICT",
+                            "hint": (
+                                "`path` is the directory to create <name>.kicad_pro in. "
+                                "You passed a .kicad_pro file whose basename disagrees "
+                                "with `name`."
+                            ),
+                        }
+                project_name = derived_name
+                path = os.path.dirname(path) or os.getcwd()
 
-            # Sibling files this command writes; needed up front for the
-            # overwrite guard below.
-            board_path = project_path.replace(".kicad_pro", ".kicad_pcb")
-            schematic_path = project_path.replace(".kicad_pro", ".kicad_sch")
+            # Defaults (preserved from the original behaviour).
+            if not project_name:
+                project_name = "New_Project"
+            if not path:
+                path = os.getcwd()
+            # Strip a stray project extension a caller may have baked into name.
+            if project_name.endswith(".kicad_pro"):
+                project_name = project_name[: -len(".kicad_pro")]
 
-            # Refuse to clobber an existing project. The SaveBoard / schematic /
-            # project writes below would otherwise silently overwrite the user's
-            # board and schematic. Mirrors create_footprint / create_symbol, which
-            # default overwrite=False and refuse when the target exists.
+            # Build the sibling paths from a single base.  Never str.replace:
+            # it rewrote EVERY ".kicad_pro" in a doubled path, which is how the
+            # schematic/board paths got mangled in the first place (E2E S1).
+            project_path = os.path.join(path, project_name + ".kicad_pro")
+            base = os.path.splitext(project_path)[0]
+            board_path = base + ".kicad_pcb"
+            schematic_path = base + ".kicad_sch"
+
+            # Refuse to clobber an existing project. Only a real FILE counts —
+            # a stray *directory* named "<name>.kicad_pro" (leftover from an
+            # earlier malformed call) must NOT masquerade as an existing
+            # project and permanently block the good call (E2E round 6 S1c).
             overwrite = bool(params.get("overwrite", False))
             if not overwrite:
                 existing = [
-                    p for p in (project_path, board_path, schematic_path) if os.path.exists(p)
+                    p for p in (project_path, board_path, schematic_path) if os.path.isfile(p)
                 ]
                 if existing:
                     return {
@@ -177,8 +224,45 @@ class ProjectCommands:
                         "existingFiles": existing,
                     }
 
-            # Create project directory if it doesn't exist
-            os.makedirs(os.path.dirname(project_path), exist_ok=True)
+            # A prior malformed call could have left a stray *directory* whose
+            # name is one of our target files.  An empty one is reused (removed
+            # so the real file can take its place); a non-empty one is a
+            # distinct, actionable error instead of an opaque IsADirectoryError
+            # at write time (E2E round 6 S1c).
+            for p in (project_path, board_path, schematic_path):
+                if os.path.isdir(p):
+                    if os.listdir(p):
+                        return {
+                            "success": False,
+                            "message": (
+                                f"A non-empty directory named {os.path.basename(p)} "
+                                f"already exists at {os.path.dirname(p)}; refusing to "
+                                "replace it. Move or remove it, or choose a different "
+                                "name/path."
+                            ),
+                            "errorCode": "PATH_IS_DIRECTORY",
+                            "hint": (
+                                "The target project file name is occupied by a directory "
+                                "(usually left by an earlier malformed create_project "
+                                "call). Remove the stray directory and retry."
+                            ),
+                            "path": p,
+                        }
+                    os.rmdir(p)
+
+            # Create the project directory if needed, remembering the topmost
+            # level we create so failure-cleanup removes exactly this call's
+            # chain and never a pre-existing directory.
+            leaf_dir = os.path.dirname(project_path)
+            if leaf_dir and not os.path.isdir(leaf_dir):
+                topmost = leaf_dir
+                while True:
+                    up = os.path.dirname(topmost)
+                    if not up or os.path.isdir(up):
+                        break
+                    topmost = up
+                created_dir_root = topmost
+                os.makedirs(leaf_dir, exist_ok=True)
 
             # Create a new board
             board = pcbnew.BOARD()
@@ -204,7 +288,10 @@ class ProjectCommands:
             # Save the board (board_path computed above for the overwrite guard).
             # aSkipSettings=True: SaveBoard must not emit its own .kicad_pro from
             # the board's default in-memory PROJECT — we write a faithful minimal
-            # project file explicitly below (E2E B7 / B10).
+            # project file explicitly below (E2E B7 / B10).  Register each output
+            # path with the cleanup list BEFORE the write so a mid-write failure
+            # (which can leave a truncated/empty file) still gets rolled back.
+            created_files.append(board_path)
             board.SetFileName(board_path)
             pcbnew.SaveBoard(board_path, board, True)
 
@@ -219,6 +306,7 @@ class ProjectCommands:
             import uuid as uuid_module
 
             schematic_uuid = str(uuid_module.uuid4())
+            created_files.append(schematic_path)
             with open(schematic_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write('(kicad_sch (version 20250114) (generator "KiCAD-MCP-Server")\n\n')
                 f.write(f"  (uuid {schematic_uuid})\n\n")
@@ -233,6 +321,7 @@ class ProjectCommands:
             # kicad-cli-backed op ran; this ships a real project document with a
             # Default net class so create_netclass / set_design_rules have a
             # canonical store to edit from the start.
+            created_files.append(project_path)
             with open(project_path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(
                     _new_project_document(os.path.basename(project_path)),
@@ -257,6 +346,25 @@ class ProjectCommands:
 
         except Exception as e:
             logger.error(f"Error creating project: {str(e)}")
+            # Clean up partial artifacts so one bad call can't block retries
+            # (E2E round 6 S1b): remove the files we wrote, then any empty
+            # directories we created (leaf-first, stopping at what pre-existed).
+            for p in created_files:
+                try:
+                    if os.path.isfile(p):
+                        os.remove(p)
+                except OSError:
+                    pass
+            if created_dir_root and leaf_dir:
+                d = leaf_dir
+                while d and os.path.isdir(d):
+                    try:
+                        os.rmdir(d)  # only succeeds while empty
+                    except OSError:
+                        break
+                    if os.path.normpath(d) == os.path.normpath(created_dir_root):
+                        break
+                    d = os.path.dirname(d)
             return {
                 "success": False,
                 "message": "Failed to create project",
@@ -264,22 +372,61 @@ class ProjectCommands:
             }
 
     def open_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Open an existing KiCAD project"""
+        """Open an existing KiCAD project.
+
+        Accepts ``filename`` (legacy) or ``path`` (E2E round 6 S15) — the two
+        are interchangeable.  Either may point at the ``.kicad_pro`` /
+        ``.kicad_pcb`` file OR at the directory that contains the project, in
+        which case we resolve to the single ``.kicad_pro`` inside (and error
+        clearly when the directory holds zero or several).
+        """
         try:
-            filename = params.get("filename")
+            filename = params.get("filename") or params.get("path")
             if not filename:
                 return {
                     "success": False,
-                    "message": "No filename provided",
-                    "errorDetails": "The filename parameter is required",
+                    "message": "No project path provided",
+                    "errorDetails": (
+                        "Pass `filename` or `path` — a .kicad_pro/.kicad_pcb file, or a "
+                        "directory containing exactly one .kicad_pro."
+                    ),
+                    "errorCode": "MISSING_PATH",
                 }
 
             # Expand user path and make absolute
             filename = os.path.abspath(os.path.expanduser(filename))
 
+            # A directory → resolve to the single .kicad_pro it contains.
+            if os.path.isdir(filename):
+                import glob as _glob
+
+                pros = sorted(_glob.glob(os.path.join(filename, "*.kicad_pro")))
+                if len(pros) == 0:
+                    return {
+                        "success": False,
+                        "message": f"No .kicad_pro found in directory: {filename}",
+                        "errorCode": "NO_PROJECT_IN_DIR",
+                        "hint": (
+                            "Point at the .kicad_pro/.kicad_pcb file directly, or a "
+                            "directory that contains exactly one project."
+                        ),
+                    }
+                if len(pros) > 1:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Multiple .kicad_pro files in directory: {filename}; "
+                            "specify which one to open."
+                        ),
+                        "errorCode": "AMBIGUOUS_PROJECT",
+                        "hint": "Pass the specific .kicad_pro file path you want to open.",
+                        "candidates": pros,
+                    }
+                filename = pros[0]
+
             # If it's a project file, get the board file
             if filename.endswith(".kicad_pro"):
-                board_path = filename.replace(".kicad_pro", ".kicad_pcb")
+                board_path = os.path.splitext(filename)[0] + ".kicad_pcb"
             else:
                 board_path = filename
 
@@ -315,23 +462,35 @@ class ProjectCommands:
                     "errorDetails": "Load or create a board first",
                 }
 
-            filename = params.get("filename")
-            if filename:
-                # Save to new location
-                filename = os.path.abspath(os.path.expanduser(filename))
-                self.board.SetFileName(filename)
+            # Save-as target: accept `path` (TS schema) or `filename` (legacy).
+            # Previously only `filename` was read, so the documented `path`
+            # param was silently ignored (E2E round 6, folded observation).
+            target = params.get("path") or params.get("filename")
+            if target:
+                # Save to a new location.  A .kicad_pro maps to its sibling
+                # .kicad_pcb (SaveBoard writes the board file).
+                target = os.path.abspath(os.path.expanduser(target))
+                if target.endswith(".kicad_pro"):
+                    target = os.path.splitext(target)[0] + ".kicad_pcb"
+                self.board.SetFileName(target)
 
             # Save the board.  aSkipSettings=True: SaveBoard must not rewrite the
             # sibling .kicad_pro from the board's in-memory PROJECT, or it clobbers
             # netclass / design-rule edits that live only in that JSON (E2E B10).
-            pcbnew.SaveBoard(self.board.GetFileName(), self.board, True)
+            saved_path = self.board.GetFileName()
+            pcbnew.SaveBoard(saved_path, self.board, True)
 
+            # Name WHICH project was saved explicitly.  save_project targets the
+            # currently-loaded board, which is whatever was last created/opened;
+            # stating the path removes the ambiguity when several projects have
+            # been touched in one session (E2E round 6, folded observation).
             return {
                 "success": True,
-                "message": f"Saved project to: {self.board.GetFileName()}",
+                "message": f"Saved project to: {saved_path}",
+                "savedPath": saved_path,
                 "project": {
-                    "name": os.path.splitext(os.path.basename(self.board.GetFileName()))[0],
-                    "path": self.board.GetFileName(),
+                    "name": os.path.splitext(os.path.basename(saved_path))[0],
+                    "path": saved_path,
                 },
             }
 
