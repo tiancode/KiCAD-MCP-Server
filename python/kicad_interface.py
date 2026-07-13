@@ -420,6 +420,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "delete_symbol": "symbol_creator",
         "list_symbols_in_library": "symbol_creator",
         "register_symbol_library": "symbol_creator",
+        "set_symbol_pin_types": "symbol_pin_types",
         "check_kicad_ui": "ui",
         "get_backend_info": "ui",
         "get_backend_state": "ui",

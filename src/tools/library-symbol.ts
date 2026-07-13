@@ -94,4 +94,102 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
       };
     },
   );
+
+  // ------------------------------------------------------------------
+  // set_symbol_pin_types — repair a symbol's pin electrical types
+  // ------------------------------------------------------------------
+  // easyeda2kicad (and hand-built symbols) can leave pins typed
+  // ``unspecified``, which floods kicad-cli ERC with unclearable
+  // pin_to_pin "Unspecified … connected" warnings.  import_jlcpcb_symbol
+  // now infers types at import time, but there was no way to FIX pin
+  // types afterwards.  This tool rewrites them — on the ``.kicad_sym``
+  // source (symbolId / libraryPath) or on a schematic's embedded
+  // lib_symbols snapshot (schematicPath), so ERC reflects the change.
+  const pinElectricalType = z.enum([
+    "input",
+    "output",
+    "bidirectional",
+    "tri_state",
+    "passive",
+    "free",
+    "unspecified",
+    "power_in",
+    "power_out",
+    "open_collector",
+    "open_emitter",
+    "no_connect",
+  ]);
+  server.tool(
+    "set_symbol_pin_types",
+    "Rewrite the ELECTRICAL TYPES of pins on an existing symbol so ERC reflects them (clears the pin_to_pin 'Unspecified … connected' warnings left by imported symbols). Two surfaces: pass schematicPath + reference (or symbolId) to edit the schematic's EMBEDDED lib_symbols copy (ERC sees it immediately); or symbolId='Library:Name' (or libraryPath+symbolName) to edit the .kicad_sym SOURCE — then run refresh_schematic_lib_symbols on any schematic that already placed it. pinTypes maps each pin NUMBER or NAME to a KiCad type.",
+    {
+      pinTypes: z
+        .record(z.string(), pinElectricalType)
+        .describe(
+          "Map of pin NUMBER or NAME to electrical type, e.g. {\"1\":\"power_in\",\"PA0\":\"bidirectional\",\"NC\":\"no_connect\"}. A key matches a pin's number first, then its name (case-insensitive); one key can retype several pins (e.g. every 'NC').",
+        ),
+      symbolId: z
+        .string()
+        .optional()
+        .describe(
+          "Full 'Library:Name' id (e.g. 'easyeda:RDA5807M'). Edits the .kicad_sym resolved via the sym-lib-table; or, with schematicPath, names the embedded lib_symbols entry.",
+        ),
+      libraryPath: z
+        .string()
+        .optional()
+        .describe("Direct path to a .kicad_sym file (use with symbolName instead of symbolId)"),
+      symbolName: z
+        .string()
+        .optional()
+        .describe("Symbol name inside libraryPath (bare name, no 'Library:' prefix)"),
+      schematicPath: z
+        .string()
+        .optional()
+        .describe(
+          "Path to a .kicad_sch — edits the EMBEDDED lib_symbols copy so ERC reflects the change without a refresh. Requires reference or symbolId.",
+        ),
+      reference: z
+        .string()
+        .optional()
+        .describe(
+          "Placed component designator (e.g. 'U1') whose symbol to retype in schematicPath; resolved to its lib_id.",
+        ),
+      projectPath: z
+        .string()
+        .optional()
+        .describe("Project dir / .kicad_pro path used to resolve a project-local sym-lib-table"),
+    },
+    async (args: {
+      pinTypes: Record<string, string>;
+      symbolId?: string;
+      libraryPath?: string;
+      symbolName?: string;
+      schematicPath?: string;
+      reference?: string;
+      projectPath?: string;
+    }) => {
+      const result = await callKicadScript("set_symbol_pin_types", args);
+      if (result.success) {
+        const lines = [result.message ?? "set_symbol_pin_types completed."];
+        if ((result.unmatched_keys ?? []).length > 0) {
+          lines.push(
+            `No pin matched: ${result.unmatched_keys.join(", ")} — check the number/name against get_library_part_info.`,
+          );
+        }
+        if (result.next) {
+          lines.push(result.next);
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to set symbol pin types: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
+          },
+        ],
+        isError: true,
+      };
+    },
+  );
 }

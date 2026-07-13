@@ -41,12 +41,45 @@ FOOTPRINT_LIB_DIR = Path(str(_LIB_BASE) + ".pretty")
 
 _LCSC_RE = re.compile(r"^C\d+$")
 
-# Pin-name prefixes that unambiguously denote a power rail. easyeda2kicad emits
-# every pin as electrical type ``unspecified``, so ERC can't check power driving
-# and floods warnings (F12). Retyping only these by NAME is conservative: it
-# covers VDD*/VDDA, VCC*, VSS*/VSSA, GND*, VBAT and leaves every signal pin
-# untouched.
-_POWER_PIN_PREFIXES = ("VDD", "VCC", "VSS", "GND", "VBAT")
+# Pin-type inference (S7). easyeda2kicad emits every pin as electrical type
+# ``unspecified``, so ERC can't check power driving AND floods pin_to_pin
+# "Unspecified … connected" warnings — 35 of them on the GD32 E2E board, none
+# clearable through the server. We infer a sensible type for every pin from its
+# NAME (the EasyEDA source's own ``electric`` attribute is already flattened to
+# ``unspecified`` by easyeda2kicad, so all that survives in the .kicad_sym is the
+# name and the blanket type). The fallback is ``passive`` — NOT ``unspecified`` —
+# because passive connects to anything without ERC noise, exactly how generic
+# KiCad parts behave, so no pin is ever left as an ERC landmine.
+#
+# Power rails: name PREFIXES for the V*/GND* families (VDD_3 etc.) …
+_POWER_PIN_PREFIXES = (
+    "VDD",  # + VDDA, VDDIO … (startswith)
+    "VCC",
+    "VBAT",
+    "AVDD",  # analog supply (doesn't start with VDD)
+    "V3P3",  # explicit 3.3 V rail
+    "5V",  # explicit 5 V rail (5V0, 5VSB …)
+    "VSS",  # + VSSA (startswith)
+    "GND",
+    "AGND",  # analog ground
+    "PGND",  # power ground
+)
+# … and EXACT names for the exposed-pad rails (prefix-matching "EP" would eat
+# EPWM/EPROM-style signal names, so these must match the whole name).
+_POWER_PIN_EXACT = ("EP", "EPAD")
+
+# GPIO / bus lines → bidirectional. Prefixes plus the P<port><n> MCU pattern
+# (PA0, PB12, PC13 …). Serial data/clock lines are bidirectional buses.
+_GPIO_PIN_PREFIXES = ("RX", "TX", "SDA", "SCL", "MISO", "MOSI", "SCK", "IO")
+_GPIO_PORT_RE = re.compile(r"^P[A-G]\d")
+
+# Driver pins. OUT* (incl. DOUT/LOUT/ROUT audio outs) → output; IN*
+# (incl. DIN/FMIN/AIN) → input.
+_OUTPUT_PIN_PREFIXES = ("DOUT", "LOUT", "ROUT", "OUT")
+_INPUT_PIN_PREFIXES = ("DIN", "FMIN", "AIN", "IN")
+
+# Explicit no-connects (exact only — "NCS"/"NC_EN" etc. are real signals).
+_NO_CONNECT_NAMES = ("NC", "DNC", "N/C", "NC/DNC")
 
 _PIN_HEADER_RE = re.compile(r"\(pin\s+(\S+)\s+(\S+)")
 _PIN_NAME_RE = re.compile(r'\(name\s+"([^"]*)"')
@@ -93,31 +126,66 @@ def _match_paren(text: str, start: int) -> int:
 
 
 def _is_power_pin_name(name: str) -> bool:
-    """True when a pin name unambiguously denotes a power rail (see prefixes)."""
+    """True when a pin name unambiguously denotes a power rail.
+
+    Matches the V*/GND* PREFIXES (VDD_3, VSSA, GND1 …) and the exposed-pad
+    EXACT names (EP, EPAD). Case-insensitive; empty → False.
+    """
     if not name:
         return False
-    return name.strip().upper().startswith(_POWER_PIN_PREFIXES)
+    n = name.strip().upper()
+    return n.startswith(_POWER_PIN_PREFIXES) or n in _POWER_PIN_EXACT
+
+
+def _infer_pin_type(name: str, current_type: str) -> str:
+    """Infer a KiCad electrical type for a pin from its NAME.
+
+    ``current_type`` is preserved whenever easyeda2kicad already set something
+    other than ``unspecified`` (its rare correct inferences aren't clobbered).
+    Otherwise the NAME is classified; the fallback is ``passive`` (never
+    ``unspecified``) so every pin becomes ERC-quiet — passive connects to
+    anything without a pin_to_pin warning, matching how generic KiCad parts
+    behave.
+    """
+    if current_type and current_type != "unspecified":
+        return current_type
+    n = (name or "").strip().upper()
+    if not n:
+        return "passive"
+    if n in _NO_CONNECT_NAMES:
+        return "no_connect"
+    if _is_power_pin_name(n):
+        return "power_in"
+    if n.startswith(_GPIO_PIN_PREFIXES) or _GPIO_PORT_RE.match(n):
+        return "bidirectional"
+    if n.startswith(_OUTPUT_PIN_PREFIXES):
+        return "output"
+    if n.startswith(_INPUT_PIN_PREFIXES):
+        return "input"
+    return "passive"
 
 
 def _retype_single_pin(pin_block: str) -> "tuple[str, int]":
     """Return (rewritten_pin_block, changed) for one ``(pin …)`` s-expression.
 
-    Only the electrical-type token is touched, and only when the pin's NAME is a
-    power rail and it isn't already ``power_in``.
+    Only the electrical-type token is touched, and only when the inferred type
+    differs from the one already present.
     """
     header = _PIN_HEADER_RE.match(pin_block)
     if not header:
         return pin_block, 0
     name_match = _PIN_NAME_RE.search(pin_block)
     name = name_match.group(1) if name_match else ""
-    if header.group(1) != "power_in" and _is_power_pin_name(name):
-        rewritten = pin_block[: header.start(1)] + "power_in" + pin_block[header.end(1) :]
+    current = header.group(1)
+    inferred = _infer_pin_type(name, current)
+    if inferred != current:
+        rewritten = pin_block[: header.start(1)] + inferred + pin_block[header.end(1) :]
         return rewritten, 1
     return pin_block, 0
 
 
-def _rewrite_power_pins(block: str) -> "tuple[str, int]":
-    """Retype every power-named pin inside a symbol block to ``power_in``.
+def _rewrite_inferred_pins(block: str) -> "tuple[str, int]":
+    """Retype every pin inside a symbol block to its inferred electrical type.
 
     Walks the text quote-aware so ``(pin `` only matches real s-expression
     openings, never a substring inside a quoted value.
@@ -192,12 +260,12 @@ def _count_symbol_units(lib_path: Path, symbol_name: str) -> int:
 
 
 def _apply_pin_type_inference(lib_path: Path, symbol_name: str) -> Dict[str, Any]:
-    """Retype unambiguous power pins of ``symbol_name`` to ``power_in`` in place.
+    """Retype every ``unspecified`` pin of ``symbol_name`` to an inferred type.
 
     Rewrites only within the target symbol's block (leaving other cached parts
     untouched), re-parses the whole file to confirm it is still valid, then
     writes atomically (the cache library is shared). A no-op when nothing
-    matches. Returns ``{"changed": n, ...}``.
+    changes. Returns ``{"changed": n, ...}``.
     """
     try:
         content = lib_path.read_text(encoding="utf-8")
@@ -209,7 +277,7 @@ def _apply_pin_type_inference(lib_path: Path, symbol_name: str) -> Dict[str, Any
         return {"changed": 0, "skipped": "symbol_not_found"}
 
     start, end = span
-    new_block, changed = _rewrite_power_pins(content[start:end])
+    new_block, changed = _rewrite_inferred_pins(content[start:end])
     if changed == 0:
         return {"changed": 0}
 
@@ -226,7 +294,7 @@ def _apply_pin_type_inference(lib_path: Path, symbol_name: str) -> Dict[str, Any
     tmp = lib_path.with_name(lib_path.name + ".pintypes.tmp")
     tmp.write_text(new_content, encoding="utf-8")
     tmp.replace(lib_path)
-    logger.info(f"Inferred power_in type for {changed} pin(s) of {symbol_name}")
+    logger.info(f"Inferred electrical type for {changed} pin(s) of {symbol_name}")
     return {"changed": changed}
 
 
@@ -453,10 +521,14 @@ def import_lcsc_part(
     that exists on disk but is missing from the lib-table is repaired.
 
     ``infer_pin_types`` (default True) post-processes the imported symbol,
-    retyping unambiguously-named power pins (VDD*/VCC*/VSS*/GND*/VBAT/…) from
-    easyeda2kicad's blanket ``unspecified`` to ``power_in`` so ERC can check
-    power driving (F12). The rewrite is name-based and conservative — signal
-    pins are untouched — and re-validated before it is written atomically.
+    replacing easyeda2kicad's blanket ``unspecified`` type on every pin with a
+    type inferred from the pin NAME: power rails (VDD*/GND*/VBAT/EP…) →
+    ``power_in``, GPIO/bus lines (PA0/SDA/SCK…) → ``bidirectional``, OUT*/IN*
+    drivers → ``output``/``input``, and everything else → ``passive`` (never
+    left ``unspecified``). This clears the pin_to_pin "Unspecified … connected"
+    ERC warnings that flood an all-unspecified import (S7). Any type
+    easyeda2kicad already set correctly is preserved; the rewrite is
+    re-validated before it is written atomically.
 
     Raises ``EasyEdaImportError`` for user-facing failures and ``ValueError``
     for a malformed LCSC id.
