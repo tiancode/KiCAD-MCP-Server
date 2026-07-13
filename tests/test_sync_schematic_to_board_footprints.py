@@ -647,3 +647,154 @@ class TestNewFootprintGridRegressions:
         )
         # idx=2 → col=0 row=1 → (10, 10 + 25) mm.
         assert (vec2.x, vec2.y) == (10_000_000, 35_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Sourcing-field propagation: schematic custom fields (MPN, Manufacturer,
+# "LCSC Part", Datasheet) must be copied onto the board footprints so a
+# board-based export_bom can see the phase-1 sourcing pipeline.  Covers
+# _extract_components_from_schematic (fields parsing), the skip-list
+# (_is_propagatable_field), and _propagate_schematic_fields_to_board.
+# ---------------------------------------------------------------------------
+
+
+def _fp_with_fields(reference: str, current_fields: dict) -> MagicMock:
+    """Board footprint whose GetFieldsText() returns a real dict and whose
+    SetField records (name, value) calls for assertions."""
+    fp = MagicMock(name=f"fp_{reference}")
+    fp.GetReference.return_value = reference
+    state = dict(current_fields)
+    fp.GetFieldsText.return_value = state
+
+    def _set_field(name, value):
+        state[name] = value
+
+    fp.SetField.side_effect = _set_field
+    return fp
+
+
+@pytest.mark.unit
+class TestSchematicFieldPropagation:
+    def test_extract_includes_custom_fields(self, tmp_path: Any) -> None:
+        netlist_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <components>
+    <comp ref="U1">
+      <value>GD32F103VET6</value>
+      <footprint>Package_QFP:LQFP-100</footprint>
+      <fields>
+        <field name="Manufacturer">GigaDevice</field>
+        <field name="MPN">GD32F103VET6</field>
+        <field name="LCSC Part">C80215</field>
+        <field name="Sheetname">gd32_radio</field>
+        <field name="ki_keywords">GigaDevice</field>
+      </fields>
+    </comp>
+  </components>
+</export>
+"""
+        sch = tmp_path / "test.kicad_sch"
+        sch.write_text("(kicad_sch)\n")
+
+        def fake_run(cmd: Any, **kwargs: Any) -> Any:
+            output_idx = cmd.index("--output") + 1
+            Path(cmd[output_idx]).write_text(netlist_xml)
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        with (
+            patch.object(
+                _interface().__class__, "_find_kicad_cli_static", return_value="/fake/kicad-cli"
+            ),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            comps = _interface()._extract_components_from_schematic(str(sch))
+
+        (u1,) = comps
+        assert u1["fields"]["MPN"] == "GD32F103VET6"
+        assert u1["fields"]["LCSC Part"] == "C80215"
+        # Raw extraction keeps everything; the skip-list is applied at propagation.
+        assert u1["fields"]["Sheetname"] == "gd32_radio"
+
+    def test_is_propagatable_field_skiplist(self) -> None:
+        iface = _interface()
+        assert iface._is_propagatable_field("MPN")
+        assert iface._is_propagatable_field("LCSC Part")
+        assert iface._is_propagatable_field("Datasheet")
+        # Standard / handled-elsewhere and internal keys are skipped.
+        for skip in ("Reference", "Value", "Footprint", "Sheetname", "Sheetfile",
+                     "ki_keywords", "ki_description", "ki_fp_filters", ""):
+            assert not iface._is_propagatable_field(skip), skip
+
+    def test_propagate_sets_custom_fields_skipping_internal(self) -> None:
+        fp = _fp_with_fields("U1", {"Reference": "U1", "Value": "GD32F103VET6"})
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = [fp]
+
+        components = [
+            {
+                "reference": "U1",
+                "value": "GD32F103VET6",
+                "footprint": "Package_QFP:LQFP-100",
+                "fields": {
+                    "MPN": "GD32F103VET6",
+                    "Manufacturer": "GigaDevice",
+                    "LCSC Part": "C80215",
+                    "Sheetname": "gd32_radio",
+                    "ki_keywords": "GigaDevice",
+                    "Footprint": "Package_QFP:LQFP-100",
+                },
+            }
+        ]
+
+        stats = _interface()._propagate_schematic_fields_to_board(board, components)
+
+        written = {name for (name, _val), _ in fp.SetField.call_args_list}
+        assert written == {"MPN", "Manufacturer", "LCSC Part"}
+        # Internal / handled-elsewhere keys never written.
+        assert "Sheetname" not in written
+        assert "ki_keywords" not in written
+        assert "Footprint" not in written
+        assert stats == {"footprints_updated": 1, "fields_written": 3}
+
+    def test_propagate_updates_changed_and_skips_unchanged(self) -> None:
+        # U1 already has the right LCSC but a stale MPN; only MPN should be written.
+        fp = _fp_with_fields("U1", {"LCSC Part": "C80215", "MPN": "OLD"})
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = [fp]
+        components = [
+            {"reference": "U1", "fields": {"MPN": "GD32F103VET6", "LCSC Part": "C80215"}}
+        ]
+
+        stats = _interface()._propagate_schematic_fields_to_board(board, components)
+
+        calls = {name: val for (name, val), _ in fp.SetField.call_args_list}
+        assert calls == {"MPN": "GD32F103VET6"}  # unchanged LCSC not rewritten
+        assert stats == {"footprints_updated": 1, "fields_written": 1}
+
+    def test_propagate_does_not_clobber_board_only_field_or_write_blanks(self) -> None:
+        # Board carries a hand-added "Note" the schematic doesn't have, and the
+        # schematic has a blank Datasheet — neither should be touched.
+        fp = _fp_with_fields("U1", {"Note": "hand-added", "MPN": "OLD"})
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = [fp]
+        components = [
+            {"reference": "U1", "fields": {"MPN": "NEW", "Datasheet": "   ", "Note": ""}}
+        ]
+
+        _interface()._propagate_schematic_fields_to_board(board, components)
+
+        calls = {name: val for (name, val), _ in fp.SetField.call_args_list}
+        assert calls == {"MPN": "NEW"}  # blank Datasheet + blank Note skipped
+        assert fp.GetFieldsText.return_value["Note"] == "hand-added"  # untouched
+
+    def test_propagate_no_matching_footprint_is_noop(self) -> None:
+        fp = _fp_with_fields("R1", {})
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = [fp]
+        # Schematic component U1 has no board footprint (unlikely post-add, but
+        # must not crash and must report zero updates).
+        components = [{"reference": "U1", "fields": {"MPN": "X"}}]
+
+        stats = _interface()._propagate_schematic_fields_to_board(board, components)
+        assert stats == {"footprints_updated": 0, "fields_written": 0}
+        fp.SetField.assert_not_called()

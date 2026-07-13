@@ -200,7 +200,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
   // ------------------------------------------------------
   server.tool(
     "add_board_text",
-    "Add a text label to a PCB layer (e.g. silkscreen, fab, courtyard). Placed text is managed via list_shapes / edit_shape / delete_shape (kind=text).",
+    "Add a text label to a PCB layer (e.g. silkscreen, fab, courtyard). Placed text is managed via list_shapes / edit_shape / delete_shape (kind=text). Text on a back (B.*) layer is auto-mirrored by default (KiCad convention — un-mirrored back text fails DRC); pass mirror to override.",
     {
       text: z.string().describe("Text content"),
       position: z
@@ -215,8 +215,14 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       thickness: z.number().optional().describe("Line thickness"),
       rotation: z.number().optional().describe("Rotation angle in degrees"),
       style: z.enum(["normal", "italic", "bold"]).optional().describe("Text style"),
+      mirror: z
+        .boolean()
+        .optional()
+        .describe(
+          "Mirror the text. Omit to auto-mirror on back (B.*) layers and leave front layers un-mirrored (KiCad convention); set true/false to force.",
+        ),
     },
-    async ({ text, position, layer, size, thickness, rotation, style }) => {
+    async ({ text, position, layer, size, thickness, rotation, style, mirror }) => {
       logger.debug(`Adding text "${text}" at (${position.x},${position.y}) ${position.unit}`);
       const result = await callKicadScript("add_board_text", {
         text,
@@ -226,6 +232,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         thickness,
         rotation,
         style,
+        mirror,
       });
 
       return formatKicadResult(result);

@@ -2,13 +2,79 @@
 
 Split out of the former monolithic commands/routing.py."""
 
+import fnmatch
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pcbnew
 
+from ._helpers import _track_width_error
+
 logger = logging.getLogger("kicad_interface")
+
+
+# ---------------------------------------------------------------------------
+# Pure .kicad_pro net-class resolution (no pcbnew) — shared by route_smart so
+# it can honour a net's net-class trace/via width.  In KiCad 9/10 net-class
+# *membership* lives in the project JSON (netclass_assignments + wildcard
+# netclass_patterns), NOT in the SWIG board — so the board's GetNetClass()
+# returns Default for an assigned net and route_smart routed power nets thin
+# (P2).  These resolve membership + a class property straight from the
+# net_settings dict so they are unit-testable without a board.
+# ---------------------------------------------------------------------------
+
+
+def resolve_netclass_name(net_settings: Dict[str, Any], net_name: str) -> Optional[str]:
+    """Return the net-class name assigned to ``net_name`` in the project JSON.
+
+    Resolution order mirrors KiCad: an exact ``netclass_assignments`` entry
+    wins; otherwise the first matching wildcard ``netclass_patterns`` rule
+    (``*`` = any run, ``?`` = one char), matched against the full hierarchical
+    net name.  Returns ``None`` when the net has no explicit class (it inherits
+    Default).  Pure over the ``net_settings`` dict.
+    """
+    if not net_name or not isinstance(net_settings, dict):
+        return None
+
+    assignments = net_settings.get("netclass_assignments")
+    if isinstance(assignments, dict):
+        cls = assignments.get(net_name)
+        if cls:
+            return cls
+
+    patterns = net_settings.get("netclass_patterns")
+    if isinstance(patterns, list):
+        for entry in patterns:
+            if not isinstance(entry, dict):
+                continue
+            pattern = entry.get("pattern")
+            cls = entry.get("netclass")
+            if pattern and cls and fnmatch.fnmatchcase(net_name, pattern):
+                return cls
+    return None
+
+
+def netclass_property(
+    net_settings: Dict[str, Any], class_name: Optional[str], key: str
+) -> Optional[float]:
+    """Return the mm-float value of ``key`` for the named class, or ``None``.
+
+    ``key`` is a ``.kicad_pro`` class field (e.g. ``track_width``,
+    ``via_diameter``, ``via_drill``).  ``None`` when the class or key is absent
+    or non-numeric (``bool`` excluded so a stray ``True`` isn't read as 1.0).
+    Pure over the ``net_settings`` dict.
+    """
+    if not class_name or not isinstance(net_settings, dict):
+        return None
+    classes = net_settings.get("classes")
+    if isinstance(classes, list):
+        for cls in classes:
+            if isinstance(cls, dict) and cls.get("name") == class_name:
+                val = cls.get(key)
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    return float(val)
+    return None
 
 
 class NetMixin:
@@ -232,6 +298,13 @@ class NetMixin:
                     "errorDetails": "name parameter is required",
                 }
 
+            # Bound the trace width (P10): a net-class trace width feeds every
+            # route on that class, so an absurd value (e.g. 999 mm) is as bad
+            # here as on route_trace.  Same limit everywhere a width is taken.
+            width_err = _track_width_error(track_width, field="traceWidth")
+            if width_err is not None:
+                return width_err
+
             # Get net classes — KiCad 6/7 returns NETCLASSES with .Find/.Add;
             # KiCad 9/10 returns a netclasses_map (SWIG-wrapped std::map) that is dict-like.
             net_classes = self.board.GetNetClasses()
@@ -279,13 +352,29 @@ class NetMixin:
             _safe_set("SetDiffPairWidth", diff_pair_width)
             _safe_set("SetDiffPairGap", diff_pair_gap)
 
-            # Add nets to net class
-            netinfo = self.board.GetNetInfo()
-            nets_map = netinfo.NetsByName()
-            for net_name in nets:
-                if nets_map.has_key(net_name):
-                    net = nets_map[net_name]
-                    net.SetClass(netclass)
+            # Add nets to the class.  The real, persisted assignment happens
+            # below via _persist_netclass_to_project (netclass_assignments in
+            # the .kicad_pro) — the SAME mechanism assign_net_to_class uses.
+            # The in-memory SWIG mirror is best-effort ONLY: KiCad 10's
+            # NETINFO_ITEM has no SetClass(), so calling it unguarded threw
+            # "'NETINFO_ITEM' object has no attribute 'SetClass'" and failed the
+            # whole call (P1).  Wrap it so a missing setter is a no-op, not a
+            # hard error — persistence is what makes the assignment stick.
+            try:
+                netinfo = self.board.GetNetInfo()
+                nets_map = netinfo.NetsByName()
+                for net_name in nets:
+                    if nets_map.has_key(net_name):  # noqa: W601 - SWIG map API
+                        net = nets_map[net_name]
+                        setter = getattr(net, "SetClass", None)
+                        if callable(setter):
+                            setter(netclass)
+            except Exception as swig_err:
+                logger.warning(
+                    "create_netclass: in-memory net assignment skipped "
+                    "(persisted to .kicad_pro instead): %s",
+                    swig_err,
+                )
 
             # Persist to the .kicad_pro project JSON.  In KiCad 9/10 net
             # classes live in the project file, NOT the board object — the

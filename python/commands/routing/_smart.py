@@ -8,7 +8,11 @@ and may change layers through vias when two copper layers are given.
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple
+
+from ._helpers import _track_width_error
+from ._nets import netclass_property, resolve_netclass_name
 
 logger = logging.getLogger("kicad_interface")
 
@@ -42,10 +46,22 @@ class SmartRouteMixin:
                 return {
                     "success": False,
                     "message": "layers must be a list of 1 or 2 copper layer names",
+                    "errorCode": "VALIDATION",
                 }
             for layer_name in layers:
                 if self.board.GetLayerID(layer_name) < 0:
-                    return {"success": False, "message": f"Unknown layer: {layer_name}"}
+                    return {
+                        "success": False,
+                        "message": f"Unknown layer: {layer_name}",
+                        "errorCode": "VALIDATION",
+                    }
+
+            # Reject an out-of-range explicit width up front (P10) — same bound
+            # as route_trace / create_netclass.  A width omitted here falls back
+            # to the net's net-class width below, which is always sane.
+            width_err = _track_width_error(params.get("width"))
+            if width_err is not None:
+                return width_err
 
             start_pt, end_pt, net = self._resolve_smart_endpoints(params, layers)
             if isinstance(start_pt, dict):  # error dict from resolver
@@ -53,11 +69,18 @@ class SmartRouteMixin:
             start_xy: Tuple[float, float] = (start_pt[0], start_pt[1])
             end_xy: Tuple[float, float] = (end_pt[0], end_pt[1])
 
-            width_mm = float(params.get("width") or self._smart_default_width_mm(net))
+            # Resolve the net's net-class props ONCE (trace + via widths) from
+            # the .kicad_pro so both the default-width and via placement honour
+            # the class the user assigned via assign_net_to_class (P2).
+            netclass_props = self._project_netclass_props(net)
+            width_mm = float(
+                params.get("width") or self._smart_default_width_mm(net, netclass_props)
+            )
             if width_mm <= 0:
                 return {
                     "success": False,
                     "message": f"Track width must be positive (got {width_mm} mm)",
+                    "errorCode": "VALIDATION",
                 }
 
             items = self._collect_obstacle_items(layers)
@@ -74,6 +97,7 @@ class SmartRouteMixin:
                 return {
                     "success": False,
                     "message": "Board has no outline; add_board_outline first",
+                    "errorCode": "VALIDATION",
                 }
 
             result = route_grid_astar(
@@ -94,6 +118,10 @@ class SmartRouteMixin:
             if not result.success:
                 return {
                     "success": False,
+                    # Truthful code: a routing outcome (blocked endpoint / area
+                    # too dense), not an internal error — agents can branch on
+                    # NO_PATH to retry with different params or route manually.
+                    "errorCode": "NO_PATH",
                     "message": f"route_smart found no path: {result.message}",
                     "explored": result.explored,
                     "hint": (
@@ -102,7 +130,7 @@ class SmartRouteMixin:
                     ),
                 }
 
-            created = self._commit_smart_route(result, net, width_mm)
+            created = self._commit_smart_route(result, net, width_mm, netclass_props)
             return {
                 "success": True,
                 "segments": result.segments,
@@ -143,7 +171,15 @@ class SmartRouteMixin:
                     params.get("net"),
                 )
             except (KeyError, TypeError, ValueError):
-                return ({"success": False, "message": "start/end must be {x, y} in mm"}, None, None)
+                return (
+                    {
+                        "success": False,
+                        "message": "start/end must be {x, y} in mm",
+                        "errorCode": "VALIDATION",
+                    },
+                    None,
+                    None,
+                )
 
         from_ref, to_ref = params.get("fromRef"), params.get("toRef")
         from_pad, to_pad = str(params.get("fromPad", "")), str(params.get("toPad", ""))
@@ -152,6 +188,7 @@ class SmartRouteMixin:
                 {
                     "success": False,
                     "message": "Provide fromRef/fromPad/toRef/toPad, or start/end points",
+                    "errorCode": "VALIDATION",
                 },
                 None,
                 None,
@@ -161,11 +198,23 @@ class SmartRouteMixin:
         for ref, pad_num in ((from_ref, from_pad), (to_ref, to_pad)):
             fp = footprints.get(ref)
             if fp is None:
-                return ({"success": False, "message": f"Component not found: {ref}"}, None, None)
+                return (
+                    {
+                        "success": False,
+                        "message": f"Component not found: {ref}",
+                        "errorCode": "NOT_FOUND",
+                    },
+                    None,
+                    None,
+                )
             pad = next((p for p in fp.Pads() if p.GetNumber() == pad_num), None)
             if pad is None:
                 return (
-                    {"success": False, "message": f"Pad {pad_num} not found on {ref}"},
+                    {
+                        "success": False,
+                        "message": f"Pad {pad_num} not found on {ref}",
+                        "errorCode": "NOT_FOUND",
+                    },
                     None,
                     None,
                 )
@@ -178,6 +227,7 @@ class SmartRouteMixin:
                             f"Pad {pad_num} on {ref} is not on any requested routing layer "
                             f"({', '.join(layers)}); include the pad's copper layer in `layers`"
                         ),
+                        "errorCode": "VALIDATION",
                     },
                     None,
                     None,
@@ -208,13 +258,65 @@ class SmartRouteMixin:
                 return layer_name
         return ""
 
-    def _smart_default_width_mm(self, net: Optional[str]) -> float:
+    def _project_netclass_props(self, net: Optional[str]) -> Dict[str, float]:
+        """Resolve ``net``'s net-class trace/via widths (mm) from the .kicad_pro.
+
+        In KiCad 9/10 net-class membership lives in the project JSON, not the
+        SWIG board, so ``NETINFO_ITEM.GetNetClass()`` returns Default for a net
+        the user assigned via ``assign_net_to_class`` — which is why route_smart
+        routed power nets at the global default (P2).  This reads the sibling
+        ``.kicad_pro``, resolves the net's class (exact assignment then wildcard
+        pattern), and returns the mm floats for ``track_width`` / ``via_diameter``
+        / ``via_drill`` present on that class (plus ``className``).  Returns an
+        empty dict — never raises — when there is no project file, no assigned
+        class, or anything unreadable, so callers fall back to the board default.
+        """
+        if not net:
+            return {}
+        try:
+            from utils import kicad_pro
+
+            project_file = kicad_pro.project_path_for_board(self.board)
+            if not project_file or not os.path.exists(project_file):
+                return {}
+            data, _ = kicad_pro.load_kicad_pro(project_file)
+            net_settings = data.get("net_settings")
+            if not isinstance(net_settings, dict):
+                return {}
+            class_name = resolve_netclass_name(net_settings, net)
+            if not class_name:
+                return {}
+            props: Dict[str, float] = {"className": class_name}
+            for key in ("track_width", "via_diameter", "via_drill"):
+                value = netclass_property(net_settings, class_name, key)
+                if value is not None:
+                    props[key] = value
+            return props
+        except Exception:  # noqa: BLE001 — never let project-read errors break routing
+            return {}
+
+    def _smart_default_width_mm(
+        self, net: Optional[str], netclass_props: Optional[Dict[str, float]] = None
+    ) -> float:
         """Netclass track width for the net, falling back to the board default.
+
+        Resolution order:
+          1. the net's net-class ``track_width`` from the .kicad_pro (where
+             KiCad 9/10 stores membership — the SWIG board does not reflect it);
+          2. the SWIG net-class width (KiCad 6/7, or in-memory-created classes);
+          3. the board's current default track width;
+          4. 0.25 mm.
 
         Non-positive widths are KiCad's "inherit" sentinel, not real widths —
         treat them as unset and keep falling back (same convention as
         _geometry._netclass_track_width_mm), ending at 0.25 mm.
         """
+        if netclass_props is None:
+            netclass_props = self._project_netclass_props(net)
+        project_width = netclass_props.get("track_width")
+        if project_width and project_width > 0:
+            return project_width
+
         try:
             design = self.board.GetDesignSettings()
             if net:
@@ -296,14 +398,29 @@ class SmartRouteMixin:
         return items
 
     def _commit_smart_route(
-        self, result: Any, net: Optional[str], width_mm: float
+        self,
+        result: Any,
+        net: Optional[str],
+        width_mm: float,
+        netclass_props: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
-        """Create board tracks/vias for an A* result; returns creation stats."""
+        """Create board tracks/vias for an A* result; returns creation stats.
+
+        Vias inherit the net's net-class ``via_diameter`` / ``via_drill`` from
+        the .kicad_pro when present (P2 — a Power net's fat via, not the global
+        default), falling back to the board's current via size/drill otherwise.
+        """
         import pcbnew
+
+        if netclass_props is None:
+            netclass_props = self._project_netclass_props(net)
 
         net_item = self.board.GetNetInfo().GetNetItem(net) if net else None
         net_code = net_item.GetNetCode() if net_item else 0
         design = self.board.GetDesignSettings()
+
+        via_diameter_mm = netclass_props.get("via_diameter")
+        via_drill_mm = netclass_props.get("via_drill")
 
         track_uuids: List[str] = []
         for seg in result.segments:
@@ -323,8 +440,14 @@ class SmartRouteMixin:
         for via_pt in result.vias:
             via = pcbnew.PCB_VIA(self.board)
             via.SetPosition(pcbnew.VECTOR2I(int(via_pt["x"] * _NM), int(via_pt["y"] * _NM)))
-            via.SetWidth(design.GetCurrentViaSize())
-            via.SetDrill(design.GetCurrentViaDrill())
+            if via_diameter_mm and via_diameter_mm > 0:
+                via.SetWidth(int(via_diameter_mm * _NM))
+            else:
+                via.SetWidth(design.GetCurrentViaSize())
+            if via_drill_mm and via_drill_mm > 0:
+                via.SetDrill(int(via_drill_mm * _NM))
+            else:
+                via.SetDrill(design.GetCurrentViaDrill())
             if net_code:
                 via.SetNetCode(net_code)
             self.board.Add(via)

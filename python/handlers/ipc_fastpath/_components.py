@@ -86,17 +86,55 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
 def handle_move_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """IPC handler for move_component — moves component with real-time UI update."""
     try:
+        from commands.component._placement import (
+            _OFF_BOARD_ABSURD_FACTOR,
+            classify_board_position,
+        )
+
         reference = params.get("reference", params.get("componentId", ""))
         # ipc_backend.move_component expects mm — normalise the caller's unit.
         x, y, unit = extract_xy(params)
         x, y = to_mm(x, unit), to_mm(y, unit)
         rotation = params.get("rotation")
 
+        # Board-awareness (P11): mirror the SWIG guard.  Reject a target so far
+        # outside the Edge.Cuts outline it can only be a units error; flag a
+        # merely-off-board target with a warning.  No outline → can't judge.
+        outline = None
+        bbox = None
+        try:
+            raw_outline = iface.ipc_board_api.get_outline_bbox()
+        except Exception:  # best-effort: a bbox read must never block the move
+            raw_outline = None
+        # Only a well-formed numeric bbox counts; anything else (None, or a test
+        # stub's MagicMock) means "no outline, can't judge".
+        if isinstance(raw_outline, dict) and all(
+            isinstance(raw_outline.get(k), (int, float))
+            for k in ("x1", "y1", "x2", "y2")
+        ):
+            outline = raw_outline
+            bbox = (outline["x1"], outline["y1"], outline["x2"], outline["y2"])
+        target_class = classify_board_position(x, y, bbox)
+        if target_class == "absurd":
+            return {
+                "success": False,
+                "message": (
+                    f"Target position ({x}, {y}) mm is far outside the board "
+                    f"outline (x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
+                    f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm) — more than "
+                    f"{int(_OFF_BOARD_ABSURD_FACTOR)}× a board dimension away. This "
+                    f"is almost certainly a units error; use millimeters within "
+                    f"(or near) the board."
+                ),
+                "errorCode": "POSITION_OFF_BOARD",
+                "boardOutline": outline,
+            }
+
         success = iface.ipc_board_api.move_component(
             reference=reference, x=x, y=y, rotation=rotation
         )
 
-        return {
+        response: Dict[str, Any] = {
             "success": success,
             "message": (
                 f"Moved component {reference} (visible in KiCAD UI)"
@@ -104,6 +142,17 @@ def handle_move_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
                 else "Failed to move component"
             ),
         }
+        if success and outline is not None:
+            response["boardOutline"] = outline
+        if success and target_class == "off_board":
+            response["offBoardWarning"] = (
+                f"{reference} moved to ({x}, {y}) mm, which is outside the board "
+                f"outline (x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
+                f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm). The move still applied, but the "
+                f"footprint now sits off the board; move it back onto the board or "
+                f"extend the outline."
+            )
+        return response
     except Exception as e:
         logger.error(f"IPC move_component error: {e}")
         return {"success": False, "message": str(e)}

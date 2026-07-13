@@ -487,7 +487,16 @@ class BoardOutlineCommands:
             size = params.get("size", 1.0)
             thickness = params.get("thickness", 0.15)
             rotation = params.get("rotation", 0)
-            mirror = params.get("mirror", False)
+
+            # Auto-mirror back-layer text (P13, KiCad convention): silkscreen (or
+            # any copper/fab) text on a B.* layer is read through the board, so it
+            # must be mirrored — un-mirrored back text trips DRC's
+            # ``nonmirrored_text_on_back_layer``.  Default: mirror any B.* layer.
+            # An explicit ``mirror`` boolean overrides in either direction.
+            mirror_param = params.get("mirror")
+            mirror_auto = mirror_param is None
+            is_back_layer = str(layer).startswith("B.")
+            mirror = is_back_layer if mirror_auto else bool(mirror_param)
 
             if not text or not position:
                 return {
@@ -549,6 +558,9 @@ class BoardOutlineCommands:
                     "thickness": thickness,
                     "rotation": rotation,
                     "mirror": mirror,
+                    # Tell the caller whether the mirror state was auto-applied
+                    # (back-layer convention) or came from an explicit override.
+                    "mirrorAuto": mirror_auto and is_back_layer,
                 },
             }
 

@@ -333,6 +333,7 @@ class ZoneMixin:
                         ),
                         "requestedNet": net,
                         "candidates": candidates,
+                        "errorCode": "NOT_FOUND",
                     }
                 net_was_resolved = resolved_net != net
             elif net == "" or allow_unconnected:
@@ -348,6 +349,7 @@ class ZoneMixin:
                         "create an unconnected (net-0) zone."
                     ),
                     "requestedNet": net,
+                    "errorCode": "VALIDATION",
                 }
 
             # If no outline provided, use board outline
@@ -384,6 +386,7 @@ class ZoneMixin:
                         "success": False,
                         "message": "Missing outline",
                         "errorDetails": "Provide an outline array or add a board outline first",
+                        "errorCode": "VALIDATION",
                     }
 
             # Get layer ID
@@ -393,6 +396,7 @@ class ZoneMixin:
                     "success": False,
                     "message": "Invalid layer",
                     "errorDetails": f"Layer '{layer}' does not exist",
+                    "errorCode": "VALIDATION",
                 }
 
             # Create zone
@@ -516,6 +520,7 @@ class ZoneMixin:
                     "message": f"No zone with uuid {uuid}",
                     "errorDetails": "Call query_zones to list zone uuids",
                     "zones": [self._zone_brief(z) for z in zones],
+                    "errorCode": "NOT_FOUND",
                 }
             return matches, None
 
@@ -535,6 +540,7 @@ class ZoneMixin:
                 "message": "No zone matched the given net/layer filters",
                 "errorDetails": "Call query_zones to list zones",
                 "zones": [self._zone_brief(z) for z in zones],
+                "errorCode": "NOT_FOUND",
             }
         return matches, None
 
@@ -570,6 +576,7 @@ class ZoneMixin:
                         "(from query_zones) or a net+layer pair"
                     ),
                     "zones": [self._zone_brief(z) for z in matches],
+                    "errorCode": "VALIDATION",
                 }
             zone = matches[0]
             scale = 1000000  # mm -> nm
@@ -585,6 +592,7 @@ class ZoneMixin:
                         "message": f"Net '{new_net}' does not exist on the board",
                         "requestedNet": new_net,
                         "candidates": candidates,
+                        "errorCode": "NOT_FOUND",
                     }
                 nets_map = self.board.GetNetInfo().NetsByName()
                 if nets_map.has_key(resolved):
@@ -600,6 +608,7 @@ class ZoneMixin:
                     return {
                         "success": False,
                         "message": f"Layer '{new_layer}' does not exist",
+                        "errorCode": "VALIDATION",
                     }
                 zone.SetLayer(layer_id)
                 changed.append("layer")
@@ -635,6 +644,7 @@ class ZoneMixin:
                             f"Unknown padConnection '{pad_connection}' — use one of "
                             f"{sorted(self._PAD_CONNECTION_ATTRS)}"
                         ),
+                        "errorCode": "VALIDATION",
                     }
                 zone.SetPadConnection(const)
                 changed.append("padConnection")
@@ -653,6 +663,7 @@ class ZoneMixin:
                     return {
                         "success": False,
                         "message": "outline needs at least 3 points",
+                        "errorCode": "VALIDATION",
                     }
                 outline = zone.Outline()
                 outline.RemoveAllContours()
@@ -677,6 +688,7 @@ class ZoneMixin:
                         "thermalGap, thermalBridgeWidth, outline"
                     ),
                     "zone": self._zone_brief(zone),
+                    "errorCode": "VALIDATION",
                 }
 
             # The stored fill no longer reflects the zone settings.
@@ -737,6 +749,7 @@ class ZoneMixin:
                         "every match, or refine with zoneUuid (from query_zones)"
                     ),
                     "zones": [self._zone_brief(z) for z in matches],
+                    "errorCode": "VALIDATION",
                 }
 
             deleted = [self._zone_brief(z) for z in matches]

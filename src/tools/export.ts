@@ -136,11 +136,23 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     "export_bom",
     "Export a Bill of Materials (BOM) from the PCB. Mounting holes and board hardware " +
       "(ref prefix MH or MountingHole footprint) are excluded by default — set " +
-      "includeMountingHoles to keep them; the response reports excludedMountingHoles.",
+      "includeMountingHoles to keep them; the response reports excludedMountingHoles. " +
+      "Sourcing columns (MPN, Manufacturer, LCSC, Datasheet, …) come from footprint " +
+      "fields: run sync_schematic_to_board first so schematic symbol fields are copied " +
+      "onto the board. A requested attribute matches a field by exact name, " +
+      "case-insensitively, or by leading token (\"LCSC\" resolves the \"LCSC Part\" " +
+      "field); any attribute missing on every footprint is reported in attributesMissing " +
+      "plus a warning (never silently dropped).",
     {
       outputPath: z.string().describe("Path to save the BOM file"),
       format: z.enum(["CSV", "XML", "HTML", "JSON"]).describe("BOM file format"),
-      groupByValue: z.boolean().optional().describe("Group components by value"),
+      groupByValue: z
+        .boolean()
+        .optional()
+        .describe(
+          "Group components by value+footprint. When members of a group disagree on " +
+            "an attribute, the distinct values are joined with '; ' (groups are not split).",
+        ),
       includeMountingHoles: z
         .boolean()
         .optional()
@@ -148,9 +160,23 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
       includeAttributes: z
         .array(z.string())
         .optional()
-        .describe("Additional attributes to include"),
+        .describe(
+          "Sourcing/custom footprint fields to add as columns, e.g. [\"LCSC\",\"MPN\"," +
+            "\"Manufacturer\"]. Alias of 'attributes'.",
+        ),
+      attributes: z
+        .array(z.string())
+        .optional()
+        .describe("Alias of includeAttributes (accepted for convenience)."),
     },
-    async ({ outputPath, format, groupByValue, includeMountingHoles, includeAttributes }) => {
+    async ({
+      outputPath,
+      format,
+      groupByValue,
+      includeMountingHoles,
+      includeAttributes,
+      attributes,
+    }) => {
       logger.debug(`Exporting BOM to: ${outputPath}`);
       const result = await callKicadScript("export_bom", {
         outputPath,
@@ -158,6 +184,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         groupByValue,
         includeMountingHoles,
         includeAttributes,
+        attributes,
       });
 
       return formatKicadResult(result);

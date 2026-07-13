@@ -92,6 +92,59 @@ class _GeometryMixin:
             logger.error(f"Failed to get board size: {e}")
             return {"width": 0, "height": 0, "unit": "mm", "error": str(e)}
 
+    def get_outline_bbox(self, unit: str = "mm") -> Optional[Dict[str, Any]]:
+        """Return the board's Edge.Cuts bounding box, or ``None`` if no outline.
+
+        Unlike :meth:`get_size` (which returns width/height only), this returns
+        the absolute ``{x1, y1, x2, y2}`` extents so a caller can tell whether a
+        point lies inside the board.  Only Edge.Cuts shapes are considered — a
+        silk logo or courtyard must not be mistaken for the board edge.
+        """
+        try:
+            from kipy.proto.board.board_types_pb2 import BoardLayer
+            from kipy.util.units import to_mm
+
+            board = self._get_board()
+            shapes = board.get_shapes()
+            if not shapes:
+                return None
+
+            edge_enum = BoardLayer.BL_Edge_Cuts
+            min_x = min_y = float("inf")
+            max_x = max_y = float("-inf")
+            found = False
+            for shape in shapes:
+                if getattr(shape, "layer", None) != edge_enum:
+                    continue
+                bbox = board.get_item_bounding_box(shape)
+                if not bbox:
+                    continue
+                left, top, right, bottom = self._get_box2_extents(bbox)
+                min_x = min(min_x, left)
+                min_y = min(min_y, top)
+                max_x = max(max_x, right)
+                max_y = max(max_y, bottom)
+                found = True
+
+            if not found or max_x - min_x <= 0 or max_y - min_y <= 0:
+                return None
+
+            if unit == "inch":
+                scale = 1.0 / INCH_TO_NM
+                conv = lambda v: v * scale  # noqa: E731
+            else:
+                conv = to_mm
+            return {
+                "x1": conv(min_x),
+                "y1": conv(min_y),
+                "x2": conv(max_x),
+                "y2": conv(max_y),
+                "unit": unit,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get board outline bbox: {e}")
+            return None
+
     def add_layer(self, layer_name: str, layer_type: str) -> bool:
         """Add layer to the board (layers are typically predefined in KiCAD)."""
         logger.warning("Layer management via IPC is limited - layers are predefined")

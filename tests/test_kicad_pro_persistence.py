@@ -210,6 +210,85 @@ def test_helper_preserves_formatting(temp_project):
 
 
 # --------------------------------------------------------------------------
+# P1: create_netclass `nets` array persistence (stubbed board, no pcbnew)
+# --------------------------------------------------------------------------
+#
+# create_netclass's inline `nets` loop used to call NETINFO_ITEM.SetClass(),
+# a SWIG method that does not exist in KiCad 10 — so passing `nets` threw
+# "'NETINFO_ITEM' object has no attribute 'SetClass'" and failed the whole
+# call.  The fix persists the membership to the .kicad_pro (the same mechanism
+# assign_net_to_class uses) and makes the in-memory SWIG mirror best-effort.
+# These reproduce the KiCad-10 shape (a net object lacking SetClass, and one
+# whose SetClass raises) without real pcbnew.
+
+
+def _fake_board_with_nets(pcb_path, net_names, net_factory):
+    """MagicMock board whose NetsByName() returns net objects from net_factory."""
+    from unittest.mock import MagicMock
+
+    class _NetsMap:
+        def __init__(self):
+            self._nets = {n: net_factory() for n in net_names}
+
+        def has_key(self, name):  # SWIG map API
+            return name in self._nets
+
+        def __getitem__(self, name):
+            return self._nets[name]
+
+    board = MagicMock()
+    board.GetFileName.return_value = str(pcb_path)
+    board.GetNetInfo.return_value.NetsByName.return_value = _NetsMap()
+    return board
+
+
+def test_create_netclass_with_nets_persists_when_setclass_absent(temp_project):
+    """P1: a net object with NO SetClass (KiCad 10) must not fail the call —
+    the assignment persists to netclass_assignments instead."""
+    sys.path.insert(0, str(PYTHON_DIR))
+    from commands.routing import RoutingCommands
+
+    pro = temp_project / "channel_distributor.kicad_pro"
+    pcb = temp_project / "channel_distributor.kicad_pcb"
+
+    class _NetNoSetClass:  # mimics KiCad-10 NETINFO_ITEM: no SetClass attribute
+        pass
+
+    board = _fake_board_with_nets(pcb, ["GND"], _NetNoSetClass)
+    res = RoutingCommands(board).create_netclass(
+        {"name": "RailClass", "traceWidth": 0.6, "nets": ["GND"]}
+    )
+    assert res["success"] is True, res
+    assert res["persisted"] is True, res
+
+    data = json.loads(pro.read_text())
+    assert data["net_settings"]["netclass_assignments"]["GND"] == "RailClass"
+    by = {c["name"]: c for c in data["net_settings"]["classes"]}
+    assert by["RailClass"]["track_width"] == 0.6
+
+
+def test_create_netclass_with_nets_persists_when_setclass_raises(temp_project):
+    """P1: even a net whose SetClass *raises* must not fail the call."""
+    sys.path.insert(0, str(PYTHON_DIR))
+    from commands.routing import RoutingCommands
+
+    pro = temp_project / "channel_distributor.kicad_pro"
+    pcb = temp_project / "channel_distributor.kicad_pcb"
+
+    class _NetRaises:
+        def SetClass(self, _):
+            raise AttributeError("'NETINFO_ITEM' object has no attribute 'SetClass'")
+
+    board = _fake_board_with_nets(pcb, ["GND"], _NetRaises)
+    res = RoutingCommands(board).create_netclass(
+        {"name": "RailClass", "nets": ["GND"]}
+    )
+    assert res["success"] is True, res
+    data = json.loads(pro.read_text())
+    assert data["net_settings"]["netclass_assignments"]["GND"] == "RailClass"
+
+
+# --------------------------------------------------------------------------
 # Integration tests (real pcbnew + real command classes, via subprocess)
 # --------------------------------------------------------------------------
 #
@@ -273,6 +352,23 @@ _DRIVER = textwrap.dedent(
         assert by["RF"]["clearance"] == 0.3, by["RF"]
         assert by["RF"]["via_diameter"] == 0.7, by["RF"]
         assert {"netclass": "RF", "pattern": "*RF_*"} in data["net_settings"]["netclass_patterns"]
+
+    elif op == "create_netclass_with_nets":
+        # P1: passing `nets` must NOT throw on real KiCad-10 pcbnew (whose
+        # NETINFO_ITEM has no SetClass) and must persist netclass_assignments.
+        from commands.routing import RoutingCommands
+        name = a_net_name()
+        res = RoutingCommands(board).create_netclass({
+            "name": "Rail", "traceWidth": 0.5, "clearance": 0.25,
+            "viaDiameter": 0.8, "viaDrill": 0.4, "nets": [name],
+        })
+        assert res["success"] is True, res
+        assert res["persisted"] is True, res
+        data = json.loads(pro.read_text())
+        by = {c["name"]: c for c in data["net_settings"]["classes"]}
+        assert "Rail" in by, by.keys()
+        assert by["Rail"]["track_width"] == 0.5, by["Rail"]
+        assert data["net_settings"]["netclass_assignments"][name] == "Rail", data["net_settings"]
 
     elif op == "assign_net":
         from commands.routing import RoutingCommands
@@ -353,6 +449,12 @@ def _run_driver(tmp_path: Path, op: str) -> None:
 @requires_real_pcbnew
 def test_create_netclass_persists_to_disk(tmp_path):
     _run_driver(tmp_path, "create_netclass")
+
+
+@pytest.mark.integration
+@requires_real_pcbnew
+def test_create_netclass_with_nets_persists_to_disk(tmp_path):
+    _run_driver(tmp_path, "create_netclass_with_nets")
 
 
 @pytest.mark.integration
