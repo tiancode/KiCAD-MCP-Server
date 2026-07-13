@@ -148,3 +148,44 @@ def test_get_tracks_normalizes_layer_at_source(monkeypatch):
 
     tracks = host.get_tracks()
     assert {t["layer"] for t in tracks} == {"F.Cu", "B.Cu"}
+
+
+def test_get_tracks_and_vias_emit_bare_uuid_strings():
+    """str(track.id) on a kipy KIID proto prints 'value: "..."\\n', not the
+    uuid — get_tracks/get_vias must clean it via kiid_str so uuids round-trip
+    into uuid-keyed tools (observed live in E2E round-6 smoke)."""
+    from unittest.mock import MagicMock
+
+    from kicad_api.ipc_backend._board_tracks import _TrackMixin as BoardTracksMixin
+
+    uuid = "b67f81cb-49c9-4cbf-b929-68762acac33c"
+
+    kiid = MagicMock()
+    kiid.value = uuid
+
+    track = MagicMock()
+    track.start.x = track.start.y = track.end.x = track.end.y = 0
+    track.width = 250000
+    track.layer = 3
+    track.net = None
+    track.id = kiid
+
+    via = MagicMock()
+    via.position.x = via.position.y = 0
+    via.diameter = 600000
+    via.drill_diameter = 300000
+    via.net = None
+    via.type = 0
+    via.id = kiid
+
+    mixin = BoardTracksMixin.__new__(BoardTracksMixin)
+    board = MagicMock()
+    board.get_tracks.return_value = [track]
+    board.get_vias.return_value = [via]
+    mixin._get_board = lambda: board
+    mixin._notify = lambda *a, **k: None
+
+    tracks = mixin.get_tracks()
+    vias = mixin.get_vias()
+    assert tracks and tracks[0]["id"] == uuid
+    assert vias and vias[0]["id"] == uuid

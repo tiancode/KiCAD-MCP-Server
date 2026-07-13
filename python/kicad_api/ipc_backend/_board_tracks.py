@@ -265,7 +265,7 @@ class _TrackMixin:
         try:
             from kipy.util.units import to_mm
 
-            from ._helpers import normalize_board_layer
+            from ._helpers import kiid_str, normalize_board_layer
 
             board = self._get_board()
             tracks = board.get_tracks()
@@ -283,7 +283,9 @@ class _TrackMixin:
                             # the layer-name filter (P9).  Resolve to "F.Cu".
                             "layer": normalize_board_layer(track.layer),
                             "net": track.net.name if track.net else "",
-                            "id": str(track.id) if hasattr(track, "id") else "",
+                            # str(track.id) prints the proto repr 'value: "..."\n',
+                            # not the uuid — kiid_str round-trips into uuid tools.
+                            "id": kiid_str(track.id) if hasattr(track, "id") else "",
                         }
                     )
                 except Exception as e:
@@ -301,6 +303,8 @@ class _TrackMixin:
         try:
             from kipy.util.units import to_mm
 
+            from ._helpers import kiid_str
+
             board = self._get_board()
             vias = board.get_vias()
 
@@ -314,7 +318,7 @@ class _TrackMixin:
                             "drill": to_mm(via.drill_diameter),
                             "net": via.net.name if via.net else "",
                             "type": str(via.type),
-                            "id": str(via.id) if hasattr(via, "id") else "",
+                            "id": kiid_str(via.id) if hasattr(via, "id") else "",
                         }
                     )
                 except Exception as e:
