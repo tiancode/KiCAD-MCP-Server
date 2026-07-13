@@ -5,7 +5,14 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, makePassthrough } from "../tool-response.js";
+import {
+  CommandFunction,
+  makePassthrough,
+  toXyObject,
+  XY_POINT_FORMS,
+  xyPointSchema,
+  XyPointInput,
+} from "../tool-response.js";
 
 export function registerSchematicComponentTools(
   server: McpServer,
@@ -44,13 +51,9 @@ export function registerSchematicComponentTools(
         .string()
         .optional()
         .describe("KiCAD footprint (e.g. Resistor_SMD:R_0603_1608Metric)"),
-      position: z
-        .object({
-          x: z.number(),
-          y: z.number(),
-        })
+      position: xyPointSchema
         .optional()
-        .describe("Position on schematic"),
+        .describe(`Position on schematic in mm. ${XY_POINT_FORMS}`),
       unit: z
         .number()
         .int()
@@ -81,7 +84,7 @@ export function registerSchematicComponentTools(
       reference: string;
       value?: string;
       footprint?: string;
-      position?: { x: number; y: number };
+      position?: XyPointInput;
       unit?: number;
       placeAllUnits?: boolean;
       snapToGrid?: boolean;
@@ -92,6 +95,8 @@ export function registerSchematicComponentTools(
         ? args.symbol.split(":")
         : ["Device", args.symbol];
 
+      // Accept both {x,y} and [x,y] for position (S12).
+      const pos = args.position ? toXyObject(args.position) : undefined;
       const transformed = {
         schematicPath: args.schematicPath,
         snapToGrid: args.snapToGrid,
@@ -104,8 +109,8 @@ export function registerSchematicComponentTools(
           value: args.value,
           footprint: args.footprint ?? "",
           // Python expects flat x, y not nested position
-          x: args.position?.x ?? 0,
-          y: args.position?.y ?? 0,
+          x: pos?.x ?? 0,
+          y: pos?.y ?? 0,
           unit: args.unit ?? 1,
           placeAllUnits: args.placeAllUnits,
         },
@@ -144,6 +149,13 @@ export function registerSchematicComponentTools(
           if (result.warning) text += `\nWARNING: ${result.warning}`;
           if (result.next) text += `\nNext: ${result.next}`;
         }
+        // Page-awareness (S2/S9): surface an off-page landing so an agent
+        // aiming inside the sheet knows the symbol (or a unit) hung over the
+        // border. offPageUnits lists the multi-unit offenders when present.
+        if (result.offPageWarning) {
+          text += `\nOFF-PAGE: ${result.offPageWarning}`;
+          if (result.offPageUnits) text += ` (units ${JSON.stringify(result.offPageUnits)})`;
+        }
         // Append the raw position/snap blocks so structured consumers get them.
         text += `\n${JSON.stringify({ position: pos ?? null, snap: result.snap ?? null })}`;
         return {
@@ -168,23 +180,54 @@ export function registerSchematicComponentTools(
   server.tool(
     "delete_schematic_component",
     "Remove a placed symbol from a .kicad_sch schematic (keeps its lib_symbols definition). " +
-      "To remove a PCB footprint use delete_component instead.",
+      "Reports any wire stubs and net labels that were attached to the symbol's pins; by default " +
+      "these are LEFT behind as orphans (matching a KiCad-GUI delete). Pass removeDanglingWires=true " +
+      "to also clean them up. To remove a PCB footprint use delete_component instead.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z
         .string()
         .describe("Reference designator of the component to remove (e.g. R1, U3)"),
+      removeDanglingWires: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default false. true also removes the wire stubs and net labels attached to the " +
+            "deleted symbol's pins, so no orphans are left behind.",
+        ),
     },
-    async (args: { schematicPath: string; reference: string }) => {
+    async (args: {
+      schematicPath: string;
+      reference: string;
+      removeDanglingWires?: boolean;
+    }) => {
       const result = await callKicadScript("delete_schematic_component", args);
       if (result.success) {
+        const d = result.dangling ?? {};
+        const wireCount = d.wireCount ?? 0;
+        const labelCount = d.labelCount ?? 0;
+        let text = `Successfully removed ${args.reference} from schematic`;
+        if (wireCount || labelCount) {
+          const verb = d.removed ? "Removed" : "Left behind";
+          text += `\n${verb} ${d.removed ? (d.wiresRemoved ?? wireCount) : wireCount} attached wire stub(s) and ${
+            d.removed ? (d.labelsRemoved ?? labelCount) : labelCount
+          } net label(s).`;
+          const wireCoords = (d.wires ?? [])
+            .map((w: any) => `(${w.start.x},${w.start.y})->(${w.end.x},${w.end.y})`)
+            .join(", ");
+          if (wireCoords) text += `\n  wires: ${wireCoords}`;
+          const labelCoords = (d.labels ?? [])
+            .map((l: any) => `"${l.name}"@(${l.position.x},${l.position.y})`)
+            .join(", ");
+          if (labelCoords) text += `\n  labels: ${labelCoords}`;
+          if (!d.removed)
+            text += `\n  (pass removeDanglingWires=true to clean these up)`;
+        } else {
+          text += ` (no attached wire stubs or labels found)`;
+        }
         return {
-          content: [
-            {
-              type: "text",
-              text: `Successfully removed ${args.reference} from schematic`,
-            },
-          ],
+          content: [{ type: "text" as const, text }],
+          structuredContent: result,
         };
       }
       return {
@@ -369,9 +412,9 @@ export function registerSchematicComponentTools(
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator (e.g., R1, U1)"),
-      position: z
-        .object({ x: z.number(), y: z.number() })
-        .describe("New position in schematic mm coordinates"),
+      position: xyPointSchema.describe(
+        `New position in schematic mm coordinates. ${XY_POINT_FORMS}`,
+      ),
       preserveWires: z
         .boolean()
         .optional()
@@ -385,12 +428,16 @@ export function registerSchematicComponentTools(
     async (args: {
       schematicPath: string;
       reference: string;
-      position: { x: number; y: number };
+      position: XyPointInput;
       preserveWires?: boolean;
       snapToGrid?: boolean;
       snapGridMm?: number;
     }) => {
-      const result = await callKicadScript("move_schematic_component", args);
+      // Accept both {x,y} and [x,y] for position (S12).
+      const result = await callKicadScript("move_schematic_component", {
+        ...args,
+        position: toXyObject(args.position),
+      });
       if (result.success) {
         const moved = result.wiresMoved ?? 0;
         const removed = result.wiresRemoved ?? 0;
@@ -404,6 +451,8 @@ export function registerSchematicComponentTools(
           const req = result.snap.requested;
           text += ` [snapped to ${result.snap.gridMm} mm grid from (${req?.x}, ${req?.y})]`;
         }
+        // Page-awareness (S9): flag a move that landed off the sheet.
+        if (result.offPageWarning) text += `\nOFF-PAGE: ${result.offPageWarning}`;
         return {
           content: [{ type: "text" as const, text }],
           structuredContent: result,
@@ -424,11 +473,17 @@ export function registerSchematicComponentTools(
   // Rotate schematic component
   server.tool(
     "rotate_schematic_component",
-    "Rotate a placed symbol in the schematic.",
+    "Rotate a placed symbol in the schematic. Only orthogonal angles are valid (0, 90, 180, 270); " +
+      "any other multiple-of-90 (e.g. -90, 450) is normalized, and a non-multiple (e.g. 45) is rejected.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       reference: z.string().describe("Reference designator (e.g., R1, U1)"),
-      angle: z.number().describe("Rotation angle in degrees (0, 90, 180, 270)"),
+      angle: z
+        .number()
+        .describe(
+          "Rotation angle in degrees. Must be a multiple of 90 (0, 90, 180, 270); negatives and " +
+            "values ≥360 are normalized (e.g. -90 → 270). 45° and other non-orthogonal angles are rejected.",
+        ),
       mirror: z.enum(["x", "y"]).optional().describe("Optional mirror axis"),
     },
     async (args: {
@@ -439,11 +494,15 @@ export function registerSchematicComponentTools(
     }) => {
       const result = await callKicadScript("rotate_schematic_component", args);
       if (result.success) {
+        // result.angle is the normalized value (e.g. -90 → 270).
+        const shown = result.angle ?? args.angle;
+        const norm =
+          result.requestedAngle !== undefined ? ` (normalized from ${result.requestedAngle}°)` : "";
         return {
           content: [
             {
               type: "text",
-              text: `Rotated ${args.reference} to ${args.angle}°${args.mirror ? ` (mirrored ${args.mirror})` : ""}`,
+              text: `Rotated ${args.reference} to ${shown}°${norm}${args.mirror ? ` (mirrored ${args.mirror})` : ""}`,
             },
           ],
         };
@@ -453,6 +512,74 @@ export function registerSchematicComponentTools(
           {
             type: "text",
             text: `Failed to rotate component: ${result.message || "Unknown error"}`,
+          },
+        ],
+        isError: true,
+      };
+    },
+  );
+
+  // Duplicate a placed schematic symbol (S13)
+  server.tool(
+    "duplicate_schematic_component",
+    "Clone a placed schematic symbol — same library symbol, value, footprint, custom properties " +
+      "(MPN/LCSC/etc.), and unit structure — at an offset from the source (default {x:10,y:0} mm) or " +
+      "an explicit position. Auto-assigns the next free reference of the same prefix (R3 when R1/R2 " +
+      "exist) unless newReference is given. Returns the new reference and position.",
+    {
+      schematicPath: z.string().describe("Path to the .kicad_sch file"),
+      reference: z.string().describe("Reference of the existing symbol to clone (e.g. R1, U3)"),
+      newReference: z
+        .string()
+        .optional()
+        .describe(
+          "Reference for the clone (e.g. R7). Omit to auto-assign the next free ref of the same prefix.",
+        ),
+      offset: xyPointSchema
+        .optional()
+        .describe(
+          `Offset from the source position in mm (default {x:10, y:0}). Ignored if position is given. ${XY_POINT_FORMS}`,
+        ),
+      position: xyPointSchema
+        .optional()
+        .describe(`Explicit position in mm for the clone (overrides offset). ${XY_POINT_FORMS}`),
+    },
+    async (args: {
+      schematicPath: string;
+      reference: string;
+      newReference?: string;
+      offset?: XyPointInput;
+      position?: XyPointInput;
+    }) => {
+      // Accept both {x,y} and [x,y] for offset/position (S12).
+      const params: Record<string, unknown> = {
+        schematicPath: args.schematicPath,
+        reference: args.reference,
+      };
+      if (args.newReference !== undefined) params.newReference = args.newReference;
+      if (args.offset !== undefined) params.offset = toXyObject(args.offset);
+      if (args.position !== undefined) params.position = toXyObject(args.position);
+
+      const result = await callKicadScript("duplicate_schematic_component", params);
+      if (result.success) {
+        const p = result.position ?? {};
+        let text = `Duplicated ${args.reference} → ${result.reference} at (${p.x}, ${p.y})`;
+        if (result.copiedProperties?.length)
+          text += `\nCopied properties: ${result.copiedProperties.join(", ")}`;
+        if (result.footprint) text += `\nFootprint: ${result.footprint}`;
+        if (result.units)
+          text += `\nUnits: ${result.units.total} total, placed ${JSON.stringify(result.units.placed)}`;
+        if (result.offPageWarning) text += `\nOFF-PAGE: ${result.offPageWarning}`;
+        return {
+          content: [{ type: "text" as const, text }],
+          structuredContent: result,
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to duplicate component: ${result.message || "Unknown error"}`,
           },
         ],
         isError: true,

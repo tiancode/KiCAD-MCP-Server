@@ -1,8 +1,36 @@
+import { z } from "zod";
+
 /**
  * Signature of the server's `callKicadScript` bridge, shared by tool and
  * resource registrars (each previously declared an identical private copy).
  */
 export type CommandFunction = (command: string, params: Record<string, unknown>) => Promise<any>;
+
+/**
+ * A schematic point accepted in BOTH shapes (S12): the object `{x, y}` form
+ * that component tools use and the `[x, y]` tuple form that text/wire/label
+ * tools use. Zod validates either; the `toXy*` helpers normalize the parsed
+ * value to the single shape each Python handler already consumes, so every
+ * schematic tool accepts both forms without any backend change.
+ */
+export const xyPointSchema = z.union([
+  z.object({ x: z.number(), y: z.number() }),
+  z.array(z.number()).length(2),
+]);
+export type XyPointInput = z.infer<typeof xyPointSchema>;
+
+/** Wording appended to point descriptions so both accepted forms are documented. */
+export const XY_POINT_FORMS = "Accepts both {x, y} and [x, y].";
+
+/** Normalize an {x,y}-or-[x,y] point to the `[x, y]` tuple Python expects. */
+export function toXyTuple(p: XyPointInput): [number, number] {
+  return Array.isArray(p) ? [p[0], p[1]] : [p.x, p.y];
+}
+
+/** Normalize an {x,y}-or-[x,y] point to the `{x, y}` object Python expects. */
+export function toXyObject(p: XyPointInput): { x: number; y: number } {
+  return Array.isArray(p) ? { x: p[0], y: p[1] } : { x: p.x, y: p.y };
+}
 
 export type McpTextResult = {
   content: Array<{

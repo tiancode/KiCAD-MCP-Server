@@ -5,7 +5,15 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, formatKicadResult } from "../tool-response.js";
+import {
+  CommandFunction,
+  formatKicadResult,
+  toXyObject,
+  toXyTuple,
+  XY_POINT_FORMS,
+  xyPointSchema,
+  XyPointInput,
+} from "../tool-response.js";
 
 export function registerSchematicViewTools(server: McpServer, callKicadScript: CommandFunction) {
   // Get schematic view (rasterized image)
@@ -211,10 +219,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       text: z.string().describe("Text content to display"),
-      position: z
-        .array(z.number())
-        .length(2)
-        .describe("Position [x, y] in schematic mm coordinates"),
+      position: xyPointSchema.describe(
+        `Position in schematic mm coordinates. ${XY_POINT_FORMS}`,
+      ),
       angle: z.number().optional().describe("Rotation angle in degrees (default: 0)"),
       fontSize: z.number().optional().describe("Font size in mm (default: 1.27)"),
       bold: z.boolean().optional().describe("Bold text (default: false)"),
@@ -227,14 +234,18 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
     async (args: {
       schematicPath: string;
       text: string;
-      position: number[];
+      position: XyPointInput;
       angle?: number;
       fontSize?: number;
       bold?: boolean;
       italic?: boolean;
       justify?: "left" | "center" | "right";
     }) => {
-      const result = await callKicadScript("add_schematic_text", args);
+      // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
+      const result = await callKicadScript("add_schematic_text", {
+        ...args,
+        position: toXyTuple(args.position),
+      });
       if (result.success) {
         return {
           content: [
@@ -272,10 +283,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
       childFilename: z
         .string()
         .describe("Child filename relative to the parent's directory, e.g. 'power.kicad_sch'"),
-      position: z
-        .object({ x: z.number(), y: z.number() })
+      position: xyPointSchema
         .optional()
-        .describe("Sheet top-left position in mm (default 100, 50)"),
+        .describe(`Sheet top-left position in mm (default 100, 50). ${XY_POINT_FORMS}`),
       size: z
         .object({ width: z.number(), height: z.number() })
         .optional()
@@ -310,10 +320,18 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
         .describe("Explicit page number for the child sheet (default: smallest unused)."),
     },
     async (args) => {
+      // Accept both {x,y} and [x,y] for position (S12); normalize once.
+      const positionObj = args.position !== undefined ? toXyObject(args.position) : undefined;
       if (args.pageNumber === undefined) {
-        const { pageNumber: _pn, ...params } = args;
+        const { pageNumber: _pn, position: _pos, ...params } = args;
         void _pn;
-        return formatKicadResult(await callKicadScript("create_hierarchical_sheet", params));
+        void _pos;
+        return formatKicadResult(
+          await callKicadScript("create_hierarchical_sheet", {
+            ...params,
+            ...(positionObj !== undefined ? { position: positionObj } : {}),
+          }),
+        );
       }
       if (args.pins?.length) {
         return formatKicadResult({
@@ -322,14 +340,13 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
           hint: "Create the sheet with pageNumber first, then add pins with add_sheet_pin.",
         });
       }
-      const { schematicPath, sheetName, childFilename, position, size, createChild, pageNumber } =
-        args;
+      const { schematicPath, sheetName, childFilename, size, createChild, pageNumber } = args;
       return formatKicadResult(
         await callKicadScript("add_schematic_sheet", {
           schematicPath,
           sheetName,
           sheetFile: childFilename,
-          position: [position?.x ?? 100, position?.y ?? 50],
+          position: [positionObj?.x ?? 100, positionObj?.y ?? 50],
           ...(size ? { size: [size.width, size.height] } : {}),
           pageNumber,
           ...(createChild !== undefined ? { createSubSheet: createChild } : {}),
@@ -351,10 +368,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
       pinType: z
         .enum(["input", "output", "bidirectional"])
         .describe("Signal direction (should match the sub-sheet hierarchical label shape)"),
-      position: z
-        .array(z.number())
-        .length(2)
-        .describe("Pin position [x, y] in mm — must be on the sheet block boundary"),
+      position: xyPointSchema.describe(
+        `Pin position in mm — must be on the sheet block boundary. ${XY_POINT_FORMS}`,
+      ),
       orientation: z
         .number()
         .optional()
@@ -365,10 +381,14 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
       sheetName: string;
       pinName: string;
       pinType: "input" | "output" | "bidirectional";
-      position: number[];
+      position: XyPointInput;
       orientation?: number;
     }) => {
-      const result = await callKicadScript("add_sheet_pin", args);
+      // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
+      const result = await callKicadScript("add_sheet_pin", {
+        ...args,
+        position: toXyTuple(args.position),
+      });
       if (result.success) {
         return {
           content: [

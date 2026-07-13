@@ -70,6 +70,21 @@ class TestTsToolRegistry:
         assert "get_backend_info" in tool_names
         assert "get_backend_state" not in tool_names
 
+    def test_duplicate_schematic_component_is_registered(self):
+        """S13: the new duplicate_schematic_component tool must be registered."""
+        registrations = self._collect_registrations()
+        tool_names = {name for name, _, _ in registrations}
+        assert "duplicate_schematic_component" in tool_names
+
+    def test_schematic_point_tools_accept_both_shapes(self):
+        """S12: schematic tools that take a point must use the shared
+        xyPointSchema (which accepts BOTH {x, y} and [x, y]) rather than a
+        bare object/array, so both coordinate forms validate everywhere."""
+        schematic_dir = SRC_TOOLS_DIR / "schematic"
+        for fname in ("component.ts", "wire.ts", "view.ts"):
+            text = (schematic_dir / fname).read_text(encoding="utf-8")
+            assert "xyPointSchema" in text, f"{fname} should use xyPointSchema for points (S12)"
+
     def test_redundant_tools_stay_removed(self):
         """Tool-redundancy cleanup (2026-06; python routes removed 2026-07):
         these duplicated higher-level tools and were removed from the MCP

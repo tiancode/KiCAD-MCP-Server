@@ -370,6 +370,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "add_schematic_component": "schematic_component",
         "annotate_schematic": "schematic_component",
         "delete_schematic_component": "schematic_component",
+        "duplicate_schematic_component": "schematic_component",
         "edit_schematic_component": "schematic_component",
         "get_schematic_component": "schematic_component",
         "move_schematic_component": "schematic_component",

@@ -5,7 +5,15 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, formatKicadResult } from "../tool-response.js";
+import {
+  CommandFunction,
+  formatKicadResult,
+  toXyObject,
+  toXyTuple,
+  XY_POINT_FORMS,
+  xyPointSchema,
+  XyPointInput,
+} from "../tool-response.js";
 
 export function registerSchematicWireTools(server: McpServer, callKicadScript: CommandFunction) {
   // Draw wire between coordinate waypoints with optional pin snapping
@@ -15,9 +23,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       waypoints: z
-        .array(z.array(z.number()).length(2))
+        .array(xyPointSchema)
         .min(2)
-        .describe("Ordered list of [x, y] coordinates. Minimum 2 points."),
+        .describe(`Ordered list of points. Minimum 2. Each point ${XY_POINT_FORMS}`),
       snapToPins: z
         .boolean()
         .optional()
@@ -26,11 +34,15 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
     async (args: {
       schematicPath: string;
-      waypoints: number[][];
+      waypoints: XyPointInput[];
       snapToPins?: boolean;
       snapTolerance?: number;
     }) => {
-      const result = await callKicadScript("add_schematic_wire", args);
+      // Accept both {x,y} and [x,y] per waypoint (S12); Python expects [x,y].
+      const result = await callKicadScript("add_schematic_wire", {
+        ...args,
+        waypoints: args.waypoints.map(toXyTuple),
+      });
       if (result.success) {
         return {
           content: [
@@ -64,12 +76,10 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       netName: z.string().describe("Name of the net (e.g., VCC, GND, SIGNAL_1)"),
-      position: z
-        .array(z.number())
-        .length(2)
+      position: xyPointSchema
         .optional()
         .describe(
-          "Position [x, y] for the label. Required when componentRef/pinNumber are not given.",
+          `Position for the label. Required when componentRef/pinNumber are not given. ${XY_POINT_FORMS}`,
         ),
       componentRef: z
         .string()
@@ -99,14 +109,18 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     async (args: {
       schematicPath: string;
       netName: string;
-      position?: number[];
+      position?: XyPointInput;
       componentRef?: string;
       pinNumber?: string | number;
       labelType?: string;
       orientation?: number;
       snapTolerance?: number;
     }) => {
-      const result = await callKicadScript("add_schematic_net_label", args);
+      // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
+      const result = await callKicadScript("add_schematic_net_label", {
+        ...args,
+        ...(args.position !== undefined ? { position: toXyTuple(args.position) } : {}),
+      });
       if (result.success) {
         return formatKicadResult(result);
       } else {
@@ -131,11 +145,11 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       "Prefer componentRef + pinNumber; a raw position [x, y] (mm) must match the pin endpoint exactly.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
-      position: z
-        .array(z.number())
-        .length(2)
+      position: xyPointSchema
         .optional()
-        .describe("Position [x, y] in mm. Required when componentRef/pinNumber are not given."),
+        .describe(
+          `Position in mm. Required when componentRef/pinNumber are not given. ${XY_POINT_FORMS}`,
+        ),
       componentRef: z
         .string()
         .optional()
@@ -155,14 +169,16 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
     async (args: {
       schematicPath: string;
-      position?: number[];
+      position?: XyPointInput;
       componentRef?: string;
       pinNumber?: string | number;
       remove?: boolean;
       tolerance?: number;
     }) => {
-      const { remove, ...params } = args;
+      const { remove, position, ...rest } = args;
       const command = remove === true ? "delete_no_connect" : "add_no_connect";
+      // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
+      const params = position !== undefined ? { ...rest, position: toXyTuple(position) } : rest;
       return formatKicadResult(await callKicadScript(command, params));
     },
   );
@@ -422,21 +438,24 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     "Remove a wire from the schematic by start and end coordinates.",
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
-      start: z.object({ x: z.number(), y: z.number() }).describe("Wire start position"),
-      end: z.object({ x: z.number(), y: z.number() }).describe("Wire end position"),
+      start: xyPointSchema.describe(`Wire start position. ${XY_POINT_FORMS}`),
+      end: xyPointSchema.describe(`Wire end position. ${XY_POINT_FORMS}`),
     },
-    async (args: {
-      schematicPath: string;
-      start: { x: number; y: number };
-      end: { x: number; y: number };
-    }) => {
-      const result = await callKicadScript("delete_schematic_wire", args);
+    async (args: { schematicPath: string; start: XyPointInput; end: XyPointInput }) => {
+      // Accept both {x,y} and [x,y] for start/end (S12); Python expects {x,y}.
+      const start = toXyObject(args.start);
+      const end = toXyObject(args.end);
+      const result = await callKicadScript("delete_schematic_wire", {
+        schematicPath: args.schematicPath,
+        start,
+        end,
+      });
       if (result.success) {
         return {
           content: [
             {
               type: "text",
-              text: `Deleted wire from (${args.start.x}, ${args.start.y}) to (${args.end.x}, ${args.end.y})`,
+              text: `Deleted wire from (${start.x}, ${start.y}) to (${end.x}, ${end.y})`,
             },
           ],
         };
@@ -479,18 +498,17 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
           "edit only: new type — label=page-local, global_label=cross-page, hierarchical_label=sheet boundary. Omit to keep.",
         ),
       newName: z.string().optional().describe("edit only: new label text. Omit to keep."),
-      newPosition: z
-        .object({ x: z.number(), y: z.number() })
+      newPosition: xyPointSchema
         .optional()
-        .describe("Required for action='move': target position in mm."),
-      currentPosition: z
-        .object({ x: z.number(), y: z.number() })
+        .describe(`Required for action='move': target position in mm. ${XY_POINT_FORMS}`),
+      currentPosition: xyPointSchema
         .optional()
-        .describe("edit/move: current position, to disambiguate same-named labels."),
-      position: z
-        .object({ x: z.number(), y: z.number() })
+        .describe(
+          `edit/move: current position, to disambiguate same-named labels. ${XY_POINT_FORMS}`,
+        ),
+      position: xyPointSchema
         .optional()
-        .describe("delete: position, to disambiguate same-named labels."),
+        .describe(`delete: position, to disambiguate same-named labels. ${XY_POINT_FORMS}`),
       labelType: z
         .enum(["label", "global_label", "hierarchical_label"])
         .optional()
@@ -502,12 +520,17 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       netName: string;
       newLabelType?: "label" | "global_label" | "hierarchical_label";
       newName?: string;
-      newPosition?: { x: number; y: number };
-      currentPosition?: { x: number; y: number };
-      position?: { x: number; y: number };
+      newPosition?: XyPointInput;
+      currentPosition?: XyPointInput;
+      position?: XyPointInput;
       labelType?: "label" | "global_label" | "hierarchical_label";
     }) => {
-      const { action, ...params } = args;
+      const { action, newPosition, currentPosition, position, ...rest } = args;
+      // Accept both {x,y} and [x,y] for each point (S12); Python expects {x,y}.
+      const params: Record<string, unknown> = { ...rest };
+      if (newPosition !== undefined) params.newPosition = toXyObject(newPosition);
+      if (currentPosition !== undefined) params.currentPosition = toXyObject(currentPosition);
+      if (position !== undefined) params.position = toXyObject(position);
       return formatKicadResult(await callKicadScript(LABEL_COMMANDS[action], params));
     },
   );
@@ -520,7 +543,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     {
       schematicPath: z.string().describe("Path to the sub-sheet .kicad_sch file"),
       text: z.string().describe("Label text (e.g. 'SD_CLK')"),
-      position: z.array(z.number()).length(2).describe("Position [x, y] in mm"),
+      position: xyPointSchema.describe(`Position in mm. ${XY_POINT_FORMS}`),
       shape: z
         .enum(["input", "output", "bidirectional"])
         .describe("Signal direction from the sub-sheet's perspective"),
@@ -532,11 +555,15 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     async (args: {
       schematicPath: string;
       text: string;
-      position: number[];
+      position: XyPointInput;
       shape: "input" | "output" | "bidirectional";
       orientation?: number;
     }) => {
-      const result = await callKicadScript("add_schematic_hierarchical_label", args);
+      // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
+      const result = await callKicadScript("add_schematic_hierarchical_label", {
+        ...args,
+        position: toXyTuple(args.position),
+      });
       if (result.success) {
         return {
           content: [
