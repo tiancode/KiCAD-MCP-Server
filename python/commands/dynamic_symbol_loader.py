@@ -711,6 +711,28 @@ class DynamicSymbolLoader:
             props.append((name, m.group(2)))
         return props
 
+    def get_library_footprint(self, library_name: str, symbol_name: str) -> str:
+        """Return the library symbol's own ``Footprint`` property value, or "".
+
+        Placement inherits this when the caller passes no explicit footprint, so
+        a symbol that ships a default footprint — a native KiCad part like
+        ``Regulator_Linear:AMS1117-3.3`` (SOT-223) or an easyeda2kicad import
+        whose ``.kicad_sym`` records ``easyeda:LQFP-100`` — lands on the placed
+        instance instead of leaving an empty Footprint field that makes
+        ``sync_schematic_to_board`` skip the part.  The returned value is
+        unescaped, ready to be re-emitted through the normal escaping path.
+        Returns "" when the symbol has no Footprint property, an empty one, or
+        can't be located (placement then keeps "" exactly as before).
+        """
+        # Lazy import: keeps module load light and sidesteps any future import
+        # cycle (library_symbol never imports this module today).
+        from commands.library_symbol._manager_parsing import _unescape_sexpr_string
+
+        for name, raw_value in self._collect_library_properties(library_name, symbol_name):
+            if name == "Footprint":
+                return _unescape_sexpr_string(raw_value)
+        return ""
+
     def _build_instance_sourcing(
         self, library_name: str, symbol_name: str, x: float, y: float
     ) -> "tuple[str, str]":

@@ -158,6 +158,7 @@ EXPECTED_WIRE_MANAGER_METHODS = {
     "delete_label",
     "delete_no_connect",
     "delete_wire",
+    "delete_wires",
     "edit_label",
     "list_texts",
     "sync_junctions",

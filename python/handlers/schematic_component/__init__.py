@@ -25,6 +25,9 @@ from ._properties import (
     handle_remove_schematic_component_property,
     handle_set_schematic_component_property,
 )
+from ._duplicate import (
+    handle_duplicate_schematic_component,
+)
 from ._lib import (
     handle_refresh_schematic_lib_symbols,
 )
@@ -36,6 +39,7 @@ __all__ = [
     "handle_add_schematic_component",
     "handle_annotate_schematic",
     "handle_delete_schematic_component",
+    "handle_duplicate_schematic_component",
     "handle_edit_schematic_component",
     "handle_get_schematic_component",
     "handle_move_schematic_component",

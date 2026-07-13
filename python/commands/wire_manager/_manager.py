@@ -811,6 +811,11 @@ class WireManager:
         """
         Delete a wire from the schematic matching given start/end coordinates.
 
+        Sweeps ALL wires coincident with the given segment (either direction),
+        not just the first — so a stray pair of duplicate overlapping wires is
+        cleared in one call (S5). Use :meth:`delete_wires` when the removed
+        count is needed.
+
         Args:
             schematic_path: Path to .kicad_sch file
             start_point: [x, y] coordinates for wire start
@@ -818,7 +823,25 @@ class WireManager:
             tolerance: Maximum coordinate difference to consider a match (mm)
 
         Returns:
-            True if a wire was found and removed, False otherwise
+            True if at least one wire was found and removed, False otherwise
+        """
+        return WireManager.delete_wires(schematic_path, start_point, end_point, tolerance) > 0
+
+    @staticmethod
+    @serialize_on_path(0)
+    def delete_wires(
+        schematic_path: Path,
+        start_point: List[float],
+        end_point: List[float],
+        tolerance: float = 0.5,
+    ) -> int:
+        """
+        Delete every wire coincident with ``start_point``↔``end_point`` (matched
+        in either direction) and return how many were removed.
+
+        Deleting all coincident matches — rather than the first only — clears the
+        duplicate overlapping wires a buggy connect once left behind (S5), which
+        the previous one-per-call delete could only half-remove.
         """
         try:
             with open(schematic_path, "r", encoding="utf-8") as f:
@@ -829,6 +852,7 @@ class WireManager:
             sx, sy = start_point
             ex, ey = end_point
 
+            matched_indices: List[int] = []
             for i, item in enumerate(sch_data):
                 if not (isinstance(item, list) and len(item) > 0 and item[0] == _SYM_WIRE):
                     continue
@@ -868,15 +892,23 @@ class WireManager:
                 )
 
                 if match_fwd or match_rev:
-                    del sch_data[i]
-                    WireManager.sync_junctions(sch_data)
-                    output = _serialize_validated(sch_data)
-                    atomic_write_text(schematic_path, output)
-                    logger.info(f"Deleted wire from {start_point} to {end_point}")
-                    return True
+                    matched_indices.append(i)
 
-            logger.warning(f"No matching wire found for {start_point} to {end_point}")
-            return False
+            if not matched_indices:
+                logger.warning(f"No matching wire found for {start_point} to {end_point}")
+                return 0
+
+            for i in reversed(matched_indices):
+                del sch_data[i]
+            WireManager.sync_junctions(sch_data)
+            output = _serialize_validated(sch_data)
+            atomic_write_text(schematic_path, output)
+            n = len(matched_indices)
+            logger.info(
+                f"Deleted {n} wire(s) from {start_point} to {end_point}"
+                + (" (swept coincident duplicates)" if n > 1 else "")
+            )
+            return n
 
         except (OSError, ValueError, AttributeError, KeyError, IndexError) as e:
 
@@ -889,7 +921,7 @@ class WireManager:
             # pattern reached for, but in one call.
 
             logger.exception(f"Error deleting wire: {e}")
-            return False
+            return 0
 
     @staticmethod
     @serialize_on_path(0)

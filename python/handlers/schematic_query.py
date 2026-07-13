@@ -410,6 +410,7 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
             _build_adjacency,
             _discover_sub_sheets,
             _load_sexp,
+            _parse_junctions_sexp,
             _parse_labels_sexp,
             _parse_virtual_connections,
             _parse_wires,
@@ -460,10 +461,16 @@ def handle_list_schematic_nets(iface: "KiCADInterface", params: Dict[str, Any]) 
                 except Exception as e:
                     logger.warning(f"Error reading sub-sheet {sub_path}: {e}")
 
-        # Pre-build shared wire graph structures for efficiency
+        # Pre-build shared wire graph structures for efficiency. Junction-aware
+        # so count_pins_on_net agrees with get_connections_for_net (a bare
+        # mid-span wire touch without a junction dot is not a real net, per KiCad).
         all_wires = _parse_wires(schematic)
         if all_wires:
-            adjacency, iu_to_wires = _build_adjacency(all_wires)
+            try:
+                junctions = _parse_junctions_sexp(_load_sexp(schematic_path))
+            except Exception:
+                junctions = None
+            adjacency, iu_to_wires = _build_adjacency(all_wires, junctions)
         else:
             adjacency, iu_to_wires = [], {}
         point_to_label, label_to_points = _parse_virtual_connections(schematic, schematic_path)

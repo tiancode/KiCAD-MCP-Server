@@ -17,6 +17,7 @@ logger = logging.getLogger("kicad_interface")
 from ._parsing import (
     _IU_PER_MM,
     _load_sexp,
+    _parse_junctions_sexp,
     _parse_symbol_instances_sexp,
     _parse_virtual_connections,
     _parse_wires_sexp,
@@ -27,6 +28,7 @@ from ._parsing import (
 
 def _build_adjacency(
     all_wires: List[List[Tuple[int, int]]],
+    junctions: Optional[Set[Tuple[int, int]]] = None,
 ) -> Tuple[List[Set[int]], Dict[Tuple[int, int], Set[int]]]:
     """Build wire adjacency using exact IU coordinate matching.
 
@@ -34,7 +36,15 @@ def _build_adjacency(
     junctions since all wires meeting at the same point get connected.
 
     Also detects T-junctions where a wire endpoint falls on the interior of
-    another wire segment (common when KiCad doesn't split the longer wire).
+    another wire segment.  In KiCad such a mid-span touch is only an electrical
+    connection when a junction dot is placed at that point; a bare touch leaves
+    the two wires on separate nets (verified against kicad-cli's netlister).
+    Pass ``junctions`` (the set of junction-dot IU positions, e.g. from
+    :func:`_parse_junctions_sexp`) to honour that rule — a T is then bridged
+    only when a junction sits on it.  When ``junctions`` is ``None`` the
+    historical permissive behaviour is kept (every mid-span touch bridges), so
+    callers that cannot read junction data (mock schematics, direct unit tests)
+    are unaffected.
 
     Returns a tuple of:
       - adjacency: list of sets, one per wire, containing adjacent wire indices
@@ -49,7 +59,9 @@ def _build_adjacency(
 
     # Detect T-junctions: a wire endpoint landing on the interior of another
     # wire segment.  When found, register the endpoint against that segment's
-    # wire index so adjacency is established through the shared point.
+    # wire index so adjacency is established through the shared point — but only
+    # when a junction dot actually sits there (KiCad does not auto-connect a
+    # bare mid-span touch). Without junction info, keep the old permissive rule.
     all_endpoints = list(iu_to_wires.keys())
     for i, pts in enumerate(all_wires):
         if len(pts) < 2:
@@ -60,6 +72,8 @@ def _build_adjacency(
             if ep == (ax, ay) or ep == (bx, by):
                 continue
             if _point_on_segment(ep[0], ep[1], ax, ay, bx, by):
+                if junctions is not None and ep not in junctions:
+                    continue
                 iu_to_wires[ep].add(i)
 
     # Wires that share an IU endpoint (including T-junction points) are adjacent
@@ -294,7 +308,7 @@ def _build_sheet_context(
     adjacency: List[Set[int]] = []
     iu_to_wires: Dict[Tuple[int, int], Set[int]] = {}
     if all_wires:
-        adjacency, iu_to_wires = _build_adjacency(all_wires)
+        adjacency, iu_to_wires = _build_adjacency(all_wires, _parse_junctions_sexp(sexp))
 
     point_to_label, label_to_points = _parse_virtual_connections(
         schematic, schematic_path, sexp=sexp

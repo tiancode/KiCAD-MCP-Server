@@ -758,6 +758,10 @@ class PinLocator:
 
         lib_id = info.get("lib_id")
         pins = self.get_symbol_pins(schematic_path, lib_id) if lib_id else {}
+        # Valid pin numbers/names carried on every "not_found" diagnosis so
+        # callers can tell the user which pins DO exist (S10).
+        valid_pins = list(pins.keys())
+        valid_pin_names = [str(d.get("name", "")) for d in pins.values()]
         pin_key = str(pin_number)
         if pin_key not in pins:
             matched = next(
@@ -765,7 +769,12 @@ class PinLocator:
                 None,
             )
             if matched is None:
-                return {"reason": "not_found", **info}
+                return {
+                    "reason": "not_found",
+                    "valid_pins": valid_pins,
+                    "valid_pin_names": valid_pin_names,
+                    **info,
+                }
             pin_key = matched
 
         pin_unit = pins[pin_key].get("unit")
@@ -776,7 +785,13 @@ class PinLocator:
                 "resolved_pin": pin_key,
                 **info,
             }
-        return {"reason": "not_found", "resolved_pin": pin_key, **info}
+        return {
+            "reason": "not_found",
+            "resolved_pin": pin_key,
+            "valid_pins": valid_pins,
+            "valid_pin_names": valid_pin_names,
+            **info,
+        }
 
     @staticmethod
     def format_unplaced_unit_error(symbol_reference: str, diag: Dict[str, Any]) -> str:
@@ -794,6 +809,45 @@ class PinLocator:
             f'reference="{symbol_reference}", unit={unit})  '
             f"(unplaced unit(s): {unplaced}). Then retry this call."
         )
+
+    @staticmethod
+    def format_missing_pin_error(
+        symbol_reference: str, pin_name: str, diag: Dict[str, Any]
+    ) -> str:
+        """Build a user-facing message that distinguishes a MISSING COMPONENT
+        from a missing PIN (S10).
+
+        ``diag`` is the output of :meth:`diagnose_missing_pin`. Callers should
+        handle ``reason == "unplaced_unit"`` separately (via
+        :meth:`format_unplaced_unit_error`) before calling this; it is covered
+        here only as a fallback.
+        """
+        reason = diag.get("reason")
+        if reason == "no_symbol":
+            return (
+                f"Component {symbol_reference} not found in schematic "
+                f"(no placed symbol has that reference)."
+            )
+        if reason == "not_found":
+            hint = ""
+            nums = [str(n) for n in (diag.get("valid_pins") or []) if str(n) != ""]
+            names = [
+                n for n in (diag.get("valid_pin_names") or []) if n and n not in ("~", "")
+            ]
+            if nums:
+                shown = ", ".join(nums[:12])
+                more = "" if len(nums) <= 12 else f", … (+{len(nums) - 12} more)"
+                hint += f" Valid pin numbers: {shown}{more}."
+            if names:
+                uniq = list(dict.fromkeys(names))
+                shown_n = ", ".join(uniq[:8])
+                hint += f" Pin names: {shown_n}{'' if len(uniq) <= 8 else ', …'}."
+            return (
+                f"Component {symbol_reference} exists but has no pin '{pin_name}'.{hint}"
+            )
+        if reason == "unplaced_unit":
+            return PinLocator.format_unplaced_unit_error(symbol_reference, diag)
+        return f"Could not locate pin {pin_name} on {symbol_reference}."
 
 
 if __name__ == "__main__":

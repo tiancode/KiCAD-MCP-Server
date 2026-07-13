@@ -310,10 +310,25 @@ def handle_export_schematic_pdf(iface: "KiCADInterface", params: Dict[str, Any])
                 "message": f"Schematic not found: {schematic_path}",
             }
 
+        # Resolve kicad-cli through the shared bundle resolver (PATH first, then
+        # platform fallbacks — e.g. KiCad.app/Contents/MacOS on macOS, where
+        # kicad-cli is never on PATH). run_erc / get_schematic_view resolve the
+        # same way; hardcoding "kicad-cli" here made PDF export fail on macOS
+        # even though the binary was installed inside the app bundle.
+        kicad_cli = iface._find_kicad_cli_static()
+        if not kicad_cli:
+            return {
+                "success": False,
+                "message": (
+                    "kicad-cli not found. Install KiCAD 8.0+ or add kicad-cli to "
+                    "PATH (on macOS it lives in KiCad.app/Contents/MacOS)."
+                ),
+            }
+
         import subprocess
 
         cmd = [
-            "kicad-cli",
+            kicad_cli,
             "sch",
             "export",
             "pdf",
@@ -336,7 +351,13 @@ def handle_export_schematic_pdf(iface: "KiCADInterface", params: Dict[str, Any])
             }
 
     except FileNotFoundError:
-        return {"success": False, "message": "kicad-cli not found in PATH"}
+        return {
+            "success": False,
+            "message": (
+                "kicad-cli not found. Install KiCAD 8.0+ or add kicad-cli to "
+                "PATH (on macOS it lives in KiCad.app/Contents/MacOS)."
+            ),
+        }
     except Exception as e:
         logger.error(f"Error exporting schematic to PDF: {str(e)}")
         return {"success": False, "message": str(e)}

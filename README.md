@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 127 tools with JSON Schema validation, each registered directly as an MCP tool
+- 129 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 34 tools, hierarchical sheets, and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -24,7 +24,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ## Available Tools
 
-The server provides 127 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
+The server provides 129 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
 
 ### Project Management (5 tools)
 
@@ -92,11 +92,12 @@ The server provides 127 tools, each registered directly as an MCP tool -- just a
 - `delete_shape` - Delete graphic shape(s) by id/ids (from list_shapes) or by layer/kind/boundingBox filters
 - `edit_shape` - Edit one graphic shape (by id from list_shapes): move it by dx/dy, change layer, stroke width, or fill
 
-### Schematic (34 tools)
+### Schematic (35 tools)
 
 - `create_schematic` - Create a new schematic
 - `add_schematic_component` - Add a component to the schematic
-- `delete_schematic_component` - Remove a component from the schematic
+- `delete_schematic_component` - Remove a component from the schematic (reports/optionally removes dangling wire stubs and net labels)
+- `duplicate_schematic_component` - Clone a placed symbol (same lib symbol, value, footprint, custom properties, unit structure) at an offset or explicit position, auto-assigning the next free reference
 - `edit_schematic_component` - Update a placed schematic symbol in place: footprint, value, reference, field positions, custom properties (add and remove)
 - `get_schematic_component` - Get a component's position plus every field's value and label position (built-in and custom)
 - `move_schematic_component` - Move a placed symbol
@@ -144,7 +145,7 @@ The server provides 127 tools, each registered directly as an MCP tool -- just a
 - `export_netlist` - Export the schematic netlist to a file via kicad-cli
 - `export_position_file` - Export a component placement (pick-and-place) file for PCB assembly
 
-### Libraries (footprints and symbols) (7 tools)
+### Libraries (footprints and symbols) (8 tools)
 
 - `list_libraries` - List the names of all installed footprint or symbol libraries (type=footprint|symbol)
 - `search_library_parts` - Search footprints or symbols across all installed libraries (type=footprint|symbol)
@@ -153,6 +154,7 @@ The server provides 127 tools, each registered directly as an MCP tool -- just a
 - `register_library` - Register a .pretty footprint library or .kicad_sym symbol library in KiCAD's lib-table
 - `refresh_symbol_libraries` - Force-rebuild the symbol library index from sym-lib-table on disk
 - `refresh_schematic_lib_symbols` - Re-inject every embedded lib_symbols entry in a .kicad_sch from the on-disk .kicad_sym libraries
+- `set_symbol_pin_types` - Rewrite pin electrical types on an existing symbol (clears imported symbols' unclearable "Unspecified pin connected" ERC warnings); edits the .kicad_sym source (symbolId/libraryPath) or a schematic's embedded lib_symbols copy (schematicPath+reference)
 
 ### Footprint and Symbol Creators (6 tools)
 
@@ -894,7 +896,7 @@ How many Basic parts are available?
 
 - **JSON-RPC 2.0 Transport:** Bi-directional communication via STDIO
 - **Protocol Version:** MCP 2025-06-18
-- **Capabilities:** Tools (127), Resources (8)
+- **Capabilities:** Tools (129), Resources (8)
 - **Error Handling:** Standard JSON-RPC error codes
 
 ### TypeScript Server (`src/`)
@@ -1034,7 +1036,7 @@ npm run format
 
 **Current Version:** 2.2.3
 
-**Working Features (127 tools):**
+**Working Features (129 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)

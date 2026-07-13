@@ -13,8 +13,12 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
     "create_project",
     "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips. Refuses (errorCode PROJECT_EXISTS) if project files already exist unless overwrite=true.",
     {
-      path: z.string().describe("Project directory path"),
-      name: z.string().describe("Project name"),
+      path: z
+        .string()
+        .describe(
+          "Directory in which to create <name>.kicad_pro (NOT the .kicad_pro file itself). If a .kicad_pro file path is passed, it is split into directory + name; a name that disagrees with the filename errors PROJECT_NAME_CONFLICT.",
+        ),
+      name: z.string().describe("Project name (without extension), used as the <name>.kicad_pro basename"),
       autoLaunch: z
         .boolean()
         .optional()
@@ -30,9 +34,18 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Open project tool
   server.tool(
     "open_project",
-    "Open an existing KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips.",
+    "Open an existing KiCAD project. Accepts `filename` or `path` (interchangeable): a .kicad_pro/.kicad_pcb file, or a directory containing exactly one .kicad_pro (errors NO_PROJECT_IN_DIR / AMBIGUOUS_PROJECT otherwise). Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips.",
     {
-      filename: z.string().describe("Path to .kicad_pro or .kicad_pcb file"),
+      filename: z
+        .string()
+        .optional()
+        .describe("Path to a .kicad_pro or .kicad_pcb file (alias of `path`)"),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          "Project location: a .kicad_pro/.kicad_pcb file, or the directory containing exactly one .kicad_pro. Provide either this or `filename`.",
+        ),
       autoLaunch: z
         .boolean()
         .optional()
@@ -44,9 +57,18 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Save project tool
   server.tool(
     "save_project",
-    "Save the current KiCAD project",
+    "Save the currently-loaded KiCAD project (the last one created/opened). The response states which project path was saved (savedPath / project.path).",
     {
-      path: z.string().optional().describe("Optional new path to save to"),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          "Optional save-as target (a .kicad_pro or .kicad_pcb file). Omit to save the current project in place.",
+        ),
+      filename: z
+        .string()
+        .optional()
+        .describe("Alias of `path` (legacy) — optional save-as target"),
     },
     passthrough("save_project"),
   );
