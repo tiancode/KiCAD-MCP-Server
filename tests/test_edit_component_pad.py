@@ -394,19 +394,23 @@ _INTEGRATION_SCRIPT = textwrap.dedent("""
 def test_bt1_repair_against_real_pcbnew(tmp_path):
     """End-to-end on real pcbnew: build the BT1 defect on a scratch board,
     repair it with edit_component_pad, verify persistence across reload."""
+    # Use the interpreter running the suite (sys.executable) — under the
+    # project venv this has the real pcbnew, whereas a bare `python3` on PATH
+    # usually does not.  Falls back to skipping when pcbnew can't be imported
+    # (e.g. CI without KiCad), keeping the suite green everywhere.
     probe = subprocess.run(
-        ["python3", "-c", "import pcbnew"],
+        [sys.executable, "-c", "import pcbnew; assert isinstance(pcbnew.BOARD, type)"],
         capture_output=True,
         timeout=120,
     )
     if probe.returncode != 0:
-        pytest.skip("system python3 cannot import real pcbnew")
+        pytest.skip("real pcbnew not importable by sys.executable")
 
     script = tmp_path / "driver.py"
     script.write_text(_INTEGRATION_SCRIPT, encoding="utf-8")
     board_path = tmp_path / "bt1_scratch.kicad_pcb"
     result = subprocess.run(
-        ["python3", str(script), str(board_path), str(PYTHON_DIR)],
+        [sys.executable, str(script), str(board_path), str(PYTHON_DIR)],
         capture_output=True,
         text=True,
         timeout=300,
