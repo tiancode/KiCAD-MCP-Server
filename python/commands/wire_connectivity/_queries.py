@@ -15,6 +15,7 @@ logger = logging.getLogger("kicad_interface")
 from ._parsing import (
     _IU_PER_MM,
     _load_sexp,
+    _parse_junctions_sexp,
     _parse_labels_sexp,
     _parse_virtual_connections,
     _parse_wires,
@@ -29,6 +30,21 @@ from ._traversal import (
     _find_pins_on_net,
     _process_single_sheet,
 )
+
+
+def _safe_junctions(schematic_path: Any) -> Optional[Set[Tuple[int, int]]]:
+    """Junction-dot IU positions for a schematic file, or ``None`` if unreadable.
+
+    Returning ``None`` (not an empty set) on failure keeps ``_build_adjacency``
+    in its permissive mode for mock schematics whose path is not a real file,
+    preserving legacy behaviour for those callers. A real file with no junctions
+    yields an empty set, which correctly gates off every bare mid-span wire touch.
+    """
+    try:
+        return _parse_junctions_sexp(_load_sexp(schematic_path))
+    except Exception as e:  # defensive: mock schematics / unreadable files
+        logger.debug(f"Could not parse junctions from {schematic_path}: {e}")
+        return None
 
 
 def get_wire_connections(
@@ -82,7 +98,7 @@ def get_wire_connections(
     visited: Optional[Set[int]] = None
     net_points: Optional[Set[Tuple[int, int]]] = None
     if all_wires:
-        adjacency, iu_to_wires = _build_adjacency(all_wires)
+        adjacency, iu_to_wires = _build_adjacency(all_wires, _safe_junctions(schematic_path))
         visited, net_points = _find_connected_wires(
             x_mm,
             y_mm,
@@ -259,7 +275,7 @@ def list_floating_labels(schematic: Any, schematic_path: str) -> List[Dict[str, 
     """
     all_wires = _parse_wires(schematic)
     if all_wires:
-        adjacency, iu_to_wires = _build_adjacency(all_wires)
+        adjacency, iu_to_wires = _build_adjacency(all_wires, _safe_junctions(schematic_path))
     else:
         adjacency = []
         iu_to_wires = {}
@@ -358,7 +374,7 @@ def get_net_at_point(
     # Check if query point is on a wire endpoint
     all_wires = _parse_wires(schematic) if hasattr(schematic, "wire") else []
     if all_wires:
-        adjacency, iu_to_wires = _build_adjacency(all_wires)
+        adjacency, iu_to_wires = _build_adjacency(all_wires, _safe_junctions(schematic_path))
         if query_iu in iu_to_wires:
             # Found a wire endpoint — trace the net to get the name
             visited, net_points = _find_connected_wires(
@@ -558,7 +574,8 @@ def resolve_power_flags(schematic: Any, schematic_path: str) -> List[Dict[str, A
     )
     all_wires = _parse_wires(schematic)
     if all_wires:
-        adjacency, iu_to_wires = _build_adjacency(all_wires)
+        junctions = _parse_junctions_sexp(sexp) if sexp is not None else None
+        adjacency, iu_to_wires = _build_adjacency(all_wires, junctions)
     else:
         adjacency, iu_to_wires = [], {}
 

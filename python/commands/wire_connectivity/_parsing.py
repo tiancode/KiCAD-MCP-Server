@@ -5,7 +5,7 @@ Split out of the former monolithic commands/wire_connectivity.py.
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import sexpdata
 from commands.pin_locator import PinLocator
@@ -86,6 +86,26 @@ def _parse_wires(schematic: Any) -> List[List[Tuple[int, int]]]:
             if len(pts) >= 2:
                 all_wires.append(pts)
     return all_wires
+
+
+def _parse_junctions_sexp(sexp: list) -> Set[Tuple[int, int]]:
+    """Extract junction-dot positions from raw sexpdata as IU tuples.
+
+    Parses ``(junction (at X Y) ...)`` elements. Junctions are what make a
+    mid-span wire touch (a "T", where one wire's endpoint lands on another
+    wire's interior) an actual electrical connection in KiCad — without a
+    junction there, KiCad keeps the two wires on separate nets.  ``_build_adjacency``
+    uses this set to avoid fabricating T-junction connections KiCad never makes.
+    """
+    junctions: Set[Tuple[int, int]] = set()
+    for item in sexp:
+        if not isinstance(item, list) or not item or item[0] != Symbol("junction"):
+            continue
+        for sub in item:
+            if isinstance(sub, list) and sub and sub[0] == Symbol("at") and len(sub) >= 3:
+                junctions.add(_to_iu(float(sub[1]), float(sub[2])))
+                break
+    return junctions
 
 
 def _parse_labels_sexp(
