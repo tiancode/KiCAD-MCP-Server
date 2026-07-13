@@ -16,6 +16,7 @@ intended pins. If they disagree, the netlist swaps them, exposing the bug.
 Skips if kicad-cli or the system Device library aren't available.
 """
 
+import glob
 import os
 import shutil
 import subprocess
@@ -33,14 +34,37 @@ from commands.component_schematic import ComponentManager  # noqa: E402
 from commands.pin_locator import PinLocator  # noqa: E402
 from commands.schematic import SchematicManager  # noqa: E402
 from commands.wire_dragger import WireDragger  # noqa: E402
+from utils.kicad_cli import find_kicad_cli  # noqa: E402
+from utils.platform_helper import PlatformHelper  # noqa: E402
 
-_KICAD_CLI = shutil.which("kicad-cli")
-_DEVICE_LIB = Path("/usr/share/kicad/symbols/Device.kicad_sym")
+
+def _discover_symbol_dir():
+    """Directory holding the stock ``.kicad_sym`` libraries, cross-platform.
+
+    Reuses the same search patterns production uses (``PlatformHelper``) rather
+    than hardcoding the Linux ``/usr/share/kicad/symbols`` path, so it resolves
+    the macOS bundled libraries (``KiCad.app/.../SharedSupport/symbols``) and
+    Windows installs too.  Returns ``None`` when no stock libraries are found."""
+    for pattern in PlatformHelper.get_kicad_library_search_paths():
+        hits = glob.glob(pattern)
+        if hits:
+            return Path(hits[0]).parent
+    return None
+
+
+# kicad-cli discovery mirrors production (PATH first, then platform fallbacks
+# incl. the macOS app bundle where kicad-cli is never on PATH by default).
+_KICAD_CLI = find_kicad_cli()
+_SYMBOL_DIR = _discover_symbol_dir()
+_DEVICE_LIB = (_SYMBOL_DIR / "Device.kicad_sym") if _SYMBOL_DIR else None
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(_KICAD_CLI is None, reason="kicad-cli not on PATH"),
-    pytest.mark.skipif(not _DEVICE_LIB.exists(), reason="Device lib not installed"),
+    pytest.mark.skipif(_KICAD_CLI is None, reason="kicad-cli not found"),
+    pytest.mark.skipif(
+        _DEVICE_LIB is None or not _DEVICE_LIB.exists(),
+        reason="stock Device symbol library not found",
+    ),
 ]
 
 
@@ -153,7 +177,7 @@ def _build_mirror_case(tmp: Path, axis: str) -> tuple[Path, dict]:
 
 def _run_netlist(sch_path: Path) -> dict:
     out = sch_path.with_suffix(".net")
-    env = {**os.environ, "KICAD_SYMBOL_DIR": "/usr/share/kicad/symbols"}
+    env = {**os.environ, "KICAD_SYMBOL_DIR": str(_SYMBOL_DIR)}
     subprocess.run(
         [
             _KICAD_CLI,

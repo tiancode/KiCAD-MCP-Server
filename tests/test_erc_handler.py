@@ -699,13 +699,14 @@ def test_run_erc_real_kicad_cli_forces_english(tmp_path):
     the fix is only observable against a localized config.
     """
     import re as _re
-    import shutil as _shutil
 
     import utils.kicad_cli as kc
 
-    cli = _shutil.which("kicad-cli")
+    # Discover kicad-cli the way production does (PATH first, then platform
+    # fallbacks incl. the macOS app bundle where it is never on PATH).
+    cli = kc.find_kicad_cli()
     if not cli:
-        pytest.skip("kicad-cli not on PATH")
+        pytest.skip("kicad-cli not found")
     disc = kc._discover_real_config()
     if disc is None:
         pytest.skip("no real KiCad config found on this machine")

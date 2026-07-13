@@ -289,8 +289,29 @@ def test_connect_to_net_floating_power_no_anchor_falls_back_to_stub(tmp_path: Pa
 # 3. Real kicad-cli ERC integration test
 # ===========================================================================
 
-_KICAD_CLI = shutil.which("kicad-cli")
-_STOCK_SYMBOLS = Path("/usr/share/kicad/symbols")
+def _discover_symbol_dir() -> Path | None:
+    """Directory holding the stock ``.kicad_sym`` libraries, cross-platform.
+
+    Reuses production's ``PlatformHelper`` search patterns instead of hardcoding
+    the Linux ``/usr/share/kicad/symbols`` path, so it resolves the macOS bundled
+    libraries (``KiCad.app/.../SharedSupport/symbols``) and Windows installs too."""
+    import glob
+
+    from utils.platform_helper import PlatformHelper
+
+    for pattern in PlatformHelper.get_kicad_library_search_paths():
+        hits = glob.glob(pattern)
+        if hits:
+            return Path(hits[0]).parent
+    return None
+
+
+from utils.kicad_cli import find_kicad_cli  # noqa: E402
+
+# kicad-cli discovery mirrors production (PATH first, then platform fallbacks
+# incl. the macOS app bundle where kicad-cli is never on PATH by default).
+_KICAD_CLI = find_kicad_cli()
+_STOCK_SYMBOLS = _discover_symbol_dir() or Path("/nonexistent")
 
 
 def _run_erc(sch: Path):

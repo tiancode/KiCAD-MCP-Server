@@ -19,7 +19,27 @@ FIXTURE = Path(__file__).parent / "fixtures" / "Simulation_SPICE_minimal.kicad_s
 ESCAPED_FIXTURE = Path(__file__).parent / "fixtures" / "escaped_quotes.kicad_sym"
 UNBALANCED_FIXTURE = Path(__file__).parent / "fixtures" / "unbalanced_parens.kicad_sym"
 LCSC_FIXTURE = Path(__file__).parent / "fixtures" / "lcsc_part.kicad_sym"
-SPICE_LIB = Path("/usr/share/kicad/symbols/Simulation_SPICE.kicad_sym")
+
+
+def _discover_stock_lib(filename: str):
+    """Locate a stock ``.kicad_sym`` library cross-platform.
+
+    Reuses production's ``PlatformHelper`` search patterns instead of hardcoding
+    the Linux ``/usr/share/kicad/symbols`` path, so it resolves the macOS bundled
+    libraries (``KiCad.app/.../SharedSupport/symbols``) and Windows installs too.
+    Returns the first matching path (may or may not exist)."""
+    import glob
+
+    from utils.platform_helper import PlatformHelper
+
+    for pattern in PlatformHelper.get_kicad_library_search_paths():
+        for hit in glob.glob(pattern):
+            if Path(hit).name == filename:
+                return Path(hit)
+    return Path("/nonexistent") / filename
+
+
+SPICE_LIB = _discover_stock_lib("Simulation_SPICE.kicad_sym")
 
 
 def _manager_for_fixture() -> SymbolLibraryManager:
