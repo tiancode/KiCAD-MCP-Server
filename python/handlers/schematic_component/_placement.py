@@ -546,6 +546,26 @@ def handle_add_schematic_component(
 
         loader = DynamicSymbolLoader(project_path=derived_project_path)
 
+        # Footprint inheritance (S14): an omitted / empty footprint arg falls
+        # back to the library symbol's own Footprint property, so ICs placed
+        # from native KiCad libraries (AMS1117-3.3 → SOT-223) or easyeda2kicad
+        # imports (which record the footprint in their .kicad_sym) carry a
+        # footprint that sync_schematic_to_board can place — instead of the
+        # empty field that made it silently skip every IC.  An explicit
+        # non-empty arg always wins; when neither exists the field stays "" and
+        # the response says so.
+        if footprint:
+            footprint_source = "explicit"
+        else:
+            footprint_source = "none"
+            try:
+                inherited = loader.get_library_footprint(library, comp_type)
+            except Exception:  # a library read must never block placement
+                inherited = ""
+            if inherited:
+                footprint = inherited
+                footprint_source = "library"
+
         def _place(unit_n: int, ux: float, uy: float) -> None:
             loader.add_component(
                 schematic_file,
@@ -594,7 +614,18 @@ def handle_add_schematic_component(
             "component_reference": reference,
             "symbol_source": lib_id,
             "position": {"x": x, "y": y},
+            "footprint": footprint,
+            "footprintSource": footprint_source,
         }
+        if footprint_source == "none":
+            # No footprint anywhere: surface it so the agent knows
+            # sync_schematic_to_board will skip this symbol until one is set.
+            response["footprintNote"] = (
+                f"No footprint set for {reference} ({lib_id}): neither an explicit "
+                f"footprint argument nor a library default was available. "
+                f"sync_schematic_to_board will skip this symbol until you assign one "
+                f"(edit_schematic_component footprint=...)."
+            )
         if snapped:
             # Tell the caller their coordinates moved — silent snap would
             # be surprising when an agent tries to land at exactly

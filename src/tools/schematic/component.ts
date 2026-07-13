@@ -122,6 +122,16 @@ export function registerSchematicComponentTools(
           const req = result.snap.requested;
           text += ` [snapped to ${result.snap.gridMm} mm grid from (${req?.x}, ${req?.y})]`;
         }
+        // Footprint (S14): report the footprint the symbol landed with — an
+        // inherited library default is easy to miss, and "no footprint set"
+        // matters because sync_schematic_to_board skips footprint-less symbols.
+        if (result.footprint) {
+          text += `\nFootprint: ${result.footprint}${
+            result.footprintSource === "library" ? " (inherited from library symbol)" : ""
+          }`;
+        } else if (result.footprintNote) {
+          text += `\n${result.footprintNote}`;
+        }
         // Multi-unit symbols (F1): surface the unit situation so the agent
         // never assumes one placement covered the whole part. Pins on an
         // unplaced unit have no location and can't be labeled/connected.
