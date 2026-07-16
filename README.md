@@ -10,7 +10,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 **Key Capabilities:**
 
-- 129 tools with JSON Schema validation, each registered directly as an MCP tool
+- 132 tools with JSON Schema validation, each registered directly as an MCP tool
 - 8 dynamic resources exposing project state
 - Complete schematic workflow with 34 tools, hierarchical sheets, and dynamic symbol loading (~10,000 symbols)
 - Freerouting autorouter integration (Java, Docker, or Podman)
@@ -24,7 +24,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ## Available Tools
 
-The server provides 129 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
+The server provides 132 tools, each registered directly as an MCP tool -- just ask Claude what you want to accomplish. The authoritative source is the `server.tool(...)` registrations in `src/tools/`; the list below is generated from those registrations.
 
 ### Project Management (5 tools)
 
@@ -32,7 +32,7 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 - `open_project` - Open an existing KiCAD project
 - `save_project` - Save the current KiCAD project
 - `get_project_info` - Get information about the current KiCAD project
-- `snapshot_project` - Save a named checkpoint snapshot of the project (renders board to PDF, records step label)
+- `snapshot_project` - Save a named checkpoint snapshot of the project (renders board to PDF when possible, records step label)
 
 ### Board Operations (12 tools)
 
@@ -49,20 +49,23 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 - `board_origin` - Read or move the board's grid or drill/place origin (IPC-only); pass position to write
 - `title_block` - Read or partial-update the board's title block (title, date, revision, company, comment slots; IPC-only)
 
-### Component Management (15 tools)
+### Component Management (18 tools)
 
 - `place_component` - Add a NEW footprint instance to the PCB
-- `move_component` - Move a PCB component to a new position
+- `move_component` - Move a PCB component to a new position (refuses off-board targets unless allowOffBoard; response reports the flip/rotation actually applied, in mm)
 - `rotate_component` - Rotate a PCB component to an absolute angle in degrees
 - `delete_component` - Remove a component from the PCB by its reference designator
 - `edit_component` - Edit properties of an existing PCB component (reference, value, footprint)
 - `find_component` - Search for a PCB component by reference designator or value and return its position and properties
 - `get_component_properties` - Return all properties of a PCB component (position, rotation, layer, value, footprint)
 - `get_component_pads` - Return pads of a PCB component with exact positions, nets and sizes (pass pad for a single one)
+- `add_component_annotation` - Add a text annotation/comment near a component on a silkscreen/comments layer
+- `group_components` - Group components into a named PCB group (refuses unknown refs; moves members already grouped)
+- `replace_component` - Swap a footprint for a different library footprint, preserving reference/position/rotation/side and pad nets
 - `edit_component_pad` - Edit pads of a placed footprint (size/drill/shape/number/type) to repair broken library footprints; targets pads by number or zero-based index, refuses copper<=drill unless forced
 - `get_component_list` - Return a list of all components on the PCB, optionally filtered by layer or bounding box region
 - `place_component_array` - Place a rectangular grid array of identical components on the PCB with configurable row/column spacing
-- `align_components` - Align multiple PCB components horizontally, vertically or on a grid with optional spacing
+- `align_components` - Align multiple PCB components horizontally, vertically, or to an edge (alignmentType), with optional even spacing and a referenceComponent anchor
 - `check_courtyard_overlaps` - Detect courtyard overlaps between footprints (read-only)
 - `duplicate_component` - Duplicate an existing PCB component at an offset position, optionally with a new reference designator
 - `auto_place_components` - Auto-place components with a connectivity-driven greedy heuristic (strongly connected parts cluster together)
@@ -70,7 +73,7 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 ### Routing (15 tools)
 
 - `add_net` - Create a new net on the PCB
-- `route_trace` - Route a copper trace between two XY points on a fixed layer: straight, or an arc via the optional mid point
+- `route_trace` - Route a copper trace between two XY points on a fixed layer: straight, or an arc via the optional mid point (refuses cross-net endpoints unless force:true)
 - `add_via` - Add a via to the PCB
 - `copper_pour` - Manage copper pours (zones): action=add|edit|delete|refill
 - `delete_trace` - Delete traces from the PCB
@@ -81,7 +84,7 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 - `create_netclass` - Create or update a net class with custom design rules, persisted to the .kicad_pro project file
 - `assign_netclass_pattern` - Append a wildcard pattern -> net-class rule to the .kicad_pro (netclass_patterns)
 - `route_differential_pair` - Route a differential pair between two sets of points
-- `route_smart` - Route between two pads (or points): grid A\* obstacle avoidance by default, or strategy=direct for one straight segment
+- `route_smart` - Route between two pads (or points): grid A\* obstacle avoidance by default, or strategy=direct for one straight segment (refuses cross-net endpoints unless force:true)
 - `report_net_lengths` - Report routed copper length per net (mm) with segment/via counts, layers, and max skew across matched nets
 - `copy_routing_pattern` - Copy routing (traces and vias) from a group of source components to a matching target group (offset auto-computed)
 
@@ -94,11 +97,11 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 
 ### Schematic (35 tools)
 
-- `create_schematic` - Create a new schematic
-- `add_schematic_component` - Add a component to the schematic
+- `create_schematic` - Create a new schematic (path may be a containing directory or a full <name>.kicad_sch)
+- `add_schematic_component` - Add a component to the schematic (reference must be non-empty and unique, or set autoAssign to auto-number it)
 - `delete_schematic_component` - Remove a component from the schematic (reports/optionally removes dangling wire stubs and net labels)
-- `duplicate_schematic_component` - Clone a placed symbol (same lib symbol, value, footprint, custom properties, unit structure) at an offset or explicit position, auto-assigning the next free reference
-- `edit_schematic_component` - Update a placed schematic symbol in place: footprint, value, reference, field positions, custom properties (add and remove)
+- `duplicate_schematic_component` - Clone a placed symbol (same lib symbol, value, footprint, custom properties, unit structure) at an offset or explicit position, auto-assigning the next free reference; grid-snaps by default (snapToGrid/snapGridMm)
+- `edit_schematic_component` - Update a placed schematic symbol in place: footprint, value, reference, field positions, custom properties (add and remove); validates the footprint lib-id unless allowUnresolvedFootprint
 - `get_schematic_component` - Get a component's position plus every field's value and label position (built-in and custom)
 - `move_schematic_component` - Move a placed symbol
 - `rotate_schematic_component` - Rotate a placed symbol in the schematic
@@ -106,7 +109,7 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 - `add_schematic_wire` - Draw a wire through 2+ waypoints
 - `add_schematic_net_label` - Add a net label
 - `set_no_connect` - Add (or with remove=true, delete) a no-connect flag on a pin that is intentionally left unconnected
-- `connect_to_net` - Connect a component pin to a named net via a wire stub and net label at the exact pin endpoint
+- `connect_to_net` - Connect a component pin to a named net via a wire stub and net label at the exact pin endpoint (refuses a coincident foreign pin at that endpoint unless allowCoincidentPin)
 - `get_net_connections` - Get all connections for a named net
 - `get_wire_connections` - Return the net name plus all wires and pins connected at a point (reference + pin, OR x/y in mm)
 - `get_schematic_pin_locations` - Return the exact x/y coordinates of every pin on a schematic component
@@ -128,7 +131,7 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 - `get_net_at_point` - Return the net name at (x, y), or null if no net label or wire endpoint is at that position
 - `add_schematic_text` - Add a free-form text annotation (notes, section headings, docs) to the schematic canvas
 - `create_hierarchical_sheet` - Create a hierarchical sheet in a parent schematic, optionally creating the child .kicad_sch, interface pins, or a pinned page number
-- `add_sheet_pin` - Add a pin to a sheet symbol block on the parent schematic — the parent-side connection point
+- `add_sheet_pin` - Add a pin to a sheet symbol block on the parent schematic — the parent-side connection point (shape: input/output/bidirectional/tri_state/passive)
 
 ### Design Rules / DRC (3 tools)
 
@@ -138,9 +141,9 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 
 ### Export (6 tools)
 
-- `export_gerber` - Export PCB Gerber manufacturing files to a directory
+- `export_gerber` - Export PCB Gerber manufacturing files to a directory (plus a .gbrjob job file)
 - `export_pdf` - Export the PCB layout as a PDF document
-- `export_3d` - Export the PCB as a 3D model
+- `export_3d` - Export the PCB as a 3D model (STEP or VRML)
 - `export_bom` - Export a Bill of Materials (BOM) from the PCB
 - `export_netlist` - Export the schematic netlist to a file via kicad-cli
 - `export_position_file` - Export a component placement (pick-and-place) file for PCB assembly
@@ -151,7 +154,7 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 - `search_library_parts` - Search footprints or symbols across all installed libraries (type=footprint|symbol)
 - `list_library_contents` - List the footprints or symbols contained in one named library (type=footprint|symbol)
 - `get_library_part_info` - Get detailed information about one footprint or symbol (type=footprint|symbol)
-- `register_library` - Register a .pretty footprint library or .kicad_sym symbol library in KiCAD's lib-table
+- `register_library` - Register a .pretty footprint library or .kicad_sym symbol library in KiCAD's lib-table (validates that the path exists and matches the declared type)
 - `refresh_symbol_libraries` - Force-rebuild the symbol library index from sym-lib-table on disk
 - `refresh_schematic_lib_symbols` - Re-inject every embedded lib_symbols entry in a .kicad_sch from the on-disk .kicad_sym libraries
 - `set_symbol_pin_types` - Rewrite pin electrical types on an existing symbol (clears imported symbols' unclearable "Unspecified pin connected" ERC warnings); edits the .kicad_sym source (symbolId/libraryPath) or a schematic's embedded lib_symbols copy (schematicPath+reference)
@@ -183,15 +186,15 @@ The server provides 129 tools, each registered directly as an MCP tool -- just a
 
 ### Freerouting Autorouter (2 tools)
 
-- `autoroute` - Autoroute the current PCB with Freerouting: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES
+- `autoroute` - Autoroute the current PCB with Freerouting: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES (strips pre-routes and planes from the DSN by default to avoid a Freerouting StackOverflow; set includePreRoutes/includePlanes to keep them)
 - `check_freerouting` - Check that Java (or Docker) and freerouting.jar are available; run before autoroute
 
 ### UI and Backend Management (8 tools)
 
 - `get_backend_info` - Return the active backend identifier, version, and a human-readable mode description
-- `manage_kicad_ui` - Check whether the KiCAD UI is running (action=status) or launch it (action=launch)
+- `manage_kicad_ui` - Check whether the KiCAD UI is running (action=status), launch it (action=launch), or quit the server-launched GUI and release the IPC socket (action=quit)
 - `reconcile_backends` - Flush pending changes between the SWIG and IPC backends
-- `run_action` - Invoke a KiCad internal TOOL_ACTION by name via IPC (escape hatch when no dedicated tool exists)
+- `run_action` - Invoke a KiCad internal TOOL_ACTION by name (e.g. common.Control.zoomFitScreen) via IPC (escape hatch when no dedicated tool exists); requires a running IPC session unless allowLaunch:true
 - `manage_selection` - Manage the KiCAD board editor selection (IPC-only)
 - `hit_test` - Find board items at (x, y) (IPC-only)
 - `interactive_move` - Start KiCad's interactive move on the given items (IPC-only); the user finishes placement by hand
@@ -896,7 +899,7 @@ How many Basic parts are available?
 
 - **JSON-RPC 2.0 Transport:** Bi-directional communication via STDIO
 - **Protocol Version:** MCP 2025-06-18
-- **Capabilities:** Tools (129), Resources (8)
+- **Capabilities:** Tools (132), Resources (8)
 - **Error Handling:** Standard JSON-RPC error codes
 
 ### TypeScript Server (`src/`)
@@ -1036,7 +1039,7 @@ npm run format
 
 **Current Version:** 2.2.3
 
-**Working Features (129 tools):**
+**Working Features (132 tools):**
 
 - Project management with snapshot checkpointing
 - Complete board design (outline, layers, zones, mounting holes, text, SVG logos)
