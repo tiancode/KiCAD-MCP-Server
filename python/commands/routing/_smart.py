@@ -11,7 +11,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from ._helpers import _track_width_error
+from ._helpers import _refuse_cross_net_short, _track_width_error, endpoint_net_conflicts
 from ._nets import netclass_property, resolve_netclass_name
 
 logger = logging.getLogger("kicad_interface")
@@ -68,6 +68,24 @@ class SmartRouteMixin:
                 return start_pt
             start_xy: Tuple[float, float] = (start_pt[0], start_pt[1])
             end_xy: Tuple[float, float] = (end_pt[0], end_pt[1])
+
+            # Refuse a cross-net short (B4): the net is adopted from the source
+            # pad, but the destination pad may belong to a DIFFERENT net —
+            # routing between them shorts the two nets.  Endpoints are mm here;
+            # endpoint_net_conflicts works in nm, so convert.  force=true
+            # overrides (forwarded from the TS astar branch).
+            force = bool(params.get("force", False))
+            if net and not force:
+                conflicts = endpoint_net_conflicts(
+                    self.board,
+                    [
+                        (int(start_xy[0] * _NM), int(start_xy[1] * _NM)),
+                        (int(end_xy[0] * _NM), int(end_xy[1] * _NM)),
+                    ],
+                    net,
+                )
+                if conflicts:
+                    return _refuse_cross_net_short(net, conflicts)
 
             # Resolve the net's net-class props ONCE (trace + via widths) from
             # the .kicad_pro so both the default-width and via placement honour

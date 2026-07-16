@@ -151,6 +151,35 @@ def _zone_filled_area_mm2(zone: Any) -> Optional[float]:
     return area_iu2 / (scale * scale)
 
 
+def _outline_is_degenerate(points: List[Dict[str, Any]]) -> bool:
+    """Whether an explicit pour outline encloses no real area (Bug B9).
+
+    Fewer than 3 vertices, or ≥3 vertices that are colinear (shoelace area
+    ≈ 0), yield a zero-area zone — a no-op pour that persists as litter and
+    later confuses zone queries / DRC.  Pure over the point list (unit-aware,
+    so ``mil``/``inch`` outlines are judged in a common scale) and testable
+    without pcbnew.  Malformed points (missing/non-numeric x/y) return
+    ``False`` so the existing downstream handling still applies.
+    """
+    if len(points) < 3:
+        return True
+    coords: List[Tuple[float, float]] = []
+    for p in points:
+        unit = str(p.get("unit", "mm")).lower()
+        scale = 1.0 if unit == "mm" else (0.0254 if unit == "mil" else 25.4)
+        try:
+            coords.append((float(p["x"]) * scale, float(p["y"]) * scale))
+        except (KeyError, TypeError, ValueError):
+            return False
+    area2 = 0.0
+    n = len(coords)
+    for i in range(n):
+        x1, y1 = coords[i]
+        x2, y2 = coords[(i + 1) % n]
+        area2 += x1 * y2 - x2 * y1
+    return abs(area2) / 2.0 < 1e-6
+
+
 class ZoneMixin:
     def _board_net_names(self) -> List[str]:
         """All net names on the SWIG board (reliable across pcbnew versions)."""
@@ -352,8 +381,13 @@ class ZoneMixin:
                     "errorCode": "VALIDATION",
                 }
 
-            # If no outline provided, use board outline
-            if not points or len(points) < 3:
+            # Outline handling (Bug B9): only an OMITTED outline defaults to the
+            # board rectangle.  A supplied-but-too-short (1-2 point) or
+            # degenerate (colinear / zero-area) outline is REFUSED — silently
+            # swapping it for the whole board plane, or persisting a zero-area
+            # zone, are both data-integrity hazards.  Mirrors edit_copper_pour's
+            # "outline needs at least 3 points" refusal.
+            if not points:
                 board_box = self.board.GetBoardEdgesBoundingBox()
                 if board_box.GetWidth() > 0 and board_box.GetHeight() > 0:
                     scale = 1000000  # nm to mm
@@ -388,6 +422,28 @@ class ZoneMixin:
                         "errorDetails": "Provide an outline array or add a board outline first",
                         "errorCode": "VALIDATION",
                     }
+            elif len(points) < 3:
+                return {
+                    "success": False,
+                    "message": "outline needs at least 3 points",
+                    "errorDetails": (
+                        "A copper pour polygon needs >=3 non-colinear points; a "
+                        "1-2 point outline cannot bound an area. Omit the outline "
+                        "to default to the board rectangle."
+                    ),
+                    "errorCode": "VALIDATION",
+                }
+            elif _outline_is_degenerate(points):
+                return {
+                    "success": False,
+                    "message": "outline is degenerate (zero area / colinear points)",
+                    "errorDetails": (
+                        "The outline points are colinear, so the polygon encloses "
+                        "zero area — the zone would be a useless no-op. Provide "
+                        ">=3 non-colinear points."
+                    ),
+                    "errorCode": "VALIDATION",
+                }
 
             # Get layer ID
             layer_id = self.board.GetLayerID(layer)

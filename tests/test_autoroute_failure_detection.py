@@ -107,6 +107,26 @@ def test_detect_failure_catches_out_of_memory():
     assert "OutOfMemoryError" in err
 
 
+@pytest.mark.unit
+def test_detect_failure_catches_stackoverflow():
+    # E2E finding B6: the pre-routed + zoned GD32 DSN makes Freerouting 2.2.4
+    # throw a StackOverflowError in its DSN "Opening" phase. The detector must
+    # catch it (the safety net that complements DSN stripping).
+    txt = (
+        "2026-07-13 12:00:00.000 INFO   Opening 'board.dsn'...\n"
+        "2026-07-13 12:00:00.100 ERROR  Error during routing passes\n"
+        "java.lang.StackOverflowError\n"
+        "\tat app.freerouting.geometry.planar.Simplex.to_IntOctagon(Simplex.java:512)\n"
+    )
+    # A crash is detected (non-None). The first fatal line returned is the
+    # ERROR summary (StackOverflowError carries no ": message", so it isn't
+    # preferred), but the java signature itself is matched too.
+    assert _detect_routing_failure(txt) is not None
+    assert (
+        _detect_routing_failure("java.lang.StackOverflowError\n") == "java.lang.StackOverflowError"
+    )
+
+
 # ---------------------------------------------------------------------------
 # _ses_routed_nets
 # ---------------------------------------------------------------------------
@@ -266,6 +286,10 @@ def _autoroute_pcbnew():
 
 
 def _run_autoroute(cc, workdir, fake_jar, fake_run, fake_pcb, **params):
+    # B5: autoroute now routes a FRESH pcbnew.LoadBoard of the target file.
+    # boardPath == cc.board's own file (the same-file case), so point LoadBoard
+    # back at cc.board — the _FakeBoard the assertions inspect.
+    fake_pcb.LoadBoard.return_value = cc.board
     with patch.object(fr_mod, "subprocess") as sp, patch.dict(sys.modules, {"pcbnew": fake_pcb}):
         sp.run.side_effect = fake_run
         sp.TimeoutExpired = TimeoutError

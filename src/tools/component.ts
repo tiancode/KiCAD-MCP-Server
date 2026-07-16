@@ -89,8 +89,14 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .string()
         .optional()
         .describe("Optional target layer (e.g., 'F.Cu', 'B.Cu') - flips component if needed"),
+      allowOffBoard: z
+        .boolean()
+        .optional()
+        .describe(
+          "Allow moving the component outside the board outline. Off-board targets are refused by default (errorCode POSITION_OFF_BOARD); set true to place a part off the board intentionally.",
+        ),
     },
-    async ({ reference, position, rotation, layer }) => {
+    async ({ reference, position, rotation, layer, allowOffBoard }) => {
       logger.debug(
         `Moving component: ${reference} to ${position.x},${position.y} ${position.unit}`,
       );
@@ -99,6 +105,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         position,
         rotation,
         layer,
+        allowOffBoard,
       });
 
       return formatKicadResult(result);
@@ -391,20 +398,33 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "align_components",
-    "Align multiple PCB components horizontally, vertically or on a grid with optional spacing.",
+    "Align multiple PCB components onto a common line: 'horizontal' shares one Y, 'vertical' shares one X, 'edge' snaps to a board edge. With `spacing` the parts are also evenly spaced (no overlap); with `referenceComponent` that part stays fixed and both the shared axis and the spacing sequence are anchored to it.",
     {
       references: z.array(z.string()).describe("Array of component references to align"),
-      alignmentType: z.enum(["horizontal", "vertical", "grid"]).describe("Type of alignment"),
-      spacing: z.number().optional().describe("Spacing between components in mm"),
-      referenceComponent: z.string().optional().describe("Reference component for alignment"),
+      alignmentType: z
+        .enum(["horizontal", "vertical", "edge"])
+        .describe("Type of alignment: horizontal (shared Y), vertical (shared X), or edge"),
+      spacing: z
+        .number()
+        .optional()
+        .describe("Even spacing between adjacent components in mm (prevents overlap)"),
+      referenceComponent: z
+        .string()
+        .optional()
+        .describe("Anchor component: it stays fixed; the shared axis and spacing start from it"),
+      edge: z
+        .enum(["left", "right", "top", "bottom"])
+        .optional()
+        .describe("Board edge to align to (required when alignmentType is 'edge')"),
     },
-    async ({ references, alignmentType, spacing, referenceComponent }) => {
+    async ({ references, alignmentType, spacing, referenceComponent, edge }) => {
       logger.debug(`Aligning components: ${references.join(", ")}`);
       const result = await callKicadScript("align_components", {
         references,
         alignmentType,
         spacing,
         referenceComponent,
+        edge,
       });
 
       return formatKicadResult(result);

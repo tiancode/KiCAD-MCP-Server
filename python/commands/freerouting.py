@@ -342,6 +342,121 @@ def _ses_routed_nets(ses_text: str) -> set:
 # SES replace-semantics instead of a DSN rewrite.
 
 
+# ---------------------------------------------------------------------------
+# DSN pre-routing / plane stripping (E2E finding B6)
+# ---------------------------------------------------------------------------
+#
+# Freerouting 2.2.4 StackOverflows / NPEs in its DSN "Opening" phase on boards
+# whose exported DSN carries a ``(wiring …)`` block of pre-routed traces and/or
+# full-board ``(plane …)`` copper pours (the B6 crash: 2 planes + 48 wires ->
+# java.lang.StackOverflowError at Simplex.to_IntOctagon). Removing those blocks
+# from the DSN handed to Freerouting sidesteps the crash. This rewrites ONLY the
+# ``.dsn`` fed to the router — never the ``.kicad_pcb`` — and is gated by the
+# includePreRoutes / includePlanes params (both default False = strip).
+# ---------------------------------------------------------------------------
+
+
+def _skip_balanced_sexpr(text: str, start: int) -> int:
+    """Return the index just past the ``)`` that closes the S-expression that
+    begins at ``text[start]`` (which must be ``(``).
+
+    Quoted strings (Specctra quote char ``"``) are skipped so parens inside net
+    names like ``"unconnected-(J1-CC1-PadA5)"`` never unbalance the count.
+    """
+    depth = 0
+    i = start
+    n = len(text)
+    in_quote = False
+    while i < n:
+        c = text[i]
+        if in_quote:
+            if c == '"':
+                in_quote = False
+        elif c == '"':
+            in_quote = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return i
+
+
+def _remove_sexpr_blocks(text: str, keyword: str) -> "tuple[str, int]":
+    """Remove every ``(keyword …)`` block from ``text`` (balanced, quote-aware).
+
+    Returns ``(new_text, count_removed)``. A trailing run of spaces/tabs plus
+    one newline after each removed block is consumed too so the file stays
+    tidy. Only whole tokens match — with ``keyword='plane'`` a hypothetical
+    ``(planet …)`` is left untouched. Parens inside quoted strings are ignored
+    when both locating the token and balancing it.
+    """
+    opener = "(" + keyword
+    ol = len(opener)
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    removed = 0
+    in_quote = False
+    while i < n:
+        c = text[i]
+        if in_quote:
+            out.append(c)
+            if c == '"':
+                in_quote = False
+            i += 1
+            continue
+        if c == '"':
+            in_quote = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "(" and text.startswith(opener, i):
+            nxt = text[i + ol] if i + ol < n else ""
+            if not (nxt.isalnum() or nxt in "_-"):
+                end = _skip_balanced_sexpr(text, i)
+                removed += 1
+                i = end
+                while i < n and text[i] in " \t":
+                    i += 1
+                if i < n and text[i] == "\n":
+                    i += 1
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out), removed
+
+
+def _strip_dsn_prerouting(
+    dsn_text: str,
+    include_pre_routes: bool = False,
+    include_planes: bool = False,
+) -> "tuple[str, Dict[str, Any]]":
+    """Strip pre-routed wiring and/or copper planes from a Specctra DSN.
+
+    ``include_pre_routes`` keeps the ``(wiring …)`` block of pre-routed traces;
+    ``include_planes`` keeps the full-board ``(plane …)`` copper pours. Both
+    default False (strip). Netclass ``(class …)`` blocks — including their
+    Power/RF widths — are never touched, so stripping can't regress the
+    netclass-aware DSN export (B7).
+
+    Returns ``(new_text, {"wiring_removed": bool, "planes_removed": int})``.
+    """
+    text = dsn_text
+    wiring_removed = 0
+    planes_removed = 0
+    if not include_pre_routes:
+        text, wiring_removed = _remove_sexpr_blocks(text, "wiring")
+    if not include_planes:
+        text, planes_removed = _remove_sexpr_blocks(text, "plane")
+    return text, {
+        "wiring_removed": bool(wiring_removed),
+        "planes_removed": planes_removed,
+    }
+
+
 class FreeroutingCommands:
     """Handles Freerouting autoroute operations."""
 
@@ -364,13 +479,14 @@ class FreeroutingCommands:
         # reads serve the routed result.
         self._board_reload_callback = board_reload_callback
 
-    def _save_and_record(self, board_path: str) -> None:
-        """Save the board and notify the parent interface (if any).
+    def _save_and_record(self, board_path: str, board: Any = None) -> None:
+        """Save ``board`` (default ``self.board``) and notify the parent (if any).
 
         Uses ``getattr`` so test fixtures that bypass ``__init__`` via
         ``__new__`` don't AttributeError — they simply skip the callback.
         """
-        self.board.Save(board_path)
+        target = board if board is not None else self.board
+        target.Save(board_path)
         cb = getattr(self, "_signature_callback", None)
         if cb is not None:
             try:
@@ -378,16 +494,17 @@ class FreeroutingCommands:
             except Exception:
                 logger.debug("Signature callback raised; ignoring", exc_info=True)
 
-    def _board_routed_nets(self) -> set:
+    def _board_routed_nets(self, board: Any = None) -> set:
         """Net names that currently have at least one track or via on the board.
 
         Used to tell "did the autoroute actually route anything new?" apart
         from "the SES is just an echo of the pre-existing routing" (the B4
-        crash case).
+        crash case). ``board`` defaults to ``self.board``.
         """
+        board = board if board is not None else self.board
         nets: set = set()
         try:
-            tracks = list(self.board.GetTracks())
+            tracks = list(board.GetTracks())
         except Exception:
             return nets
         for t in tracks:
@@ -399,23 +516,25 @@ class FreeroutingCommands:
                 nets.add(name)
         return nets
 
-    def _remove_tracks_on_nets(self, net_names: set) -> int:
+    def _remove_tracks_on_nets(self, net_names: set, board: Any = None) -> int:
         """Delete every track/via whose net is in ``net_names``; return count.
 
         This is the "rip" half of KiCad's native Specctra *replace* semantics:
         before importing a SES we clear the existing routing on exactly the
         nets the SES will re-add, so the import replaces rather than stacks
-        (which duplicated pre-routed traces — E2E finding B4).
+        (which duplicated pre-routed traces — E2E finding B4). ``board``
+        defaults to ``self.board``.
 
         Uses ``board.Delete`` (not ``Remove``) to match the rest of the code
         base: the KiCAD 10 SWIG bindings leak / corrupt the object table on
         ``Remove`` but free cleanly on ``Delete`` (see routing/_traces.py).
         """
+        board = board if board is not None else self.board
         if not net_names:
             return 0
         removed = 0
         try:
-            tracks = list(self.board.GetTracks())
+            tracks = list(board.GetTracks())
         except Exception:
             return 0
         for t in tracks:
@@ -424,16 +543,25 @@ class FreeroutingCommands:
             except Exception:
                 name = None
             if name in net_names:
-                self.board.Delete(t)
+                board.Delete(t)
                 removed += 1
         return removed
 
-    def _apply_ses(self, ses_path: str, board_path: Optional[str]) -> Dict[str, Any]:
-        """Import a SES with replace semantics, then save the board.
+    def _apply_ses(
+        self,
+        ses_path: str,
+        board_path: Optional[str],
+        board: Any = None,
+        fire_signature: bool = True,
+    ) -> Dict[str, Any]:
+        """Import a SES with replace semantics, rebuild connectivity, then save.
 
         Removes existing tracks/vias on the nets the SES will re-route, runs
-        ``ImportSpecctraSES``, and saves via ``_save_and_record`` (preserving
-        the ``_on_swig_direct_save`` landed-write bookkeeping).
+        ``ImportSpecctraSES``, rebuilds the board's connectivity (B8), and
+        saves. ``board`` defaults to ``self.board``. When ``fire_signature`` is
+        True the save goes through ``_save_and_record`` (the ``_on_swig_direct_
+        save`` bookkeeping); routing callers pass False because they either
+        reload the board afterward or wrote a file other than the open board.
 
         Returns ``{"ok": True, "removed_tracks": n, "replaced_nets": [...]}``
         on success, or ``{"ok": False, "error": {...response...}}`` on an
@@ -441,16 +569,18 @@ class FreeroutingCommands:
         """
         import pcbnew
 
+        board = board if board is not None else self.board
+
         try:
             with open(ses_path, "r", encoding="utf-8", errors="replace") as fh:
                 ses_text = fh.read()
         except OSError:
             ses_text = ""
         replace_nets = _ses_routed_nets(ses_text)
-        removed = self._remove_tracks_on_nets(replace_nets)
+        removed = self._remove_tracks_on_nets(replace_nets, board)
 
         try:
-            result = pcbnew.ImportSpecctraSES(self.board, ses_path)
+            result = pcbnew.ImportSpecctraSES(board, ses_path)
             if result is not True and result != 0:
                 return {
                     "ok": False,
@@ -473,9 +603,27 @@ class FreeroutingCommands:
                 },
             }
 
+        # B8: ImportSpecctraSES leaves the connectivity graph stale, so a
+        # run_drc immediately after import over-counts by one (a transient
+        # marker that a later refresh clears — 280 vs kicad-cli's 279).
+        # Rebuild it here so the saved file is already settled.
+        try:
+            if hasattr(board, "BuildListOfNets"):
+                board.BuildListOfNets()
+            if hasattr(board, "BuildConnectivity"):
+                board.BuildConnectivity()
+        except Exception:
+            logger.debug(
+                "Connectivity rebuild after SES import failed; ignoring",
+                exc_info=True,
+            )
+
         if board_path:
             try:
-                self._save_and_record(board_path)
+                if fire_signature:
+                    self._save_and_record(board_path, board)
+                else:
+                    board.Save(board_path)
             except (OSError, RuntimeError) as e:
                 # Non-fatal: the SES is imported; user can save manually.
                 logger.warning(f"Board save after SES import failed: {e}")
@@ -486,16 +634,164 @@ class FreeroutingCommands:
             "replaced_nets": sorted(replace_nets),
         }
 
-    def _board_track_stats(self) -> Dict[str, int]:
-        """Return ``{"tracks": n, "vias": m}`` for the current board."""
+    def _board_track_stats(self, board: Any = None) -> Dict[str, int]:
+        """Return ``{"tracks": n, "vias": m}`` for ``board`` (default self.board)."""
+        board = board if board is not None else self.board
         track_count = 0
         via_count = 0
-        for t in self.board.GetTracks():
+        for t in board.GetTracks():
             if t.GetClass() == "PCB_VIA":
                 via_count += 1
             else:
                 track_count += 1
         return {"tracks": track_count, "vias": via_count}
+
+    def _safe_fresh_load(self, path: str, pcbnew: Any) -> Any:
+        """Load a fresh BOARD from ``path`` via ``pcbnew.LoadBoard``.
+
+        Returns the loaded board, or None on failure (caller surfaces a real
+        error rather than routing a stale in-memory board — E2E finding B5).
+        """
+        try:
+            return pcbnew.LoadBoard(path)
+        except Exception as e:
+            logger.error(f"LoadBoard({path!r}) failed: {e}")
+            return None
+
+    def _prepare_target_board(self, params: Dict[str, Any], pcbnew: Any) -> Dict[str, Any]:
+        """Resolve which board to operate on (E2E finding B5 fresh-load).
+
+        ``boardPath`` (or, when omitted, the currently-open board's own file)
+        is the file that actually gets routed/saved — never a different
+        in-memory board. Semantics (orchestrator decision 4):
+
+          * boardPath names the currently-open board's file (or is omitted):
+            flush the in-memory edits to that file, then load it FRESH and
+            operate on the copy. The caller reloads the parent afterward so
+            later reads serve the routed result. (``external=False``)
+          * boardPath names a different, existing file: load it FRESH and
+            operate on that; the open project board is left untouched.
+            (``external=True``)
+          * boardPath names a nonexistent file: FILE_NOT_FOUND.
+
+        A fresh LoadBoard also re-reads the sibling ``.kicad_pro`` netclasses,
+        which is why it fixes the single-class DSN export (B7).
+
+        Returns ``{"ok": True, "board", "board_path", "external"}`` or
+        ``{"ok": False, "error": {...}}``.
+        """
+        requested = params.get("boardPath")
+        loaded_path = self.board.GetFileName() if self.board else None
+        board_path = requested or loaded_path
+
+        if not board_path:
+            return {
+                "ok": False,
+                "error": {
+                    "success": False,
+                    "message": "No board file path available",
+                    "errorDetails": "Provide boardPath or open a project first",
+                },
+            }
+
+        external = bool(requested) and (
+            not loaded_path or os.path.abspath(requested) != os.path.abspath(loaded_path)
+        )
+
+        if external:
+            if not os.path.isfile(board_path):
+                return {
+                    "ok": False,
+                    "error": {
+                        "success": False,
+                        "errorCode": "FILE_NOT_FOUND",
+                        "message": "Board file not found",
+                        "errorDetails": f"No such file: {board_path}",
+                    },
+                }
+            board = self._safe_fresh_load(board_path, pcbnew)
+            if board is None:
+                return {
+                    "ok": False,
+                    "error": {
+                        "success": False,
+                        "message": "Failed to load board",
+                        "errorDetails": f"pcbnew.LoadBoard could not open {board_path}",
+                    },
+                }
+            return {"ok": True, "board": board, "board_path": board_path, "external": True}
+
+        # Same file as the open board (or boardPath omitted): flush in-memory
+        # edits to disk first so the fresh load includes them, then reload.
+        try:
+            self._save_and_record(board_path)
+        except (OSError, RuntimeError) as e:
+            return {
+                "ok": False,
+                "error": {
+                    "success": False,
+                    "message": "Failed to save board before routing",
+                    "errorDetails": str(e),
+                },
+            }
+        board = self._safe_fresh_load(board_path, pcbnew)
+        if board is None:
+            return {
+                "ok": False,
+                "error": {
+                    "success": False,
+                    "message": "Failed to reload board",
+                    "errorDetails": f"pcbnew.LoadBoard could not reopen {board_path}",
+                },
+            }
+        return {"ok": True, "board": board, "board_path": board_path, "external": False}
+
+    def _strip_dsn_file(
+        self, dsn_path: str, include_pre_routes: bool, include_planes: bool
+    ) -> Dict[str, Any]:
+        """Rewrite ``dsn_path`` in place with pre-routing/planes stripped (B6).
+
+        Never touches the ``.kicad_pcb`` — only the DSN handed to Freerouting.
+        Returns the strip info dict (``{"wiring_removed", "planes_removed"}``).
+        """
+        if include_pre_routes and include_planes:
+            return {"wiring_removed": False, "planes_removed": 0}
+        try:
+            with open(dsn_path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            return {"wiring_removed": False, "planes_removed": 0}
+        new_text, info = _strip_dsn_prerouting(text, include_pre_routes, include_planes)
+        if new_text != text:
+            try:
+                with open(dsn_path, "w", encoding="utf-8") as fh:
+                    fh.write(new_text)
+            except OSError:
+                logger.warning("Could not rewrite stripped DSN %s", dsn_path)
+        return info
+
+    def _finalize_board(self, board_path: str, external: bool) -> Dict[str, Any]:
+        """Sync the parent after a routed board has been saved to disk.
+
+        Same-file route: ask the parent to reload ``board_path`` (rebinding
+        every handler) so later reads serve the routed result. External file:
+        leave the open project board untouched and note that. Returns response
+        fields to merge (``routed_board_path`` + optional ``note``).
+        """
+        fields: Dict[str, Any] = {"routed_board_path": board_path}
+        if external:
+            fields["note"] = (
+                "The currently-open project board was not modified; the routed "
+                f"result was saved to {board_path}."
+            )
+            return fields
+        cb = getattr(self, "_board_reload_callback", None)
+        if cb is not None:
+            try:
+                cb(board_path)
+            except Exception:
+                logger.warning("Board reload callback raised; ignoring", exc_info=True)
+        return fields
 
     def _resolve_execution_mode(self, jar_path: str) -> Dict[str, Any]:
         """Determine how to run Freerouting: direct or docker.
@@ -567,6 +863,23 @@ class FreeroutingCommands:
         Replace semantics (B4): the SES import first clears existing
         tracks/vias on the nets the SES re-routes, so importing replaces
         rather than stacks (which duplicated pre-routed traces).
+
+        Fresh-load target (E2E finding B5): ``boardPath`` (or, when omitted,
+        the open board's own file) is loaded FRESH; the DSN is exported from
+        and the SES imported into THAT board — never a stale in-memory board
+        that would route/clobber the wrong file. A same-file route reloads the
+        open project board afterward (so later reads serve the routed result);
+        an external ``boardPath`` leaves the open board untouched and says so.
+        The fresh load also re-reads the sibling ``.kicad_pro`` netclasses, so
+        the DSN carries the real Power/RF widths (fixes B7). The routed file is
+        returned as ``routed_board_path``.
+
+        DSN stripping (E2E finding B6): the pre-routed ``(wiring …)`` block and
+        full-board ``(plane …)`` copper — which crash Freerouting 2.2.4 in its
+        DSN "Opening" phase — are stripped from the DSN handed to the router by
+        default. ``includePreRoutes``/``includePlanes`` keep them. Stripping
+        touches only the DSN, never the .kicad_pcb; note that a stripped GND
+        plane is re-routed as ordinary traces rather than a poured pour.
         """
         try:
             import pcbnew
@@ -584,23 +897,18 @@ class FreeroutingCommands:
                 "errorDetails": "Load or create a board first",
             }
 
-        board_path = params.get("boardPath")
-        if not board_path:
-            board_path = self.board.GetFileName()
-
-        if not board_path:
-            return {
-                "success": False,
-                "message": "No board file path available",
-                "errorDetails": ("Provide boardPath or open a project first"),
-            }
-
         requested_jar = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
         # Resolve versioned filenames (e.g. ``freerouting-2.2.4.jar``) so the
         # user doesn't have to rename the GitHub release download.
         jar_path = _resolve_freerouting_jar(requested_jar) or requested_jar
         timeout = params.get("timeout", 300)
         passes = params.get("maxPasses", 20)
+
+        # B6 gates: strip the pre-routed ``(wiring …)`` block and/or full-board
+        # ``(plane …)`` copper from the DSN handed to Freerouting (both default
+        # to stripping). This only rewrites the DSN, never the .kicad_pcb.
+        include_pre_routes = bool(params.get("includePreRoutes", False))
+        include_planes = bool(params.get("includePlanes", False))
 
         # Best-of-N parameters
         attempts_raw = params.get("attempts", 1)
@@ -623,12 +931,8 @@ class FreeroutingCommands:
         if not pass_schedule:
             pass_schedule = [passes]
 
-        # Net names that already carry routing — captured before we touch the
-        # board so the failure path can tell "routed something new" from "the
-        # SES is just an echo of the pre-existing traces" (the B4 crash).
-        pre_routed_nets = self._board_routed_nets()
-
-        # Validate Freerouting JAR
+        # Validate Freerouting JAR (before any board side effects, so a missing
+        # JAR never flushes/reloads the board).
         if not os.path.isfile(jar_path):
             return {
                 "success": False,
@@ -653,6 +957,24 @@ class FreeroutingCommands:
 
         use_docker = exec_mode["use_docker"]
 
+        # B5: resolve the board to route. boardPath (or, when omitted, the
+        # currently-open board's own file) is loaded FRESH so the DSN reflects
+        # the file named and the routed SES lands on that same file — never a
+        # different in-memory board. Fresh LoadBoard also re-reads the sibling
+        # .kicad_pro netclasses (fixes B7's single-class DSN).
+        prep = self._prepare_target_board(params, pcbnew)
+        if not prep["ok"]:
+            return prep["error"]
+        route_board = prep["board"]
+        board_path = prep["board_path"]
+        external = prep["external"]
+
+        # Net names that already carry routing on the board being routed —
+        # captured before we touch it so the failure path can tell "routed
+        # something new" from "the SES is just an echo of the pre-existing
+        # traces" (the B4 crash).
+        pre_routed_nets = self._board_routed_nets(route_board)
+
         # Set up file paths
         board_dir = os.path.dirname(board_path)
         board_stem = Path(board_path).stem
@@ -660,10 +982,10 @@ class FreeroutingCommands:
         ses_path = os.path.join(board_dir, f"{board_stem}.ses")
         best_ses_path = os.path.join(board_dir, f"{board_stem}_best.ses")
 
-        # Step 1: Export DSN (once, regardless of attempt count)
+        # Step 1: Export DSN from the freshly-loaded route board (once)
         logger.info(f"Exporting DSN to {dsn_path}")
         try:
-            result = pcbnew.ExportSpecctraDSN(self.board, dsn_path)
+            result = pcbnew.ExportSpecctraDSN(route_board, dsn_path)
             if result is not True and result != 0:
                 return {
                     "success": False,
@@ -688,6 +1010,10 @@ class FreeroutingCommands:
                 "message": "DSN file was not created",
                 "errorDetails": f"Expected at: {dsn_path}",
             }
+
+        # B6: strip the pre-routed wiring / copper planes that crash
+        # Freerouting 2.2.4 from the DSN fed to the router (never the board).
+        strip_info = self._strip_dsn_file(dsn_path, include_pre_routes, include_planes)
 
         dsn_size = os.path.getsize(dsn_path)
         logger.info(f"DSN exported: {dsn_size} bytes")
@@ -877,9 +1203,12 @@ class FreeroutingCommands:
                 f"{ses_size} bytes (total {elapsed}s)"
             )
 
-            # Step 3+4: Import the winning SES (replace semantics) and save.
+            # Step 3+4: Import the winning SES (replace semantics) into the
+            # freshly-loaded route board and save it. fire_signature=False:
+            # the same-file case reloads the parent (B5) below, and the
+            # external-file case must not stamp the open board's signature.
             logger.info(f"Importing SES from {ses_path}")
-            applied = self._apply_ses(ses_path, board_path)
+            applied = self._apply_ses(ses_path, board_path, board=route_board, fire_signature=False)
             if not applied["ok"]:
                 err = dict(applied["error"])
                 err["elapsed_seconds"] = elapsed
@@ -895,11 +1224,16 @@ class FreeroutingCommands:
                 "dsn_path": dsn_path,
                 "ses_path": ses_path,
                 "elapsed_seconds": elapsed,
-                "board_stats": self._board_track_stats(),
+                "board_stats": self._board_track_stats(route_board),
                 "nets_routed": len(routed_nets),
                 "replaced_existing_tracks": applied["removed_tracks"],
                 "freerouting_stdout": best_proc_stdout[:1000],
             }
+            if strip_info["wiring_removed"] or strip_info["planes_removed"]:
+                response["dsn_prerouting_stripped"] = strip_info
+            # B5: reload the open project board (same-file) or note that the
+            # open board was untouched (external file); add routed_board_path.
+            response.update(self._finalize_board(board_path, external))
             if attempts > 1:
                 response["attempts"] = attempt_results
                 response["best_attempt"] = best_attempt_idx + 1
@@ -943,14 +1277,14 @@ class FreeroutingCommands:
                 f"Autoroute partial: {len(newly_routed)} new net(s) routed "
                 f"despite a fatal error ({failed_best_error})"
             )
-            applied = self._apply_ses(ses_path, board_path)
+            applied = self._apply_ses(ses_path, board_path, board=route_board, fire_signature=False)
             if not applied["ok"]:
                 err = dict(applied["error"])
                 err["elapsed_seconds"] = elapsed
                 err["attempts"] = attempt_results
                 err["freerouting_error"] = failed_best_error
                 return err
-            return {
+            partial: Dict[str, Any] = {
                 "success": True,
                 "routing_incomplete": True,
                 "message": (
@@ -966,7 +1300,7 @@ class FreeroutingCommands:
                 "dsn_path": dsn_path,
                 "ses_path": ses_path,
                 "elapsed_seconds": elapsed,
-                "board_stats": self._board_track_stats(),
+                "board_stats": self._board_track_stats(route_board),
                 "nets_routed": len(ses_nets),
                 "newly_routed_nets": newly_routed,
                 "replaced_existing_tracks": applied["removed_tracks"],
@@ -974,6 +1308,10 @@ class FreeroutingCommands:
                 "freerouting_stdout": failed_best_stdout[:1000],
                 "attempts": attempt_results,
             }
+            if strip_info["wiring_removed"] or strip_info["planes_removed"]:
+                partial["dsn_prerouting_stripped"] = strip_info
+            partial.update(self._finalize_board(board_path, external))
+            return partial
 
         # --- Case C: no attempt produced a SES at all -----------------------
         return {
@@ -985,7 +1323,14 @@ class FreeroutingCommands:
         }
 
     def export_dsn(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Export the board to Specctra DSN format only."""
+        """Export a board to Specctra DSN format only.
+
+        B5: when ``boardPath`` names a file OTHER than the currently-open
+        board, that file is loaded FRESH and exported — the DSN reflects the
+        file named, not the in-memory board. A nonexistent ``boardPath`` is a
+        hard FILE_NOT_FOUND. When ``boardPath`` is omitted (or is the open
+        board's own file) the in-memory board is exported as before.
+        """
         try:
             import pcbnew
         except ImportError:
@@ -1002,7 +1347,9 @@ class FreeroutingCommands:
                 "errorDetails": "Load or create a board first",
             }
 
-        board_path = params.get("boardPath") or self.board.GetFileName()
+        requested = params.get("boardPath")
+        loaded_path = self.board.GetFileName()
+        board_path = requested or loaded_path
         output_path = params.get("outputPath")
 
         if not output_path:
@@ -1015,8 +1362,29 @@ class FreeroutingCommands:
                     "errorDetails": ("Provide outputPath or have a board open"),
                 }
 
+        # B5: export the file named by boardPath, not the in-memory board, when
+        # they differ. Export is read-only, so no flush/reload is needed.
+        src_board = self.board
+        if requested and (
+            not loaded_path or os.path.abspath(requested) != os.path.abspath(loaded_path)
+        ):
+            if not os.path.isfile(requested):
+                return {
+                    "success": False,
+                    "errorCode": "FILE_NOT_FOUND",
+                    "message": "Board file not found",
+                    "errorDetails": f"No such file: {requested}",
+                }
+            src_board = self._safe_fresh_load(requested, pcbnew)
+            if src_board is None:
+                return {
+                    "success": False,
+                    "message": "Failed to load board",
+                    "errorDetails": f"pcbnew.LoadBoard could not open {requested}",
+                }
+
         try:
-            result = pcbnew.ExportSpecctraDSN(self.board, output_path)
+            result = pcbnew.ExportSpecctraDSN(src_board, output_path)
             if result is not True and result != 0:
                 return {
                     "success": False,
@@ -1040,12 +1408,17 @@ class FreeroutingCommands:
         }
 
     def import_ses(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Import a Specctra SES file into the board (with replace semantics).
+        """Import a Specctra SES file into a board (with replace semantics).
 
         Existing tracks/vias on the nets the SES re-routes are cleared before
         the import so routing is *replaced*, not stacked — the same fix as
         autoroute (E2E finding B4): ``ImportSpecctraSES`` alone duplicated
         pre-routed traces.
+
+        B5 fresh-load: the SES is applied to the file named by ``boardPath``
+        (or, when omitted, the open board's own file), never a different
+        in-memory board. Same-file imports reload the open project board after
+        saving; an external ``boardPath`` leaves the open board untouched.
         """
         try:
             import pcbnew  # noqa: F401  (import guarded for the caller's env)
@@ -1078,17 +1451,25 @@ class FreeroutingCommands:
                 "errorDetails": f"File not found: {ses_path}",
             }
 
-        board_path = params.get("boardPath") or self.board.GetFileName()
-        applied = self._apply_ses(ses_path, board_path)
+        prep = self._prepare_target_board(params, pcbnew)
+        if not prep["ok"]:
+            return prep["error"]
+        target_board = prep["board"]
+        board_path = prep["board_path"]
+        external = prep["external"]
+
+        applied = self._apply_ses(ses_path, board_path, board=target_board, fire_signature=False)
         if not applied["ok"]:
             return applied["error"]
 
-        return {
+        response = {
             "success": True,
             "message": f"Imported SES from {ses_path}",
-            "board_stats": self._board_track_stats(),
+            "board_stats": self._board_track_stats(target_board),
             "replaced_existing_tracks": applied["removed_tracks"],
         }
+        response.update(self._finalize_board(board_path, external))
+        return response
 
     def check_freerouting(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Check if Freerouting and Java/Docker are available.
