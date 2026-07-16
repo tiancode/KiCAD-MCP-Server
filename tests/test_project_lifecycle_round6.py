@@ -81,9 +81,7 @@ class TestCreateProjectPathEndsInKicadPro:
 
     def test_matching_name_with_extension_is_accepted(self, tmp_path):
         pro_path = str(tmp_path / "Gamma.kicad_pro")
-        result = ProjectCommands().create_project(
-            {"path": pro_path, "name": "Gamma.kicad_pro"}
-        )
+        result = ProjectCommands().create_project({"path": pro_path, "name": "Gamma.kicad_pro"})
         assert result["success"] is True, result
         assert result["project"]["name"] == "Gamma"
 
@@ -101,9 +99,7 @@ class TestCreateProjectStrayDirectory:
         stray = tmp_path / "gd32_radio.kicad_pro"
         stray.mkdir()
 
-        result = ProjectCommands().create_project(
-            {"name": "gd32_radio", "path": str(tmp_path)}
-        )
+        result = ProjectCommands().create_project({"name": "gd32_radio", "path": str(tmp_path)})
 
         assert result["success"] is True, result
         assert result.get("errorCode") != "PROJECT_EXISTS"
@@ -116,9 +112,7 @@ class TestCreateProjectStrayDirectory:
         stray.mkdir()
         (stray / "junk.txt").write_text("x", encoding="utf-8")
 
-        result = ProjectCommands().create_project(
-            {"name": "gd32_radio", "path": str(tmp_path)}
-        )
+        result = ProjectCommands().create_project({"name": "gd32_radio", "path": str(tmp_path)})
 
         assert result["success"] is False
         assert result["errorCode"] == "PATH_IS_DIRECTORY"
@@ -154,12 +148,8 @@ class TestCreateProjectFailureCleanup:
         new_dir = tmp_path / "fresh_sub"
         assert not new_dir.exists()
 
-        with patch.object(
-            project_mod.pcbnew, "SaveBoard", side_effect=RuntimeError("boom")
-        ):
-            result = ProjectCommands().create_project(
-                {"name": "Proj", "path": str(new_dir)}
-            )
+        with patch.object(project_mod.pcbnew, "SaveBoard", side_effect=RuntimeError("boom")):
+            result = ProjectCommands().create_project({"name": "Proj", "path": str(new_dir)})
 
         assert result["success"] is False
         # The directory we created must have been cleaned up.
@@ -171,9 +161,7 @@ class TestCreateProjectFailureCleanup:
         new_dir = tmp_path / "fresh_sub2"
 
         with patch.object(project_mod.json, "dump", side_effect=RuntimeError("boom")):
-            result = ProjectCommands().create_project(
-                {"name": "Proj", "path": str(new_dir)}
-            )
+            result = ProjectCommands().create_project({"name": "Proj", "path": str(new_dir)})
 
         assert result["success"] is False
         # Neither the schematic we wrote nor the created dir should remain.
@@ -191,16 +179,20 @@ class TestOpenProjectPathParam:
     def test_open_with_path_to_pro_file(self, tmp_path):
         pro = tmp_path / "Demo.kicad_pro"
         pro.write_text("{}", encoding="utf-8")
+        # The board sibling must exist (C1 existence guard).
+        (tmp_path / "Demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
 
         result = ProjectCommands().open_project({"path": str(pro)})
 
         assert result["success"] is True, result
+        # C11: project.path is the .kicad_pro; the board is boardPath.
         assert result["project"]["path"] == str(pro)
         assert result["project"]["boardPath"] == str(tmp_path / "Demo.kicad_pcb")
 
     def test_open_with_path_to_directory_single_project(self, tmp_path):
         pro = tmp_path / "Demo.kicad_pro"
         pro.write_text("{}", encoding="utf-8")
+        (tmp_path / "Demo.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
 
         result = ProjectCommands().open_project({"path": str(tmp_path)})
 
@@ -226,6 +218,7 @@ class TestOpenProjectPathParam:
     def test_filename_still_works(self, tmp_path):
         pro = tmp_path / "Legacy.kicad_pro"
         pro.write_text("{}", encoding="utf-8")
+        (tmp_path / "Legacy.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
 
         result = ProjectCommands().open_project({"filename": str(pro)})
 
@@ -252,8 +245,11 @@ class TestSaveProjectNamesTarget:
         result = pc.save_project({})
 
         assert result["success"] is True, result
+        # savedPath is the concrete board file written (.kicad_pcb)...
         assert result["savedPath"] == str(tmp_path / "hier.kicad_pcb")
-        assert result["project"]["path"] == str(tmp_path / "hier.kicad_pcb")
+        # ...while C11 standardizes project.path on the .kicad_pro + boardPath.
+        assert result["project"]["path"] == str(tmp_path / "hier.kicad_pro")
+        assert result["project"]["boardPath"] == str(tmp_path / "hier.kicad_pcb")
         assert str(tmp_path / "hier.kicad_pcb") in result["message"]
 
     def test_explicit_path_is_a_save_as_target(self, tmp_path):

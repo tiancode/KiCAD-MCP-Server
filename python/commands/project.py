@@ -128,6 +128,19 @@ def _new_project_document(pro_filename: str) -> Dict[str, Any]:
     }
 
 
+# Stable BOARD methods used to detect a SWIG-dehydrated proxy.  pcbnew.LoadBoard
+# can hand back a raw SwigPyObject (it type-checks, but every method access
+# raises AttributeError) on some KiCad builds / for garbage input.  Mirrors
+# KiCADInterface._BOARD_HEALTH_METHODS; kept here so open_project can validate a
+# load transactionally BEFORE committing it as self.board (E2E round 7 C1/C2).
+_BOARD_HEALTH_METHODS = ("GetDesignSettings", "GetBoardEdgesBoundingBox", "GetFileName")
+
+
+def _board_has_live_dispatch(board: Any) -> bool:
+    """True when ``board`` exposes live SWIG method dispatch (not a dehydrated proxy)."""
+    return board is not None and all(hasattr(board, m) for m in _BOARD_HEALTH_METHODS)
+
+
 class ProjectCommands:
     """Handles project-related KiCAD operations"""
 
@@ -151,10 +164,23 @@ class ProjectCommands:
         created_dir_root: Optional[str] = None
         leaf_dir: Optional[str] = None
         try:
-            # Accept both 'name' (from MCP tool) and 'projectName' (legacy)
-            project_name = params.get("name") or params.get("projectName")
+            # Accept both 'name' (from MCP tool) and 'projectName' (legacy).
+            # Resolve the effective name, treating an empty/whitespace value as
+            # absent so it can't slip past as a truthy "   ".
+            raw_name = params.get("name")
+            if raw_name is None or not str(raw_name).strip():
+                raw_name = params.get("projectName")
+            project_name = raw_name if (raw_name and str(raw_name).strip()) else None
             path = params.get("path")
             template = params.get("template")
+
+            # C9: distinguish an EXPLICITLY empty/whitespace name (user error →
+            # INVALID_NAME) from an omitted one (may still be derived from a
+            # .kicad_pro path below, else defaults to "New_Project").  The bare
+            # `or`-collapse used before silently turned "" into the default, so
+            # an accidental empty name produced a surprise "New_Project" project.
+            name_key_present = ("name" in params) or ("projectName" in params)
+            name_explicitly_empty = name_key_present and project_name is None
 
             # Normalise a caller that passed the .kicad_pro FILE as ``path``
             # instead of its containing directory (E2E round 6 S1a).
@@ -169,7 +195,7 @@ class ProjectCommands:
                             "success": False,
                             "message": (
                                 f'Conflicting project names: path implies "{derived_name}" '
-                                f"(from {os.path.basename(path)}) but name=\"{project_name}\". "
+                                f'(from {os.path.basename(path)}) but name="{project_name}". '
                                 "Pass `path` as the directory and `name` as the project "
                                 "name, or make the two agree."
                             ),
@@ -185,6 +211,23 @@ class ProjectCommands:
 
             # Defaults (preserved from the original behaviour).
             if not project_name:
+                # C9: an explicitly-provided empty name is a user error, not a
+                # silent fallback.  (A .kicad_pro `path` above may already have
+                # supplied the name, in which case project_name is truthy here.)
+                if name_explicitly_empty:
+                    return {
+                        "success": False,
+                        "message": (
+                            "Project name is empty. Pass a non-empty `name` — it "
+                            "becomes the <name>.kicad_pro basename."
+                        ),
+                        "errorCode": "INVALID_NAME",
+                        "hint": (
+                            "`name` must be a non-empty identifier; an empty or "
+                            "whitespace string is not accepted (it would otherwise "
+                            "silently become 'New_Project')."
+                        ),
+                    }
                 project_name = "New_Project"
             if not path:
                 path = os.getcwd()
@@ -424,22 +467,87 @@ class ProjectCommands:
                     }
                 filename = pros[0]
 
-            # If it's a project file, get the board file
-            if filename.endswith(".kicad_pro"):
-                board_path = os.path.splitext(filename)[0] + ".kicad_pcb"
-            else:
-                board_path = filename
+            # C1: validate the extension BEFORE touching the loader.
+            # open_project handles KiCad project/board documents only — a .txt
+            # or other file is user error (UNSUPPORTED_FILE), not an opaque
+            # INTERNAL_ERROR from feeding garbage to pcbnew.LoadBoard.
+            low = filename.lower()
+            if not (low.endswith(".kicad_pro") or low.endswith(".kicad_pcb")):
+                return {
+                    "success": False,
+                    "message": (f"Unsupported file for open_project: {os.path.basename(filename)}"),
+                    "errorCode": "UNSUPPORTED_FILE",
+                    "hint": (
+                        "Pass a .kicad_pro or .kicad_pcb file (or a directory "
+                        "containing exactly one .kicad_pro)."
+                    ),
+                }
 
-            # Load the board
-            board = pcbnew.LoadBoard(board_path)
+            # Resolve the board (.kicad_pcb) and project (.kicad_pro) siblings.
+            base = os.path.splitext(filename)[0]
+            board_path = base + ".kicad_pcb"
+            project_path = base + ".kicad_pro"
+
+            # C1: a missing file must read as a clean FILE_NOT_FOUND, never a
+            # false "loaded the board … restart the MCP server".  Point at
+            # whichever file the caller actually named when that's what's
+            # missing, else at the board file we need.
+            if not os.path.isfile(board_path):
+                if filename.endswith(".kicad_pro") and not os.path.isfile(filename):
+                    missing, what = filename, "project file"
+                else:
+                    missing, what = board_path, "board file"
+                return {
+                    "success": False,
+                    "message": f"{what} not found: {missing}",
+                    "errorCode": "FILE_NOT_FOUND",
+                    "hint": (
+                        "Check the path is absolute and the project/board file " "exists on disk."
+                    ),
+                }
+
+            # C1 + C2: load into a LOCAL, health-probe it, and only swap
+            # self.board on success.  A corrupt/unreadable file must surface a
+            # truthful PARSE_ERROR (no bogus restart advice) AND must leave the
+            # previously-loaded board intact — open is not committed until it
+            # succeeds (transactional open).
+            try:
+                board = pcbnew.LoadBoard(board_path)
+            except Exception as load_err:
+                logger.error(f"LoadBoard({board_path!r}) failed: {load_err}")
+                return {
+                    "success": False,
+                    "message": f"Could not read board file: {board_path}",
+                    "errorCode": "PARSE_ERROR",
+                    "errorDetails": str(load_err),
+                    "hint": (
+                        "The .kicad_pcb file appears to be corrupt or not a valid "
+                        "KiCad board. The previously-loaded project (if any) is kept."
+                    ),
+                }
+
+            if not _board_has_live_dispatch(board):
+                return {
+                    "success": False,
+                    "message": f"Could not read board file: {board_path}",
+                    "errorCode": "PARSE_ERROR",
+                    "hint": (
+                        "The .kicad_pcb file appears to be corrupt or not a valid "
+                        "KiCad board. The previously-loaded project (if any) is kept."
+                    ),
+                }
+
+            # Commit only after validation.
             self.board = board
 
             return {
                 "success": True,
                 "message": f"Opened project: {os.path.basename(board_path)}",
                 "project": {
+                    # C11: project.path is ALWAYS the .kicad_pro; the board file
+                    # is reported separately as boardPath.
                     "name": os.path.splitext(os.path.basename(board_path))[0],
-                    "path": filename,
+                    "path": project_path,
                     "boardPath": board_path,
                 },
             }
@@ -484,13 +592,18 @@ class ProjectCommands:
             # currently-loaded board, which is whatever was last created/opened;
             # stating the path removes the ambiguity when several projects have
             # been touched in one session (E2E round 6, folded observation).
+            # C11: standardize project.path on the .kicad_pro across the tool
+            # family; report the actual board file written as boardPath (and,
+            # for save-as clarity, the concrete savedPath — the .kicad_pcb).
+            project_base = os.path.splitext(saved_path)[0]
             return {
                 "success": True,
                 "message": f"Saved project to: {saved_path}",
                 "savedPath": saved_path,
                 "project": {
-                    "name": os.path.splitext(os.path.basename(saved_path))[0],
-                    "path": saved_path,
+                    "name": os.path.basename(project_base),
+                    "path": project_base + ".kicad_pro",
+                    "boardPath": saved_path,
                 },
             }
 
@@ -515,11 +628,17 @@ class ProjectCommands:
             title_block = self.board.GetTitleBlock()
             filename = self.board.GetFileName()
 
+            # C11: report project.path as the .kicad_pro and the loaded board
+            # file separately as boardPath — consistent with create/open/save.
+            base = os.path.splitext(filename)[0]
+            project_path = (base + ".kicad_pro") if filename else filename
+
             return {
                 "success": True,
                 "project": {
-                    "name": os.path.splitext(os.path.basename(filename))[0],
-                    "path": filename,
+                    "name": os.path.basename(base) if filename else "",
+                    "path": project_path,
+                    "boardPath": filename,
                     "title": title_block.GetTitle(),
                     "date": title_block.GetDate(),
                     "revision": title_block.GetRevision(),

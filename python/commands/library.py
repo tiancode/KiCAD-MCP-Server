@@ -235,40 +235,17 @@ class LibraryManager:
         return cache["3rdparty"]
 
     def _locate_kicad_footprint_dir(self) -> Optional[str]:
-        """Find KiCAD footprint directory."""
-        possible_paths = [
-            "/usr/share/kicad/footprints",
-            "/usr/local/share/kicad/footprints",
-            "C:/Program Files/KiCad/10.0/share/kicad/footprints",
-            "C:/Program Files/KiCad/9.0/share/kicad/footprints",
-            "C:/Program Files/KiCad/8.0/share/kicad/footprints",
-            "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints",
-        ]
+        """Find the KiCAD stock footprint directory (first existing search root).
 
-        # Environment variable takes precedence (most reliable on non-standard installs).
-        for var in (
-            "KICAD10_FOOTPRINT_DIR",
-            "KICAD9_FOOTPRINT_DIR",
-            "KICAD8_FOOTPRINT_DIR",
-        ):
-            if var in os.environ:
-                possible_paths.insert(0, os.environ[var])
+        Delegates to the ONE shared cross-platform resolver
+        (utils.platform_helper.kicad_footprint_search_roots) that also backs
+        list_footprint_libraries — so the two can no longer disagree about which
+        roots to consider (the C6 divergence). Env-var overrides are already
+        ordered first by the resolver, so the first existing root wins.
+        """
+        from utils.platform_helper import PlatformHelper
 
-        # Flatpak: the Library.Footprints runtime extension ships under
-        # /var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints/.../files/footprints
-        # The hash in the path changes per release, so glob the newest.
-        try:
-            flatpak_glob = sorted(
-                Path("/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints").glob(
-                    "*/stable/*/files/footprints"
-                )
-            )
-            if flatpak_glob:
-                possible_paths.append(str(flatpak_glob[-1]))
-        except OSError:
-            pass
-
-        for path in possible_paths:
+        for path in PlatformHelper.kicad_footprint_search_roots():
             if os.path.isdir(path):
                 return path
 

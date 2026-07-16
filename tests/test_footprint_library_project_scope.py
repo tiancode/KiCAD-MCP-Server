@@ -199,3 +199,76 @@ def test_get_footprint_info_found_in_project_lib(no_global_fp_table, tmp_path):
     assert out["success"] is True
     assert out["info"]["name"] == "FOO"
     assert out["info"]["library"] == "mylib"
+
+
+# ---------------------------------------------------------------------------
+# C10: register_footprint_library must validate the path before writing an entry
+# ---------------------------------------------------------------------------
+def _fp_table_text(project_dir: Path) -> str:
+    tbl = project_dir / "fp-lib-table"
+    return tbl.read_text(encoding="utf-8") if tbl.exists() else ""
+
+
+def test_register_footprint_library_rejects_nonexistent_pretty(tmp_path):
+    """A nonexistent .pretty must be refused (LIBRARY_NOT_FOUND), not written
+    as a dangling fp-lib-table entry."""
+    from commands.footprint import FootprintCreator
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "mini.kicad_pro").write_text("{}", encoding="utf-8")
+    missing = proj / "does_not_exist.pretty"
+
+    out = FootprintCreator().register_footprint_library(
+        library_path=str(missing),
+        scope="project",
+        project_path=str(proj / "mini.kicad_pro"),
+    )
+
+    assert out["success"] is False
+    assert out["errorCode"] == "LIBRARY_NOT_FOUND"
+    # Nothing dangling was written.
+    assert "does_not_exist" not in _fp_table_text(proj)
+
+
+def test_register_footprint_library_rejects_wrong_type_file(tmp_path):
+    """A real file that isn't a .pretty directory (e.g. a .kicad_pcb) is a
+    type error (INVALID_LIBRARY_TYPE), not a silent .pretty coercion."""
+    from commands.footprint import FootprintCreator
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "mini.kicad_pro").write_text("{}", encoding="utf-8")
+    board = proj / "mini.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+
+    out = FootprintCreator().register_footprint_library(
+        library_path=str(board),
+        scope="project",
+        project_path=str(proj / "mini.kicad_pro"),
+    )
+
+    assert out["success"] is False
+    assert out["errorCode"] == "INVALID_LIBRARY_TYPE"
+    assert "mini" not in _fp_table_text(proj) or "kicad_pcb" not in _fp_table_text(proj)
+
+
+def test_register_footprint_library_accepts_existing_pretty(tmp_path):
+    """A real .pretty directory registers and lands in the project fp-lib-table."""
+    from commands.footprint import FootprintCreator
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "mini.kicad_pro").write_text("{}", encoding="utf-8")
+    pretty = proj / "custom.pretty"
+    pretty.mkdir()
+
+    out = FootprintCreator().register_footprint_library(
+        library_path=str(pretty),
+        scope="project",
+        project_path=str(proj / "mini.kicad_pro"),
+    )
+
+    assert out["success"] is True
+    assert out.get("already_registered") is False
+    assert '(name "custom")' in _fp_table_text(proj)

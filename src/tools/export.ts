@@ -101,7 +101,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     "Export the PCB as a 3D model.",
     {
       outputPath: z.string().describe("Path to save the 3D model file"),
-      format: z.enum(["STEP", "STL", "VRML", "OBJ"]).describe("3D model format"),
+      format: z.enum(["STEP", "VRML"]).describe("3D model format (STEP or VRML)"),
       includeComponents: z.boolean().optional().describe("Include 3D component models"),
       includeCopper: z.boolean().optional().describe("Include copper layers"),
       includeSolderMask: z.boolean().optional().describe("Include solder mask"),
@@ -140,7 +140,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
       "Sourcing columns (MPN, Manufacturer, LCSC, Datasheet, …) come from footprint " +
       "fields: run sync_schematic_to_board first so schematic symbol fields are copied " +
       "onto the board. A requested attribute matches a field by exact name, " +
-      "case-insensitively, or by leading token (\"LCSC\" resolves the \"LCSC Part\" " +
+      'case-insensitively, or by leading token ("LCSC" resolves the "LCSC Part" ' +
       "field); any attribute missing on every footprint is reported in attributesMissing " +
       "plus a warning (never silently dropped).",
     {
@@ -161,7 +161,7 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
         .array(z.string())
         .optional()
         .describe(
-          "Sourcing/custom footprint fields to add as columns, e.g. [\"LCSC\",\"MPN\"," +
+          'Sourcing/custom footprint fields to add as columns, e.g. ["LCSC","MPN",' +
             "\"Manufacturer\"]. Alias of 'attributes'.",
         ),
       attributes: z

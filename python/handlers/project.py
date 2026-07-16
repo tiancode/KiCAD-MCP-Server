@@ -23,6 +23,7 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -376,6 +377,93 @@ def handle_create_project(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
     return result
 
 
+# Layers rendered into the snapshot PDF — a board-overview checkpoint (both
+# copper sides, silkscreen and the board outline).  All are canonical
+# untranslated KiCad layer names that exist on every board.
+_SNAPSHOT_PDF_LAYERS = "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts"
+
+
+def _snapshot_board_file(iface: "KiCADInterface", snapshot_dir: Path) -> Optional[Path]:
+    """Locate the .kicad_pcb inside the freshly-copied snapshot dir to render.
+
+    Prefers the loaded board's basename (the copytree preserved names), else
+    falls back to a lone *.kicad_pcb in the snapshot.  Returns None when the
+    snapshot has no unambiguous board file (e.g. board never saved).
+    """
+    board = getattr(iface, "board", None)
+    if board is not None:
+        try:
+            bf = board.GetFileName()
+        except Exception:
+            bf = None
+        if bf:
+            cand = snapshot_dir / Path(bf).name
+            if cand.is_file():
+                return cand
+    pcbs = sorted(snapshot_dir.glob("*.kicad_pcb"))
+    return pcbs[0] if len(pcbs) == 1 else None
+
+
+def _render_snapshot_pdf(iface: "KiCADInterface", snapshot_dir: Path) -> Dict[str, Optional[str]]:
+    """Best-effort render of the snapshot board to a PDF inside the snapshot.
+
+    Returns ``{"pdf": <path or None>, "pdfNote": <truthful note or None>}``.
+    Never raises — the snapshot itself must succeed even when the render can't
+    (board unsaved, kicad-cli missing, render error); the reason is surfaced in
+    ``pdfNote`` so the documented "renders board to PDF" claim stays truthful.
+    """
+    board_file = _snapshot_board_file(iface, snapshot_dir)
+    if board_file is None:
+        return {
+            "pdf": None,
+            "pdfNote": (
+                "PDF not rendered: no saved .kicad_pcb found for this project "
+                "(save the board first)."
+            ),
+        }
+
+    from utils.kicad_cli import c_locale_env, find_kicad_cli
+
+    kicad_cli = find_kicad_cli()
+    if not kicad_cli:
+        return {
+            "pdf": None,
+            "pdfNote": ("PDF not rendered: kicad-cli not found (install KiCAD 8.0+ or set PATH)."),
+        }
+
+    pdf_out = snapshot_dir / (board_file.stem + ".pdf")
+    cmd = [
+        kicad_cli,
+        "pcb",
+        "export",
+        "pdf",
+        "--output",
+        str(pdf_out),
+        "--mode-single",
+        "--layers",
+        _SNAPSHOT_PDF_LAYERS,
+        str(board_file),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=180, env=c_locale_env()
+        )
+    except Exception as render_err:  # noqa: BLE001 — never fail the snapshot
+        logger.warning("snapshot PDF render error: %s", render_err)
+        return {"pdf": None, "pdfNote": f"PDF render failed: {render_err}"}
+
+    if result.returncode == 0 and pdf_out.is_file() and pdf_out.stat().st_size > 0:
+        logger.info("snapshot PDF rendered: %s", pdf_out)
+        return {"pdf": str(pdf_out), "pdfNote": None}
+
+    detail = result.stderr.strip() or "no output file produced"
+    logger.warning("snapshot PDF render failed (exit %s): %s", result.returncode, detail)
+    return {
+        "pdf": None,
+        "pdfNote": f"PDF render failed (kicad-cli exit {result.returncode}): {detail}",
+    }
+
+
 def handle_snapshot_project(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Copy the entire project folder to a snapshot directory for checkpoint/resume."""
     try:
@@ -457,6 +545,12 @@ def handle_snapshot_project(iface: "KiCADInterface", params: Dict[str, Any]) -> 
             ),
         )
         logger.info(f"Project snapshot saved: {snapshot_dir}")
+
+        # Best-effort board->PDF render into the snapshot (the tool description
+        # and README promise "renders board to PDF").  Degrades truthfully via
+        # pdfNote when it can't run — the snapshot copy itself always succeeds.
+        pdf_result = _render_snapshot_pdf(iface, Path(snapshot_dir))
+
         return {
             "success": True,
             "message": f"Snapshot saved: {snapshot_name}",
@@ -464,6 +558,8 @@ def handle_snapshot_project(iface: "KiCADInterface", params: Dict[str, Any]) -> 
             "sourceDir": project_dir,
             "promptSaved": str(prompt_file) if prompt_file else None,
             "mcpLogSaved": str(mcp_log_dest) if mcp_log_dest else None,
+            "pdf": pdf_result["pdf"],
+            "pdfNote": pdf_result["pdfNote"],
         }
     except Exception as e:
         logger.error(f"snapshot_project error: {e}")

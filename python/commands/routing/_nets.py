@@ -79,7 +79,13 @@ def netclass_property(
 
 class NetMixin:
     def get_nets_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get a list of all nets in the PCB"""
+        """Get a list of all nets in the PCB.
+
+        With ``includeStats`` each net gains ``{trackCount, viaCount,
+        totalLength}`` (routed copper), with ``totalLength`` in the requested
+        ``unit`` (mm/mil/inch, default mm).  Without the flag the response keeps
+        its lean ``{name, code, class}`` per-net shape unchanged.
+        """
         try:
             if not self.board:
                 return {
@@ -87,6 +93,11 @@ class NetMixin:
                     "message": "No board is loaded",
                     "errorDetails": "Load or create a board first",
                 }
+
+            include_stats = bool(params.get("includeStats"))
+            from utils.units import normalize_unit
+
+            unit = normalize_unit(params.get("unit"))
 
             nets = []
             netinfo = self.board.GetNetInfo()
@@ -101,10 +112,16 @@ class NetMixin:
                         }
                     )
 
+            if include_stats:
+                self._attach_net_stats(nets, unit)
+
             from utils.pagination import paginate
 
             nets, page = paginate(nets, params)
-            return {"success": True, "nets": nets, **page}
+            result = {"success": True, "nets": nets, **page}
+            if include_stats:
+                result["unit"] = unit
+            return result
 
         except Exception as e:
             logger.error(f"Error getting nets list: {str(e)}")
@@ -113,6 +130,60 @@ class NetMixin:
                 "message": "Failed to get nets list",
                 "errorDetails": str(e),
             }
+
+    def _attach_net_stats(self, nets: list, unit: str) -> None:
+        """Attach ``{trackCount, viaCount, totalLength}`` (in ``unit``) to each
+        net dict in-place, from the board's routed tracks/vias.
+
+        Reuses the pure ``compute_net_lengths`` aggregator (the same engine
+        behind report_net_lengths) so the two tools can't drift on length math.
+        Nets with no copper get zeroed stats rather than being dropped.
+        """
+        from utils.units import nm_to_unit
+
+        from ._lengths import compute_net_lengths
+
+        _NM_PER_MM = 1_000_000
+
+        tracks: list = []
+        vias: list = []
+        for track in list(self.board.Tracks()):
+            try:
+                if track.Type() == pcbnew.PCB_VIA_T:
+                    vias.append({"net": track.GetNetname()})
+                    continue
+                start = track.GetStart()
+                end = track.GetEnd()
+                item: Dict[str, Any] = {
+                    "net": track.GetNetname(),
+                    "startX": start.x / _NM_PER_MM,
+                    "startY": start.y / _NM_PER_MM,
+                    "endX": end.x / _NM_PER_MM,
+                    "endY": end.y / _NM_PER_MM,
+                    "layer": self.board.GetLayerName(track.GetLayer()),
+                }
+                # Arcs report their true curved length; straight segments are
+                # derived from endpoints inside compute_net_lengths.
+                if track.Type() == pcbnew.PCB_ARC_T and hasattr(track, "GetLength"):
+                    item["length"] = track.GetLength() / _NM_PER_MM
+                tracks.append(item)
+            except Exception as track_err:  # noqa: BLE001 — skip unreadable items
+                logger.warning(f"get_nets_list stats: skipping track: {track_err}")
+
+        per_net = compute_net_lengths(tracks, vias)
+        for net in nets:
+            stats = per_net.get(net.get("name"))
+            if stats:
+                length_mm = stats["lengthMm"]
+                track_count = stats["segmentCount"]
+                via_count = stats["viaCount"]
+            else:
+                length_mm = 0.0
+                track_count = 0
+                via_count = 0
+            net["trackCount"] = track_count
+            net["viaCount"] = via_count
+            net["totalLength"] = round(nm_to_unit(length_mm * _NM_PER_MM, unit), 6)
 
     def query_traces(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Query traces by net, layer, or bounding box"""

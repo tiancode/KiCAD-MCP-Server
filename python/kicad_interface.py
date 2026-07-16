@@ -426,6 +426,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "get_backend_info": "ui",
         "get_backend_state": "ui",
         "launch_kicad_ui": "ui",
+        "quit_kicad_ui": "ui",
         "reconcile_backends": "ui",
         "run_action": "ui",
         "add_to_selection": "selection",
@@ -1920,15 +1921,21 @@ class KiCADInterface(BoardPersistenceMixin):
                 if result.get("success", False):
                     if command == "create_project" or command == "open_project":
                         logger.info("Updating board reference...")
-                        # Get board from the project commands handler
-                        self.board = self.project_commands.board
+                        # C2: transactional swap — validate the freshly
+                        # created/opened board BEFORE committing it, and keep
+                        # the previously-loaded board untouched until then.  A
+                        # create/open that yields an unusable board must NOT
+                        # strand the caller by clobbering the project they
+                        # already had loaded.
+                        previous_board = getattr(self, "board", None)
+                        candidate = self.project_commands.board
 
                         # Detect SWIG dehydration before claiming success.
                         # Without this, every later board op sees a raw
                         # SwigPyObject and raises AttributeError, while the
                         # MCP keeps reporting "Opened project" — the exact
                         # symptom users hit on KiCAD nightlies.
-                        if not self._is_board_healthy():
+                        if not self._is_board_healthy(candidate):
                             board_path = (result.get("project") or {}).get("boardPath")
                             recovered = None
                             if board_path:
@@ -1938,29 +1945,39 @@ class KiCADInterface(BoardPersistenceMixin):
                                 )
                                 recovered = self._safe_load_board(board_path)
                             if recovered is not None:
-                                self.board = recovered
-                                self.project_commands.board = recovered
+                                candidate = recovered
                                 result.setdefault("warnings", []).append(
                                     "SWIG board proxy was dehydrated on load; "
                                     "recovered via pcbnew module reload"
                                 )
                             else:
-                                # Surface the truth — never claim success when
-                                # the board is unusable.
+                                # Recovery failed — restore the previous board
+                                # so a bad open/create doesn't discard the
+                                # project the caller already had, and surface a
+                                # truthful failure (no false "loaded the board"
+                                # claim, no bogus restart advice for what is a
+                                # corrupt/unreadable file).
+                                self.project_commands.board = previous_board
+                                self.board = previous_board
                                 return {
                                     "success": False,
-                                    "message": (
-                                        f"{command} loaded the board but the SWIG "
-                                        "proxy is dehydrated and recovery failed"
-                                    ),
+                                    "message": (f"{command} could not load a usable board"),
+                                    "errorCode": "PARSE_ERROR",
                                     "errorDetails": (
                                         "pcbnew.LoadBoard returned a BOARD whose "
-                                        "method dispatch is missing (raw SwigPyObject). "
-                                        "This indicates SWIG state corruption in the "
-                                        "current Python process — restart the MCP "
-                                        "server to recover."
+                                        "method dispatch is missing (raw "
+                                        "SwigPyObject) — the file is unreadable or "
+                                        "the SWIG proxy is dehydrated. The "
+                                        "previously-loaded project (if any) was kept."
+                                    ),
+                                    "hint": (
+                                        "Verify the .kicad_pcb is a valid KiCad "
+                                        "board, then retry."
                                     ),
                                 }
+                        # Commit the validated board.
+                        self.board = candidate
+                        self.project_commands.board = candidate
                         self._update_command_handlers()
                         # Record the file's signature so subsequent auto-saves
                         # can detect external modifications and refuse to
@@ -3128,9 +3145,7 @@ class KiCADInterface(BoardPersistenceMixin):
             return False
         return True
 
-    def _apply_schematic_fields_to_footprint(
-        self, fp: Any, fields: Dict[str, str]
-    ) -> List[str]:
+    def _apply_schematic_fields_to_footprint(self, fp: Any, fields: Dict[str, str]) -> List[str]:
         """Copy schematic custom fields onto one board footprint.
 
         Returns the names of fields actually written (added or value-changed).
@@ -3210,8 +3225,7 @@ class KiCADInterface(BoardPersistenceMixin):
                 fields_written += len(written)
         if footprints_updated:
             logger.info(
-                "propagated schematic sourcing fields to %d footprint(s), "
-                "%d field(s) written",
+                "propagated schematic sourcing fields to %d footprint(s), " "%d field(s) written",
                 footprints_updated,
                 fields_written,
             )

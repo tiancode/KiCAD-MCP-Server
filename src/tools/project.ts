@@ -11,14 +11,18 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Create project tool
   server.tool(
     "create_project",
-    "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips. Refuses (errorCode PROJECT_EXISTS) if project files already exist unless overwrite=true.",
+    "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips. Refuses (errorCode PROJECT_EXISTS) if project files already exist unless overwrite=true, or INVALID_NAME if `name` is empty/whitespace. Returns project.path (the .kicad_pro) and boardPath (the .kicad_pcb).",
     {
       path: z
         .string()
         .describe(
           "Directory in which to create <name>.kicad_pro (NOT the .kicad_pro file itself). If a .kicad_pro file path is passed, it is split into directory + name; a name that disagrees with the filename errors PROJECT_NAME_CONFLICT.",
         ),
-      name: z.string().describe("Project name (without extension), used as the <name>.kicad_pro basename"),
+      name: z
+        .string()
+        .describe(
+          "Project name (without extension), used as the <name>.kicad_pro basename. Must be non-empty (an empty/whitespace name errors INVALID_NAME).",
+        ),
       autoLaunch: z
         .boolean()
         .optional()
@@ -34,7 +38,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Open project tool
   server.tool(
     "open_project",
-    "Open an existing KiCAD project. Accepts `filename` or `path` (interchangeable): a .kicad_pro/.kicad_pcb file, or a directory containing exactly one .kicad_pro (errors NO_PROJECT_IN_DIR / AMBIGUOUS_PROJECT otherwise). Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips.",
+    "Open an existing KiCAD project. Accepts `filename` or `path` (interchangeable): a .kicad_pro/.kicad_pcb file, or a directory containing exactly one .kicad_pro (errors NO_PROJECT_IN_DIR / AMBIGUOUS_PROJECT otherwise). A missing file errors FILE_NOT_FOUND, a non-KiCad file UNSUPPORTED_FILE, and a corrupt board PARSE_ERROR — a failed open leaves any previously-loaded project intact. On success returns project.path (the .kicad_pro) and boardPath (the .kicad_pcb). Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips.",
     {
       filename: z
         .string()
@@ -57,7 +61,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Save project tool
   server.tool(
     "save_project",
-    "Save the currently-loaded KiCAD project (the last one created/opened). The response states which project path was saved (savedPath / project.path).",
+    "Save the currently-loaded KiCAD project (the last one created/opened). The response states which board file was written (savedPath, the .kicad_pcb) and returns project.path (the .kicad_pro) + boardPath (the .kicad_pcb).",
     {
       path: z
         .string()
@@ -76,7 +80,7 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
   // Get project info tool
   server.tool(
     "get_project_info",
-    "Get information about the current KiCAD project",
+    "Get information about the current KiCAD project. Returns project.path (the .kicad_pro) and boardPath (the .kicad_pcb), consistent with create_project / open_project / save_project.",
     {},
     async () => {
       const result = await callKicadScript("get_project_info", {});
@@ -84,10 +88,11 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // Snapshot project tool — saves a named checkpoint as PDF/image
+  // Snapshot project tool — copies the project files and, when possible,
+  // renders the saved board to a PDF checkpoint.
   server.tool(
     "snapshot_project",
-    "Save a named checkpoint snapshot of the project (renders board to PDF, records step label). Call after each major step; required by the demo workflow before waiting for user confirmation.",
+    "Save a named checkpoint snapshot of the project: copies the project files and renders the board to PDF when possible (returned as a `pdf` field; on failure the PDF is omitted and a note explains why), and records the step label. Call after each major step; required by the demo workflow before waiting for user confirmation.",
     {
       step: z.string().describe("Step number or identifier, e.g. '1'"),
       label: z.string().describe("Short checkpoint label, e.g. 'schematic_ok'"),

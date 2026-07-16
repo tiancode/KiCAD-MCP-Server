@@ -292,14 +292,14 @@ class FootprintCreator:
 
     def list_footprint_libraries(self, search_paths: Optional[List[str]] = None) -> Dict[str, Any]:
         """List all .pretty libraries and their footprints."""
-        default_paths = [
-            r"C:\Program Files\KiCad\9.0\share\kicad\footprints",
-            r"C:\Program Files\KiCad\8.0\share\kicad\footprints",
-            "/usr/share/kicad/footprints",
-            "/usr/local/share/kicad/footprints",
-            os.path.expanduser("~/Documents/KiCad/9.0/footprints"),
-        ]
-        paths = search_paths or default_paths
+        # Default search roots come from the ONE shared cross-platform resolver
+        # (utils.platform_helper.kicad_footprint_search_roots) so this no longer
+        # diverges from LibraryManager — the previous hardcoded list omitted the
+        # macOS app-bundle root and KiCad 10, so this returned 0 libraries on
+        # macOS out of the box (C6).
+        from utils.platform_helper import PlatformHelper
+
+        paths = search_paths or PlatformHelper.kicad_footprint_search_roots()
         libraries = {}
         for base in paths:
             bp = Path(base)
@@ -340,9 +340,50 @@ class FootprintCreator:
         -------
         dict with "success", "table_path", "library_name", "already_registered"
         """
-        pretty = Path(library_path)
+        # Validate BEFORE touching any lib-table: a footprint library is a
+        # *existing* ``.pretty`` DIRECTORY. Registering a nonexistent path or a
+        # wrong-type file (e.g. a .kicad_pcb) writes a dangling fp-lib-table
+        # entry that KiCAD later chokes on (C10) — refuse both up front.
+        raw = Path(library_path)
+        if not str(library_path).strip():
+            return {
+                "success": False,
+                "errorCode": "LIBRARY_NOT_FOUND",
+                "error": "libraryPath is required for register_footprint_library.",
+            }
+        # If the exact path the caller gave already exists but is not a .pretty
+        # directory, it's a wrong-type registration — don't silently coerce the
+        # name into a sibling .pretty that may not exist.
+        if raw.exists() and not (raw.is_dir() and raw.suffix == ".pretty"):
+            return {
+                "success": False,
+                "errorCode": "INVALID_LIBRARY_TYPE",
+                "error": (
+                    f"Not a footprint library: {raw}. A footprint library must be a "
+                    "'.pretty' directory (got "
+                    f"{'a file' if raw.is_file() else 'a non-.pretty directory'})."
+                ),
+            }
+
+        pretty = raw
         if not pretty.suffix == ".pretty":
             pretty = pretty.with_suffix(".pretty")
+
+        if not pretty.exists():
+            return {
+                "success": False,
+                "errorCode": "LIBRARY_NOT_FOUND",
+                "error": (
+                    f"Footprint library not found: {pretty}. Create the '.pretty' "
+                    "directory (e.g. via create_footprint) before registering it."
+                ),
+            }
+        if not pretty.is_dir():
+            return {
+                "success": False,
+                "errorCode": "INVALID_LIBRARY_TYPE",
+                "error": f"Footprint library must be a '.pretty' directory, not a file: {pretty}",
+            }
 
         name = library_name or pretty.stem
         uri = str(pretty).replace("\\", "/")  # KiCAD prefers forward slashes
