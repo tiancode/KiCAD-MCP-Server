@@ -186,7 +186,7 @@ The server provides 132 tools, each registered directly as an MCP tool -- just a
 
 ### Freerouting Autorouter (2 tools)
 
-- `autoroute` - Autoroute the current PCB with Freerouting: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES (strips pre-routes and planes from the DSN by default to avoid a Freerouting StackOverflow; set includePreRoutes/includePlanes to keep them)
+- `autoroute` - Autoroute the current PCB with Freerouting: exports Specctra DSN, runs the Freerouting CLI, imports the routed SES (strips pre-routed traces from the DSN by default to avoid a Freerouting crash while keeping copper planes; includePreRoutes=true keeps the traces, includePlanes=false also strips the planes)
 - `check_freerouting` - Check that Java (or Docker) and freerouting.jar are available; run before autoroute
 
 ### UI and Backend Management (8 tools)

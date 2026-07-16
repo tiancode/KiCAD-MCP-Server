@@ -21,7 +21,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
   // unrouted count to zero.
   server.tool(
     "autoroute",
-    "Autoroute a PCB with Freerouting: exports DSN, runs the CLI, imports the SES (REPLACES routing on the SES's nets, no duplicates). Needs Java 11+ and freerouting.jar (check_freerouting). boardPath (or, if omitted, the open board's file) is loaded FRESH and routed — a boardPath naming a DIFFERENT file routes that file and leaves the open board untouched (nonexistent path => FILE_NOT_FOUND); the routed file is returned as routed_board_path. attempts>1 runs best-of-N. By default pre-routed traces and copper planes are stripped from the DSN (they crash Freerouting 2.2.4) — set includePreRoutes/includePlanes to keep them. If Freerouting still routes 0 nets the call fails honestly with a hint.",
+    "Autoroute a PCB with Freerouting: exports DSN, runs the CLI, imports the SES (REPLACES routing on the SES's nets, no duplicates). Needs Java 11+ and freerouting.jar (check_freerouting). boardPath (or, if omitted, the open board's file) is loaded FRESH and routed — a boardPath naming a DIFFERENT file routes that file and leaves the open board untouched (nonexistent path => FILE_NOT_FOUND); the routed file is returned as routed_board_path. attempts>1 runs best-of-N. By default pre-routed traces are stripped from the DSN (they crash Freerouting 2.2.4) while copper planes are kept — includePreRoutes=true keeps the traces, includePlanes=false also strips the planes. If Freerouting still routes 0 nets the call fails honestly with a hint.",
     {
       boardPath: z
         .string()
@@ -50,7 +50,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
         .boolean()
         .optional()
         .describe(
-          "Keep copper planes (the DSN (plane ...) entries) in what Freerouting sees. Default false: stripped from the DSN only (never the board). Tradeoff: a stripped GND plane gets re-routed as ordinary traces, not a poured zone.",
+          "Keep copper planes (the DSN (plane ...) entries) in what Freerouting sees. Default TRUE (planes alone don't crash Freerouting, and stripping them turns the GND tree into a huge trace-routing job). Set false to strip them from the DSN only (never the board).",
         ),
       attempts: z
         .number()

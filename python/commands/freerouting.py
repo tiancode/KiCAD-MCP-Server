@@ -352,7 +352,9 @@ def _ses_routed_nets(ses_text: str) -> set:
 # java.lang.StackOverflowError at Simplex.to_IntOctagon). Removing those blocks
 # from the DSN handed to Freerouting sidesteps the crash. This rewrites ONLY the
 # ``.dsn`` fed to the router — never the ``.kicad_pcb`` — and is gated by the
-# includePreRoutes / includePlanes params (both default False = strip).
+# includePreRoutes (default False = strip the wiring, the actual crash trigger)
+# and includePlanes (default True = keep the planes; stripping them turns the
+# GND tree into a trace-routing job that times out) params.
 # ---------------------------------------------------------------------------
 
 
@@ -939,7 +941,13 @@ class FreeroutingCommands:
         # ``(plane …)`` copper from the DSN handed to Freerouting (both default
         # to stripping). This only rewrites the DSN, never the .kicad_pcb.
         include_pre_routes = bool(params.get("includePreRoutes", False))
-        include_planes = bool(params.get("includePlanes", False))
+        # Planes are KEPT by default: live round-7 testing showed the crash
+        # trigger is the pre-routed (wiring …) block alone — with planes kept
+        # Freerouting 2.2.4 converges in seconds, while stripping the planes
+        # turns the whole GND tree into an enormous trace-routing job that
+        # times out. includePlanes=False strips them for the rare board where
+        # the planes themselves break the DSN parse.
+        include_planes = bool(params.get("includePlanes", True))
 
         # Best-of-N parameters
         attempts_raw = params.get("attempts", 1)

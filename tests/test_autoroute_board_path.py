@@ -394,8 +394,11 @@ def test_remove_sexpr_blocks_counts_and_trims():
 
 @pytest.mark.unit
 def test_autoroute_strips_prerouting_from_the_dsn_fed_to_freerouting(tmp_path, jar):
-    """End-to-end: the DSN Freerouting sees has no wiring/planes but keeps the
-    Power/RF netclasses (B6 crash prevention without losing B7 widths)."""
+    """End-to-end: the DSN Freerouting sees has no pre-routed wiring but KEEPS
+    the copper planes and the Power/RF netclasses. Live round-7 testing showed
+    the (wiring …) block alone triggers the 2.2.4 crash, while stripping the
+    planes turns the GND tree into a trace-routing job that times out — so
+    planes stay by default (includePlanes=false strips them)."""
     path = tmp_path / "board.kicad_pcb"
     path.write_text("(kicad_pcb)\n")
     board = _FakeBoard([], str(path))
@@ -412,10 +415,31 @@ def test_autoroute_strips_prerouting_from_the_dsn_fed_to_freerouting(tmp_path, j
 
     dsn_on_disk = open(cap["dsn_path"]).read()
     assert "(wiring" not in dsn_on_disk
-    assert "(plane " not in dsn_on_disk
+    assert "(plane " in dsn_on_disk  # planes kept by default
     assert "(class Power" in dsn_on_disk and "(width 500)" in dsn_on_disk
     assert "(class RF" in dsn_on_disk and "(width 400)" in dsn_on_disk
-    assert out["dsn_prerouting_stripped"] == {"wiring_removed": True, "planes_removed": 2}
+    assert out["dsn_prerouting_stripped"] == {"wiring_removed": True, "planes_removed": 0}
+
+
+@pytest.mark.unit
+def test_autoroute_include_planes_false_strips_planes(tmp_path, jar):
+    """includePlanes=false opts into stripping the (plane …) entries too."""
+    path = tmp_path / "board.kicad_pcb"
+    path.write_text("(kicad_pcb)\n")
+    board = _FakeBoard([], str(path))
+    cc = _make_cmds(board, tmp_path, board_reload_callback=MagicMock(return_value=True))
+
+    fake_pcb, cap = _fake_pcbnew(MULTICLASS_DSN, load_board=board)
+    out = _run(
+        cc,
+        fake_pcb,
+        _fake_run_writes_ses(_SES_A),
+        {"boardPath": str(path), "freeroutingJar": str(jar), "includePlanes": False},
+    )
+    assert out["success"] is True
+    dsn_on_disk = open(cap["dsn_path"]).read()
+    assert "(plane " not in dsn_on_disk
+    assert out["dsn_prerouting_stripped"]["planes_removed"] == 2
 
 
 @pytest.mark.unit
