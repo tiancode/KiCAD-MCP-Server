@@ -9,7 +9,6 @@ import { KiCADMcpServer } from "./server.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 
-// Get the current directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -18,11 +17,9 @@ const __dirname = dirname(__filename);
  */
 async function main() {
   try {
-    // Parse command line arguments
     const args = process.argv.slice(2);
     const options = parseCommandLineArgs(args);
 
-    // Load configuration
     const config = await loadConfig(options.configPath);
 
     // Apply optional config overrides that the rest of the system reads via the
@@ -38,16 +35,12 @@ async function main() {
       process.env.KICAD_PYTHON = config.pythonPath;
     }
 
-    // Path to the Python script that interfaces with KiCAD
     const kicadScriptPath = join(dirname(__dirname), "python", "kicad_interface.py");
 
-    // Create the server
     const server = new KiCADMcpServer(kicadScriptPath, config.logLevel);
 
-    // Start the server
     await server.start();
 
-    // Setup graceful shutdown
     setupGracefulShutdown(server);
 
     logger.info("KiCAD MCP server started with STDIO transport");
@@ -77,7 +70,6 @@ function parseCommandLineArgs(args: string[]) {
  * Setup graceful shutdown handlers
  */
 function setupGracefulShutdown(server: KiCADMcpServer) {
-  // Handle termination signals
   process.on("SIGINT", async () => {
     logger.info("Received SIGINT signal. Shutting down...");
     await shutdownServer(server);
@@ -88,13 +80,11 @@ function setupGracefulShutdown(server: KiCADMcpServer) {
     await shutdownServer(server);
   });
 
-  // Handle uncaught exceptions
   process.on("uncaughtException", async (error) => {
     logger.error(`Uncaught exception: ${error}`);
     await shutdownServer(server);
   });
 
-  // Handle unhandled promise rejections
   process.on("unhandledRejection", async (reason) => {
     logger.error(`Unhandled promise rejection: ${reason}`);
     await shutdownServer(server);

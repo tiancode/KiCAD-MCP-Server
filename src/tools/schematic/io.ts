@@ -15,7 +15,6 @@ import {
 
 export function registerSchematicIoTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
-  // Export schematic to PDF
   server.tool(
     "export_schematic_pdf",
     "Export schematic to PDF format using kicad-cli.",
@@ -136,7 +135,6 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
     },
   );
 
-  // Generate netlist
   server.tool(
     "generate_netlist",
     "Return a structured JSON netlist — components (reference, value, footprint) and nets with connected component/pin pairs. Writes no file; to export a netlist file (Spice/XML/etc.) use export_netlist.",

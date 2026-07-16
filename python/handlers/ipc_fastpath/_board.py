@@ -177,7 +177,6 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
         commit = board.begin_commit()
         lines_created = 0
 
-        # Create line segments connecting the points
         for i in range(len(points)):
             start = points[i]
             end = points[(i + 1) % len(points)]  # Wrap around to close the outline

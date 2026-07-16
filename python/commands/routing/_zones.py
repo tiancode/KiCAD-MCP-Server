@@ -455,7 +455,6 @@ class ZoneMixin:
                     "errorCode": "VALIDATION",
                 }
 
-            # Get layer ID
             layer_id = self.board.GetLayerID(layer)
             if layer_id < 0:
                 return {
@@ -465,7 +464,6 @@ class ZoneMixin:
                     "errorCode": "VALIDATION",
                 }
 
-            # Create zone
             zone = pcbnew.ZONE(self.board)
             zone.SetLayer(layer_id)
 
@@ -476,7 +474,6 @@ class ZoneMixin:
                 if nets_map.has_key(resolved_net):
                     zone.SetNet(nets_map[resolved_net])
 
-            # Set zone properties
             scale = 1000000  # mm to nm
             zone.SetAssignedPriority(priority)
 
@@ -485,17 +482,14 @@ class ZoneMixin:
 
             zone.SetMinThickness(int(min_width * scale))
 
-            # Set fill type
             if fill_type == "hatched":
                 zone.SetFillMode(pcbnew.ZONE_FILL_MODE_HATCH_PATTERN)
             else:
                 zone.SetFillMode(pcbnew.ZONE_FILL_MODE_POLYGONS)
 
-            # Create outline
             outline = zone.Outline()
             outline.NewOutline()
 
-            # Add points to outline
             for point in points:
                 scale = unit_to_nm_scale(point.get("unit", "mm"))
                 x_nm = int(point["x"] * scale)

@@ -536,7 +536,6 @@ class KiCADProcessManager:
             True if launch successful, False otherwise
         """
         try:
-            # Check if already running
             if KiCADProcessManager.is_running():
                 logger.info("KiCAD is already running")
                 return True
@@ -566,7 +565,6 @@ class KiCADProcessManager:
 
             logger.info(f"Launching KiCAD: {' '.join(cmd)}")
 
-            # Launch process in background
             system = platform.system()
             if system == "Windows":
                 # Windows: Use CREATE_NEW_PROCESS_GROUP to detach
@@ -590,7 +588,6 @@ class KiCADProcessManager:
             # manager otherwise), so its PID appears in get_process_info().
             KiCADProcessManager._record_launched_pid(proc.pid)
 
-            # Wait for process to start
             if wait_for_start:
                 logger.info("Waiting for KiCAD to start...")
                 for i in range(10):  # Wait up to 5 seconds
@@ -842,7 +839,6 @@ def check_and_launch_kicad(project_path: Optional[Path] = None, auto_launch: boo
             "message": "KiCAD is not running (auto-launch disabled)",
         }
 
-    # Try to launch
     logger.info("KiCAD not detected, attempting to launch...")
     success = manager.launch(project_path)
 

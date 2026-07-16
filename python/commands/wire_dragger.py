@@ -390,7 +390,6 @@ class WireDragger:
                     xy_item[2] = nc[1]
                     endpoints_moved += 1
 
-            # Check if this wire is now zero-length
             if len(xy_items) >= 2:
                 x1, y1 = float(xy_items[0][1]), float(xy_items[0][2])
                 x2, y2 = float(xy_items[-1][1]), float(xy_items[-1][2])
@@ -431,7 +430,6 @@ class WireDragger:
         at_k = _K["at"]
         prop_k = _K["property"]
 
-        # Find current position and compute delta
         old_x = old_y = None
         for sub in item[1:]:
             if isinstance(sub, list) and sub and sub[0] == at_k and len(sub) >= 3:
@@ -691,7 +689,6 @@ class WireDragger:
             # accidentally overlapped.
             if (round(old_xy[0], 6), round(old_xy[1], 6)) in skip:
                 continue
-            # Check if a stationary pin touches this pin's old position
             touching = any(
                 _coords_match(old_xy[0], old_xy[1], sx, sy, eps) for (sx, sy) in stationary_pins
             )

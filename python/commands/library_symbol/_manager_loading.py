@@ -224,7 +224,6 @@ class LoadingMixin:
         # when it's missing, so creating one later triggers a rebuild.
         self._table_paths: List[Path] = []
 
-        # Load global libraries
         global_table = self._get_global_sym_lib_table()
         if global_table:
             self._table_paths.append(global_table)
@@ -234,7 +233,6 @@ class LoadingMixin:
         else:
             logger.warning(f"Global sym-lib-table not found at: {global_table}")
 
-        # Load project-specific libraries if project path provided
         if self.project_path:
             project_table = self.project_path / "sym-lib-table"
             self._table_paths.append(project_table)
@@ -401,7 +399,6 @@ class LoadingMixin:
             str(Path.home() / "Documents" / "KiCad" / "8.0" / "3rdparty"),
         ]
 
-        # Check environment variable
         if "KICAD10_3RD_PARTY" in os.environ:
             possible_paths.insert(0, os.environ["KICAD10_3RD_PARTY"])
         if "KICAD9_3RD_PARTY" in os.environ:

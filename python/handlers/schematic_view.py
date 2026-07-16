@@ -296,7 +296,6 @@ def handle_get_schematic_view_region(
                     root.set("width", str(width))
                     root.set("height", str(height))
 
-            # Write modified SVG
             cropped_svg_path = os.path.join(tmp_dir, "cropped.svg")
             tree.write(cropped_svg_path, xml_declaration=True, encoding="utf-8")
 

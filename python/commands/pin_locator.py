@@ -128,7 +128,6 @@ class PinLocator:
                 if match:
                     current_unit = int(match.group(1))
 
-            # Check if this is a pin definition
             if sexp[0] == Symbol("pin"):
                 # Pin format: (pin type shape (at x y angle) (length len) (name "name") (number "num"))
                 pin_data = {
@@ -142,7 +141,6 @@ class PinLocator:
                     "unit": current_unit,
                 }
 
-                # Extract pin attributes
                 for item in sexp:
                     if isinstance(item, list) and len(item) > 0:
                         if item[0] == Symbol("at") and len(item) >= 3:
@@ -211,7 +209,6 @@ class PinLocator:
             # Read schematic (shared, signature-keyed parse)
             sch_data = self._load_sexp(schematic_path)
 
-            # Find lib_symbols section
             lib_symbols = None
             for item in sch_data:
                 if isinstance(item, list) and len(item) > 0 and item[0] == Symbol("lib_symbols"):
@@ -553,7 +550,6 @@ class PinLocator:
                 f"mirror_x={mirror_x}, mirror_y={mirror_y}, lib_id={lib_id}"
             )
 
-            # Get pin definitions for this symbol
             pins = self.get_symbol_pins(schematic_path, lib_id)
             if not pins:
                 logger.error(f"No pin definitions found for {lib_id}")
@@ -639,7 +635,6 @@ class PinLocator:
             # Load schematic (shared, signature-keyed cache)
             sch = self._load_skip_schematic(schematic_path)
 
-            # Find symbol
             target_symbol = None
             for symbol in sch.symbol:
                 if symbol.property.Reference.value.rstrip("_") == symbol_reference:
@@ -650,18 +645,15 @@ class PinLocator:
                 logger.error(f"Symbol {symbol_reference} not found")
                 return {}
 
-            # Get lib_id
             lib_id = target_symbol.lib_id.value if hasattr(target_symbol, "lib_id") else None
             if not lib_id:
                 logger.error(f"Symbol {symbol_reference} has no lib_id")
                 return {}
 
-            # Get pin definitions
             pins = self.get_symbol_pins(schematic_path, lib_id)
             if not pins:
                 return {}
 
-            # Calculate location for each pin
             result = {}
             for pin_num in pins.keys():
                 location = self.get_pin_location(schematic_path, symbol_reference, pin_num)
@@ -845,7 +837,6 @@ class PinLocator:
 
 
 if __name__ == "__main__":
-    # Test pin location discovery
     import shutil
     import sys
     from pathlib import Path
@@ -870,7 +861,6 @@ if __name__ == "__main__":
     print("\n[1/4] Adding test components...")
     sch = SchematicManager.load_schematic(str(test_path))
 
-    # Add resistor at (100, 100), rotation 0
     r1_def = {
         "type": "R",
         "reference": "R1",
@@ -881,7 +871,6 @@ if __name__ == "__main__":
     }
     ComponentManager.add_component(sch, r1_def, test_path)
 
-    # Add capacitor at (150, 100), rotation 90
     c1_def = {
         "type": "C",
         "reference": "C1",
@@ -895,11 +884,9 @@ if __name__ == "__main__":
     SchematicManager.save_schematic(sch, str(test_path))
     print("  ✓ Added R1 and C1")
 
-    # Test pin locator
     print("\n[2/4] Testing pin location discovery...")
     locator = PinLocator()
 
-    # Find R1 pins
     r1_pin1 = locator.get_pin_location(test_path, "R1", "1")
     r1_pin2 = locator.get_pin_location(test_path, "R1", "2")
 
@@ -913,7 +900,6 @@ if __name__ == "__main__":
     print(f"  C1 pin 1: {c1_pin1}")
     print(f"  C1 pin 2: {c1_pin2}")
 
-    # Test get all pins
     print("\n[3/4] Testing get all pins...")
     r1_all_pins = locator.get_all_symbol_pins(test_path, "R1")
     print(f"  R1 all pins: {r1_all_pins}")
@@ -921,7 +907,6 @@ if __name__ == "__main__":
     c1_all_pins = locator.get_all_symbol_pins(test_path, "C1")
     print(f"  C1 all pins: {c1_all_pins}")
 
-    # Verify results
     print("\n[4/4] Verification...")
     success = True
 

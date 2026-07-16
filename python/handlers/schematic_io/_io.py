@@ -71,7 +71,6 @@ def handle_sync_schematic_to_board(
         schematic_path = params.get("schematicPath")
         board_path = params.get("boardPath")
 
-        # Determine board to work with
         board = None
         if board_path:
             board = iface._safe_load_board(board_path)
@@ -144,7 +143,6 @@ def handle_sync_schematic_to_board(
             board, schematic_path, netlist_root=netlist_root
         )
 
-        # Add all nets to board
         netinfo = board.GetNetInfo()
         nets_by_name = netinfo.NetsByName()
         added_nets = []

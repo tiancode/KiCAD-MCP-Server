@@ -8,9 +8,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from utils.responses import failed
+
 from ._core import SymbolLibraryManager, get_symbol_library_manager
 from ._models import SymbolInfo  # noqa: F401
-from utils.responses import failed
 
 logger = logging.getLogger("kicad_interface")
 
@@ -248,7 +249,6 @@ class SymbolLibraryCommands:
 
             self._ensure_manager_for(params)
 
-            # Check if library exists in sym-lib-table
             if library not in self.library_manager.libraries:
                 available_libs = list(self.library_manager.libraries.keys())
                 return {
@@ -345,7 +345,6 @@ if __name__ == "__main__":
     if len(manager.libraries) > 10:
         print(f"  ... and {len(manager.libraries) - 10} more")
 
-    # Test search
     if manager.libraries:
         print("\n\nSearching for 'ESP32':")
         results = manager.search_symbols("ESP32", limit=5)

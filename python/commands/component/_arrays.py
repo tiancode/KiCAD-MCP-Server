@@ -151,7 +151,6 @@ class ArrayMixin:
                     "errorDetails": "alignmentType must be 'horizontal', 'vertical', or 'edge'.",
                 }
 
-            # Find all referenced components
             components = []
             for ref in references:
                 module = self.board.FindFootprintByReference(ref)
@@ -185,7 +184,6 @@ class ArrayMixin:
                         ),
                     }
 
-            # Perform alignment based on selected option
             if alignment == "horizontal":
                 self._align_components_horizontally(components, distribution, spacing, anchor)
             elif alignment == "vertical":
@@ -200,7 +198,6 @@ class ArrayMixin:
                     }
                 self._align_components_to_edge(components, edge)
 
-            # Prepare result data
             aligned_components = []
             for module in components:
                 pos = module.GetPosition()
@@ -250,15 +247,12 @@ class ArrayMixin:
 
         for row in range(rows):
             for col in range(columns):
-                # Calculate position
                 x = start_position["x"] + (col * spacing_x)
                 y = start_position["y"] + (row * spacing_y)
 
-                # Generate reference
                 index = row * columns + col + 1
                 component_reference = f"{reference_prefix}{index}"
 
-                # Place component
                 result = self.place_component(
                     {
                         "componentId": component_id,
@@ -291,25 +285,20 @@ class ArrayMixin:
         """Place components in a circular pattern and return the list of placed components"""
         placed = []
 
-        # Get unit
         unit = center.get("unit", "mm")
 
         for i in range(count):
-            # Calculate angle for this component
             angle = angle_start + (i * angle_step)
             angle_rad = math.radians(angle)
 
-            # Calculate position
             x = center["x"] + (radius * math.cos(angle_rad))
             y = center["y"] + (radius * math.sin(angle_rad))
 
-            # Generate reference
             component_reference = f"{reference_prefix}{i+1}"
 
             # Calculate rotation (pointing outward from center)
             component_rotation = angle + rotation_offset
 
-            # Place component
             result = self.place_component(
                 {
                     "componentId": component_id,
@@ -348,25 +337,19 @@ class ArrayMixin:
         else:
             y_line = sum(module.GetPosition().y for module in components) // len(components)
 
-        # Sort components by X position
         components.sort(key=lambda m: m.GetPosition().x)
 
-        # Set Y coordinate for all components
         for module in components:
             pos = module.GetPosition()
             module.SetPosition(pcbnew.VECTOR2I(pos.x, y_line))
 
-        # Handle distribution if requested
         if distribution == "equal" and len(components) > 1:
-            # Get leftmost and rightmost X coordinates
             x_min = components[0].GetPosition().x
             x_max = components[-1].GetPosition().x
 
-            # Calculate equal spacing
             total_space = x_max - x_min
             spacing_nm = total_space // (len(components) - 1)
 
-            # Set X positions with equal spacing
             for i in range(1, len(components) - 1):
                 pos = components[i].GetPosition()
                 new_x = x_min + (i * spacing_nm)
@@ -416,25 +399,19 @@ class ArrayMixin:
         else:
             x_line = sum(module.GetPosition().x for module in components) // len(components)
 
-        # Sort components by Y position
         components.sort(key=lambda m: m.GetPosition().y)
 
-        # Set X coordinate for all components
         for module in components:
             pos = module.GetPosition()
             module.SetPosition(pcbnew.VECTOR2I(x_line, pos.y))
 
-        # Handle distribution if requested
         if distribution == "equal" and len(components) > 1:
-            # Get topmost and bottommost Y coordinates
             y_min = components[0].GetPosition().y
             y_max = components[-1].GetPosition().y
 
-            # Calculate equal spacing
             total_space = y_max - y_min
             spacing_nm = total_space // (len(components) - 1)
 
-            # Set Y positions with equal spacing
             for i in range(1, len(components) - 1):
                 pos = components[i].GetPosition()
                 new_y = y_min + (i * spacing_nm)
@@ -467,14 +444,12 @@ class ArrayMixin:
         if not components:
             return
 
-        # Get board bounds
         board_box = self.board.GetBoardEdgesBoundingBox()
         left = board_box.GetLeft()
         right = board_box.GetRight()
         top = board_box.GetTop()
         bottom = board_box.GetBottom()
 
-        # Align based on specified edge
         if edge == "left":
             for module in components:
                 pos = module.GetPosition()

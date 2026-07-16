@@ -8,7 +8,6 @@ import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-resp
 
 export function registerProjectTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
-  // Create project tool
   server.tool(
     "create_project",
     "Create a new KiCAD project. Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips. Refuses (errorCode PROJECT_EXISTS) if project files already exist unless overwrite=true, or INVALID_NAME if `name` is empty/whitespace. Returns project.path (the .kicad_pro) and boardPath (the .kicad_pcb).",
@@ -35,7 +34,6 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
     passthrough("create_project"),
   );
 
-  // Open project tool
   server.tool(
     "open_project",
     "Open an existing KiCAD project. Accepts `filename` or `path` (interchangeable): a .kicad_pro/.kicad_pcb file, or a directory containing exactly one .kicad_pro (errors NO_PROJECT_IN_DIR / AMBIGUOUS_PROJECT otherwise). A missing file errors FILE_NOT_FOUND, a non-KiCad file UNSUPPORTED_FILE, and a corrupt board PARSE_ERROR — a failed open leaves any previously-loaded project intact. On success returns project.path (the .kicad_pro) and boardPath (the .kicad_pcb). Auto-launches the KiCAD UI by default so the IPC backend can attach (realtime sync + transactions); autoLaunch=false skips.",
@@ -58,7 +56,6 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
     passthrough("open_project"),
   );
 
-  // Save project tool
   server.tool(
     "save_project",
     "Save the currently-loaded KiCAD project (the last one created/opened). The response states which board file was written (savedPath, the .kicad_pcb) and returns project.path (the .kicad_pro) + boardPath (the .kicad_pcb).",
@@ -77,7 +74,6 @@ export function registerProjectTools(server: McpServer, callKicadScript: Command
     passthrough("save_project"),
   );
 
-  // Get project info tool
   server.tool(
     "get_project_info",
     "Get information about the current KiCAD project. Returns project.path (the .kicad_pro) and boardPath (the .kicad_pcb), consistent with create_project / open_project / save_project.",

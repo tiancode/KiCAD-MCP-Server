@@ -96,7 +96,6 @@ def parse_lib_table_entries(
                 logger.warning(f"  Could not resolve Table URI: {table_uri}")
             continue
 
-        # Resolve environment variables in URI
         resolved_uri = resolve_uri(uri)
 
         if resolved_uri:
@@ -124,19 +123,15 @@ def resolve_lib_uri(
     if project_path is not None:
         env_vars = {**env_vars, "KIPRJMOD": str(project_path)}
 
-    # Replace environment variables
     for var, value in env_vars.items():
         if value:
             resolved = resolved.replace(f"${{{var}}}", value)
             resolved = resolved.replace(f"${var}", value)
 
-    # Expand ~ to home directory
     resolved = os.path.expanduser(resolved)
 
-    # Convert to absolute path
     path = Path(resolved)
 
-    # Check if path exists
     if path.exists():
         return str(path)
     else:

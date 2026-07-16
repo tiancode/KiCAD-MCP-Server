@@ -32,10 +32,6 @@ from ._parsing import (
     _parse_wires,
 )
 
-# ---------------------------------------------------------------------------
-# Tool 3: find_overlapping_elements
-# ---------------------------------------------------------------------------
-
 
 def find_overlapping_elements(schematic_path: Path, tolerance: float = 0.5) -> Dict[str, Any]:
     """
@@ -92,7 +88,6 @@ def find_overlapping_elements(schematic_path: Path, tolerance: float = 0.5) -> D
 
             overlap_detected = False
             if bbox1 is not None and bbox2 is not None:
-                # Use bounding box intersection
                 overlap_detected = _aabb_overlap(bbox1, bbox2)
             else:
                 # Fallback to center distance when pin data is unavailable
@@ -218,11 +213,6 @@ def _check_wire_overlap(
         }
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# Tool 4: get_elements_in_region
-# ---------------------------------------------------------------------------
 
 
 def get_elements_in_region(
@@ -373,7 +363,6 @@ def find_wires_crossing_symbols(schematic_path: Path) -> List[Dict[str, Any]]:
             }
         )
 
-    # Test each wire against each symbol bbox
     for w in wires:
         sx, sy = w["start"]
         ex, ey = w["end"]

@@ -19,9 +19,6 @@ import { CommandFunction } from "../tools/tool-response.js";
 export function registerBoardResources(server: McpServer, callKicadScript: CommandFunction): void {
   logger.info("Registering board resources");
 
-  // ------------------------------------------------------
-  // Board Information Resource
-  // ------------------------------------------------------
   server.resource("board_info", "kicad://board/info", async (uri) => {
     logger.debug("Retrieving board information");
     const result = await callKicadScript("get_board_info", {});
@@ -34,9 +31,6 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     return jsonResource(uri, result);
   });
 
-  // ------------------------------------------------------
-  // Layer List Resource
-  // ------------------------------------------------------
   server.resource("layer_list", "kicad://board/layers", async (uri) => {
     logger.debug("Retrieving layer list");
     const result = await callKicadScript("get_layer_list", {});
@@ -49,9 +43,6 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     return jsonResource(uri, result);
   });
 
-  // ------------------------------------------------------
-  // Board Extents Resource
-  // ------------------------------------------------------
   server.resource(
     "board_extents",
     new ResourceTemplate("kicad://board/extents/{unit?}", {
@@ -77,9 +68,6 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Board 2D View Resource
-  // ------------------------------------------------------
   server.resource(
     "board_2d_view",
     new ResourceTemplate("kicad://board/2d-view/{format?}", {
@@ -140,13 +128,9 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
   // Python command that never existed (UNKNOWN_COMMAND on every read). Use
   // the export_3d tool for 3D output, or kicad://board/2d-view for imagery.
 
-  // ------------------------------------------------------
-  // Board Statistics Resource
-  // ------------------------------------------------------
   server.resource("board_statistics", "kicad://board/statistics", async (uri) => {
     logger.debug("Generating board statistics");
 
-    // Get board info
     const boardResult = await callKicadScript("get_board_info", {});
     if (!boardResult.success) {
       return resourceFailure(
@@ -179,7 +163,6 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
       );
     }
 
-    // Combine all information into statistics
     const statistics = {
       board: boardSummary(boardResult),
       components: componentSummary(componentsResult),

@@ -76,7 +76,6 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
     passthrough("autoroute"),
   );
 
-  // Check Freerouting dependencies
   server.tool(
     "check_freerouting",
     "Check that Java (or Docker) and freerouting.jar are available; run before autoroute. When something's missing the response includes install steps with copy-pasteable commands and download URL.",

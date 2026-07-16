@@ -247,7 +247,6 @@ class FootprintCreator:
             updated.extend(changes)
             return block
 
-        # Parse blocks
         result_lines = []
         in_target_pad = False
         pad_depth = 0
@@ -421,7 +420,6 @@ class FootprintCreator:
             if table_path is None:
                 return {"success": False, "error": "Could not find or create global fp-lib-table"}
 
-        # Read existing table or start fresh
         if table_path.exists():
             content = table_path.read_text(encoding="utf-8")
         else:
@@ -436,7 +434,6 @@ class FootprintCreator:
                 "library_name": name,
             }
 
-        # Insert new lib entry before closing paren
         new_entry = (
             f'  (lib (name "{name}")'
             f'(type "KiCad")'

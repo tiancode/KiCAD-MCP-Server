@@ -286,7 +286,6 @@ class QueryMixin:
             library_nickname, symbol_name = symbol_spec.split(":", 1)
             return self.get_symbol_info(library_nickname, symbol_name)
         else:
-            # Search all libraries
             for library_nickname in self.libraries.keys():
                 result = self.get_symbol_info(library_nickname, symbol_spec)
                 if result:

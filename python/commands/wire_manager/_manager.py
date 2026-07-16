@@ -86,7 +86,6 @@ class WireManager:
             True if successful, False otherwise
         """
         try:
-            # Read schematic
             with open(schematic_path, "r", encoding="utf-8") as f:
                 sch_content = f.read()
 
@@ -98,7 +97,6 @@ class WireManager:
                 if splits:
                     logger.info(f"Broke {splits} wire(s) at new wire endpoint {pt}")
 
-            # Create wire S-expression
             # Format: (wire (pts (xy x1 y1) (xy x2 y2)) (stroke (width N) (type default)) (uuid ...))
             wire_sexp = WireManager._make_wire_sexp(
                 start_point, end_point, stroke_width, stroke_type
@@ -117,7 +115,6 @@ class WireManager:
                 # Sub-sheets in hierarchical designs don't have (sheet_instances).
                 sheet_instances_index = len(sch_data)
 
-            # Insert wire before sheet_instances (or at end for sub-sheets)
             sch_data.insert(sheet_instances_index, wire_sexp)
             logger.info(f"Injected wire from {start_point} to {end_point}")
 
@@ -169,7 +166,6 @@ class WireManager:
                 logger.error("Polyline requires at least 2 points")
                 return False
 
-            # Read schematic
             with open(schematic_path, "r", encoding="utf-8") as f:
                 sch_content = f.read()
 
@@ -653,7 +649,6 @@ class WireManager:
             del sch_data[idx]
         removed = len(stale_indices)
 
-        # Locate insertion point for new junctions
         sheet_instances_index = None
         for i, item in enumerate(sch_data):
             if isinstance(item, list) and len(item) > 0 and item[0] == _SYM_SHEET_INSTANCES:
@@ -691,13 +686,11 @@ class WireManager:
             True if successful, False otherwise
         """
         try:
-            # Read schematic
             with open(schematic_path, "r", encoding="utf-8") as f:
                 sch_content = f.read()
 
             sch_data = sexpdata.loads(sch_content)
 
-            # Create no_connect S-expression
             # Format: (no_connect (at x y) (uuid ...))
             no_connect_sexp = [
                 Symbol("no_connect"),
@@ -705,7 +698,6 @@ class WireManager:
                 [Symbol("uuid"), str(uuid.uuid4())],
             ]
 
-            # Find insertion point
             sheet_instances_index = None
             for i, item in enumerate(sch_data):
                 if isinstance(item, list) and len(item) > 0 and item[0] == _SYM_SHEET_INSTANCES:
@@ -716,7 +708,6 @@ class WireManager:
                 logger.error("No sheet_instances section found in schematic")
                 return False
 
-            # Insert no_connect
             sch_data.insert(sheet_instances_index, no_connect_sexp)
             logger.info(f"Injected no-connect at {position}")
 
@@ -868,7 +859,6 @@ class WireManager:
                 if not (isinstance(item, list) and len(item) > 0 and item[0] == _SYM_WIRE):
                     continue
 
-                # Extract pts from the wire s-expression
                 pts_list = None
                 for part in item[1:]:
                     if isinstance(part, list) and len(part) > 0 and part[0] == _SYM_PTS:
@@ -1526,7 +1516,6 @@ class WireManager:
 
 
 if __name__ == "__main__":
-    # Test wire creation
     import shutil
     import sys
     from pathlib import Path
@@ -1544,29 +1533,24 @@ if __name__ == "__main__":
     shutil.copy(template_path, test_path)
     print(f"\n✓ Created test schematic: {test_path}")
 
-    # Test 1: Add simple wire
     print("\n[1/4] Testing simple wire creation...")
     success = WireManager.add_wire(test_path, [50.8, 50.8], [101.6, 50.8])
     print(f"  {'✓' if success else '✗'} Simple wire: {success}")
 
-    # Test 2: Add orthogonal wire
     print("\n[2/4] Testing orthogonal wire...")
     path = WireManager.create_orthogonal_path([50.8, 60.96], [101.6, 88.9])
     print(f"  Orthogonal path: {path}")
     success = WireManager.add_polyline_wire(test_path, path)
     print(f"  {'✓' if success else '✗'} Polyline wire: {success}")
 
-    # Test 3: Add label
     print("\n[3/4] Testing label creation...")
     success = WireManager.add_label(test_path, "VCC", [76.2, 50.8])
     print(f"  {'✓' if success else '✗'} Label: {success}")
 
-    # Test 4: Add no-connect
     print("\n[4/4] Testing no-connect creation...")
     success = WireManager.add_no_connect(test_path, [127, 50.8])
     print(f"  {'✓' if success else '✗'} No-connect: {success}")
 
-    # Verify with kicad-skip
     print("\n[Verification] Loading with kicad-skip...")
     try:
         from skip import Schematic

@@ -93,7 +93,6 @@ class BoardLayerCommands:
                     "errorDetails": "layer parameter is required",
                 }
 
-            # Find layer ID by name
             layer_id = self.board.GetLayerID(layer)
             if layer_id < 0:
                 return {
@@ -102,7 +101,6 @@ class BoardLayerCommands:
                     "errorDetails": f"Layer '{layer}' does not exist",
                 }
 
-            # Set active layer
             self.board.SetActiveLayer(layer_id)
 
             return {

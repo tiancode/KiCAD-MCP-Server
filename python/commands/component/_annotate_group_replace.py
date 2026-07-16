@@ -24,7 +24,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import pcbnew
-
 from utils.responses import failed, no_board_loaded
 from utils.units import unit_to_nm_scale
 
@@ -61,9 +60,6 @@ def _resolve_layer_id(board: Any, layer: str) -> int:
 
 
 class AnnotateGroupReplaceMixin:
-    # ------------------------------------------------------------------ #
-    # add_component_annotation
-    # ------------------------------------------------------------------ #
     def add_component_annotation(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Place a free text annotation near a component.
 
@@ -172,9 +168,6 @@ class AnnotateGroupReplaceMixin:
             logger.error(f"Error adding component annotation: {str(e)}")
             return failed("Failed to add component annotation", e)
 
-    # ------------------------------------------------------------------ #
-    # group_components
-    # ------------------------------------------------------------------ #
     def group_components(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Group footprints into a named ``PCB_GROUP``.
 
@@ -296,9 +289,6 @@ class AnnotateGroupReplaceMixin:
             logger.error(f"Error grouping components: {str(e)}")
             return failed("Failed to group components", e)
 
-    # ------------------------------------------------------------------ #
-    # replace_component
-    # ------------------------------------------------------------------ #
     def replace_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Swap a placed footprint for a different library footprint.
 

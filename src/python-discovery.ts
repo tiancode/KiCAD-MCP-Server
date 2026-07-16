@@ -103,7 +103,6 @@ export function findPythonExecutable(scriptPath: string): string {
   // Get the project root (parent of the python/ directory)
   const projectRoot = dirname(dirname(scriptPath));
 
-  // Check for virtual environment
   const venvPaths = [
     join(projectRoot, "venv", isWindows ? "Scripts" : "bin", isWindows ? "python.exe" : "python"),
     join(projectRoot, ".venv", isWindows ? "Scripts" : "bin", isWindows ? "python.exe" : "python"),
@@ -135,14 +134,12 @@ export function findPythonExecutable(scriptPath: string): string {
     // macOS: Try KiCAD's bundled Python (check multiple versions and locations)
     const kicadPythonVersions = ["3.9", "3.10", "3.11", "3.12", "3.13"];
 
-    // Standard KiCAD installation paths
     const kicadAppPaths = [
       "/Applications/KiCad/KiCad.app",
       "/Applications/KiCAD/KiCad.app", // Alternative capitalization
       `${process.env.HOME}/Applications/KiCad/KiCad.app`, // User Applications folder
     ];
 
-    // Check all KiCAD app locations with all Python versions
     for (const appPath of kicadAppPaths) {
       for (const version of kicadPythonVersions) {
         const kicadPython = `${appPath}/Contents/Frameworks/Python.framework/Versions/${version}/bin/python3`;
@@ -205,7 +202,6 @@ export function findPythonExecutable(scriptPath: string): string {
       logger.warn("Failed to resolve python3 via which command");
     }
 
-    // Fallback to common system paths
     const systemPaths = ["/usr/bin/python3", "/bin/python3"];
     for (const path of systemPaths) {
       if (existsSync(path)) {
@@ -215,7 +211,6 @@ export function findPythonExecutable(scriptPath: string): string {
     }
   }
 
-  // Default to system Python (last resort)
   logger.info("Using system Python (no venv found)");
   return isWindows ? "python.exe" : "python3";
 }

@@ -386,7 +386,6 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
                         best = (ref, pin_num, coords)
                 return best
 
-            # Snap first endpoint
             match = find_nearest_pin(points[0], snap_tolerance)
             if match:
                 ref, pin_num, coords = match
@@ -396,7 +395,6 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
                 )
                 points[0] = list(coords)
 
-            # Snap last endpoint
             match = find_nearest_pin(points[-1], snap_tolerance)
             if match:
                 ref, pin_num, coords = match
@@ -404,7 +402,6 @@ def handle_add_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -
                 snapped_info.append(f"end snapped to {ref}/{pin_num} at [{coords[0]}, {coords[1]}]")
                 points[-1] = list(coords)
 
-        # Extract wire properties
         stroke_width = properties.get("stroke_width", 0)
         stroke_type = properties.get("stroke_type", "default")
 

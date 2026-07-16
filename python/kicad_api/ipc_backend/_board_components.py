@@ -268,7 +268,6 @@ class _ComponentMixin:
             value: Component value (optional)
         """
         try:
-            # First, try to load the footprint from library using pcbnew SWIG
             loaded_fp = self._load_footprint_from_library(footprint)
 
             if loaded_fp:
@@ -301,7 +300,6 @@ class _ComponentMixin:
             board = self._get_board()
             footprints = board.get_footprints()
 
-            # Find the footprint by reference
             target_fp = None
             for fp in footprints:
                 if fp.reference_field and fp.reference_field.text.value == reference:
@@ -312,7 +310,6 @@ class _ComponentMixin:
                 logger.error(f"Component not found: {reference}")
                 return False
 
-            # Update position
             target_fp.position = Vector2.from_xy(from_mm(x), from_mm(y))
 
             if rotation is not None:
@@ -337,7 +334,6 @@ class _ComponentMixin:
             board = self._get_board()
             footprints = board.get_footprints()
 
-            # Find the footprint by reference
             target_fp = None
             for fp in footprints:
                 if fp.reference_field and fp.reference_field.text.value == reference:

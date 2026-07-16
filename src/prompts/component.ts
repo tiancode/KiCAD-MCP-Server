@@ -17,9 +17,6 @@ import { logger } from "../logger.js";
 export function registerComponentPrompts(server: McpServer): void {
   logger.info("Registering component prompts");
 
-  // ------------------------------------------------------
-  // Component Selection Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_selection",
     {
@@ -51,9 +48,6 @@ For each component type, recommend specific values and provide a brief explanati
     }),
   );
 
-  // ------------------------------------------------------
-  // Component Placement Strategy Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_placement_strategy",
     {
@@ -98,9 +92,6 @@ Group components functionally and suggest a logical arrangement. If possible, pr
     }),
   );
 
-  // ------------------------------------------------------
-  // Component Replacement Analysis Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_replacement_analysis",
     {
@@ -146,9 +137,6 @@ Suggest suitable replacement options and explain the advantages and disadvantage
     }),
   );
 
-  // ------------------------------------------------------
-  // Component Troubleshooting Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_troubleshooting",
     {
@@ -195,9 +183,6 @@ Based on the available information, suggest likely causes of the issue and recom
     }),
   );
 
-  // ------------------------------------------------------
-  // Component Sourcing / BOM Properties Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_sourcing_properties",
     {
@@ -266,9 +251,6 @@ or substitutions you propose.`,
     }),
   );
 
-  // ------------------------------------------------------
-  // Component Value Calculation Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_value_calculation",
     {

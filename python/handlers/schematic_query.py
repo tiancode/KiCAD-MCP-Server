@@ -98,7 +98,6 @@ def handle_list_schematic_texts(iface: "KiCADInterface", params: Dict[str, Any])
         if texts is None:
             return {"success": False, "message": "Failed to parse schematic"}
 
-        # Optional text filter
         filter_text = params.get("text")
         if filter_text is not None:
             texts = [t for t in texts if filter_text.lower() in t["text"].lower()]
@@ -340,7 +339,6 @@ def handle_list_schematic_labels(iface: "KiCADInterface", params: Dict[str, Any]
                     }
                 )
 
-        # Apply filters
         if net_name is not None:
             labels = [lbl for lbl in labels if lbl["name"] == net_name]
         if label_type is not None:
@@ -590,7 +588,6 @@ def handle_list_schematic_components(
 
                 lib_id = symbol.lib_id.value if hasattr(symbol, "lib_id") else ""
 
-                # Apply filters
                 if lib_id_filter and lib_id_filter not in lib_id:
                     continue
                 if ref_prefix_filter and not ref.startswith(ref_prefix_filter):
@@ -613,7 +610,6 @@ def handle_list_schematic_components(
                     "uuid": str(uuid_val),
                 }
 
-                # Get pins if available
                 try:
                     all_pins = locator.get_all_symbol_pins(sch_file, ref)
                     if all_pins:

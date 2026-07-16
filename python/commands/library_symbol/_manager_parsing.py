@@ -149,7 +149,6 @@ class ParsingMixin:
                 if re.search(r"_\d+_\d+$", symbol_name):
                     continue
 
-                # Find the start position of this symbol
                 start_pos = match.start()
 
                 # Walk forward tracking parenthesis depth to find the true end
@@ -166,7 +165,6 @@ class ParsingMixin:
 
                 symbol_block = content[start_pos:end_pos]
 
-                # Extract properties
                 properties = self._extract_properties(symbol_block)
 
                 symbol_info = SymbolInfo(

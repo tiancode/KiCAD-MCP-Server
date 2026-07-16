@@ -22,9 +22,6 @@ export function registerComponentResources(
 ): void {
   logger.info("Registering component resources");
 
-  // ------------------------------------------------------
-  // Component List Resource
-  // ------------------------------------------------------
   server.resource("component_list", "kicad://components", async (uri) => {
     logger.debug("Retrieving component list");
     // limit:0 = uncapped. Resources are pulled on demand (not in the per-turn
@@ -40,9 +37,6 @@ export function registerComponentResources(
     return jsonResource(uri, result);
   });
 
-  // ------------------------------------------------------
-  // Component Details Resource
-  // ------------------------------------------------------
   server.resource(
     "component_details",
     new ResourceTemplate("kicad://component/{reference}/details", {

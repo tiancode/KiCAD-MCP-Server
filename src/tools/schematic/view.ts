@@ -82,7 +82,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
   //  list_floating_labels / find_orphaned_wires are exposed through the
   //  merged check_schematic_layout tool in query.ts.)
 
-  // Get elements in a region
   server.tool(
     "get_elements_in_region",
     "List all symbols, wires, and labels within a rectangular region of the schematic. Useful before modifying an area.",
@@ -131,7 +130,6 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Snap schematic elements to grid
   server.tool(
     "snap_to_grid",
     "Snap schematic element coordinates to the nearest grid point. KiCAD connectivity uses exact " +

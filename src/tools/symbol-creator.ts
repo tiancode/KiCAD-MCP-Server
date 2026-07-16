@@ -78,7 +78,6 @@ const PolylineSchema = z.object({
 
 export function registerSymbolCreatorTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
-  // ── create_symbol ────────────────────────────────────────────────────── //
   server.tool(
     "create_symbol",
     "Create a schematic symbol in a .kicad_sym library (file created if missing); run register_library (type=symbol) afterwards so KiCAD finds it. " +
@@ -118,7 +117,6 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
     passthrough("create_symbol"),
   );
 
-  // ── delete_symbol ────────────────────────────────────────────────────── //
   server.tool(
     "delete_symbol",
     "Remove a symbol from a .kicad_sym library file.",
@@ -129,7 +127,6 @@ export function registerSymbolCreatorTools(server: McpServer, callKicadScript: C
     passthrough("delete_symbol"),
   );
 
-  // ── list_symbols_in_library ──────────────────────────────────────────── //
   server.tool(
     "list_symbols_in_library",
     "List symbol names in a .kicad_sym file given its path. Works for unregistered files (e.g. right after create_symbol); for a registered library nickname use list_library_contents (type=symbol).",

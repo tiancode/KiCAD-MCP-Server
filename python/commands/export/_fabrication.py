@@ -105,14 +105,11 @@ class FabricationMixin:
                     "errorDetails": "outputDir parameter is required",
                 }
 
-            # Create output directory if it doesn't exist
             output_dir = os.path.abspath(os.path.expanduser(output_dir))
             os.makedirs(output_dir, exist_ok=True)
 
-            # Create plot controller
             plotter = pcbnew.PLOT_CONTROLLER(self.board)
 
-            # Set up plot options
             plot_opts = plotter.GetPlotOptions()
             plot_opts.SetOutputDirectory(output_dir)
             plot_opts.SetFormat(pcbnew.PLOT_FORMAT_GERBER)
@@ -121,7 +118,6 @@ class FabricationMixin:
             plot_opts.SetCreateGerberJobFile(generate_map_file)
             plot_opts.SetSubtractMaskFromSilk(True)
 
-            # Build list of (layer_name, layer_id) to plot
             target_layers: List[Tuple[str, int]] = []
             if layers:
                 for layer_name in layers:
@@ -182,7 +178,6 @@ class FabricationMixin:
             kicad_cli = self._find_kicad_cli()
             board_on_disk = bool(board_file and os.path.exists(board_file))
 
-            # Generate drill files if requested
             drill_files: List[str] = []
             if generate_drill_files:
                 # KiCAD 9.0: Use kicad-cli for more reliable drill file generation
@@ -350,7 +345,6 @@ class FabricationMixin:
                     "errorDetails": "outputPath parameter is required",
                 }
 
-            # Get board file path
             board_file = self.board.GetFileName()
             if not board_file or not os.path.exists(board_file):
                 return {
@@ -359,11 +353,9 @@ class FabricationMixin:
                     "errorDetails": "Board must be saved before exporting 3D models",
                 }
 
-            # Create output directory if it doesn't exist
             output_path = os.path.abspath(os.path.expanduser(output_path))
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            # Find kicad-cli executable
             kicad_cli = self._find_kicad_cli()
             if not kicad_cli:
                 return {
@@ -372,7 +364,6 @@ class FabricationMixin:
                     "errorDetails": "KiCAD CLI tool not found. Install KiCAD 8.0+ or set PATH.",
                 }
 
-            # Build command based on format
             format_upper = format.upper()
 
             if format_upper == "STEP":
@@ -386,7 +377,6 @@ class FabricationMixin:
                     "--force",  # Overwrite existing file
                 ]
 
-                # Add options based on parameters
                 if not include_components:
                     cmd.append("--no-components")
                 if include_copper:
@@ -429,7 +419,6 @@ class FabricationMixin:
                     "errorDetails": f"Format {format} is not supported. Use 'STEP' or 'VRML'.",
                 }
 
-            # Execute kicad-cli command
             logger.info(f"Running 3D export command: {' '.join(cmd)}")
 
             result = subprocess.run(

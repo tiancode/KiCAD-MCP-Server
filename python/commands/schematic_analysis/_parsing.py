@@ -14,11 +14,6 @@ from sexpdata import Symbol
 logger = logging.getLogger("kicad_interface")
 
 
-# ---------------------------------------------------------------------------
-# S-expression parsing helpers
-# ---------------------------------------------------------------------------
-
-
 def _load_sexp(schematic_path: Path) -> list:
     """Load schematic file and return parsed S-expression data."""
     with open(schematic_path, "r", encoding="utf-8") as f:

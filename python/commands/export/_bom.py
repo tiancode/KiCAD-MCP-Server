@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from typing import Any, Dict, List
+
 from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
@@ -111,7 +112,6 @@ class BomMixin:
                     "errorDetails": "outputPath parameter is required",
                 }
 
-            # Create output directory if it doesn't exist
             output_path = os.path.abspath(os.path.expanduser(output_path))
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -175,7 +175,6 @@ class BomMixin:
                 for header in attribute_columns:
                     comp[header] = fields.get(resolved_map[header], "")
 
-            # Group by value if requested
             if group_by_value:
                 grouped = {}
                 for comp in components:
@@ -214,7 +213,6 @@ class BomMixin:
                         vals = attrs.get(header, [])
                         entry[header] = _ATTR_MULTI_SEP.join(sorted(vals)) if vals else ""
 
-            # Export based on format
             if format == "CSV":
                 self._export_bom_csv(output_path, components)
             elif format == "XML":
@@ -302,7 +300,6 @@ class BomMixin:
         """Export BOM to HTML format"""
         html = ["<html><head><title>Bill of Materials</title></head><body>"]
         html.append("<table border='1'><tr>")
-        # Headers
         header_keys = (
             list(components[0].keys())
             if components
@@ -311,7 +308,6 @@ class BomMixin:
         for key in header_keys:
             html.append(f"<th>{key}</th>")
         html.append("</tr>")
-        # Data
         for comp in components:
             html.append("<tr>")
             for value in comp.values():

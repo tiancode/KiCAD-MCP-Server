@@ -6,10 +6,10 @@ import logging
 from typing import Any, Dict, List
 
 import pcbnew
-
-from ._helpers import _point_to_segment_distance_nm
 from utils.responses import failed, no_board_loaded
 from utils.units import unit_to_nm_scale
+
+from ._helpers import _point_to_segment_distance_nm
 
 logger = logging.getLogger("kicad_interface")
 
@@ -35,7 +35,6 @@ class ViaMixin:
                     "errorDetails": "position parameter is required",
                 }
 
-            # Create via
             via = pcbnew.PCB_VIA(self.board)
 
             # Set position — the MCP schema marks unit optional, so default mm
@@ -50,7 +49,6 @@ class ViaMixin:
             via.SetWidth(int(size * 1000000) if size else design_settings.GetCurrentViaSize())
             via.SetDrill(int(drill * 1000000) if drill else design_settings.GetCurrentViaDrill())
 
-            # Set layers
             from_id = self.board.GetLayerID(from_layer)
             to_id = self.board.GetLayerID(to_layer)
             if from_id < 0 or to_id < 0:
@@ -61,7 +59,6 @@ class ViaMixin:
                 }
             via.SetLayerPair(from_id, to_id)
 
-            # Set net if provided
             if net:
                 netinfo = self.board.GetNetInfo()
                 nets_map = netinfo.NetsByName()
@@ -69,7 +66,6 @@ class ViaMixin:
                     net_obj = nets_map[net]
                     via.SetNet(net_obj)
 
-            # Add via to board
             self.board.Add(via)
 
             return {

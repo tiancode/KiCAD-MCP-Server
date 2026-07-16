@@ -27,23 +27,19 @@ class LibraryManager:
         libraries = []
         for path_pattern in search_paths:
             try:
-                # Use glob to find all matching files
                 matching_libs = glob.glob(path_pattern, recursive=True)
                 libraries.extend(matching_libs)
             except (OSError, ValueError) as e:
                 logger.exception(f"Error searching for libraries at {path_pattern}: {e}")
 
-        # Extract library names from paths
         library_names = [os.path.splitext(os.path.basename(lib))[0] for lib in libraries]
         logger.info(
             f"Found {len(library_names)} libraries: {', '.join(library_names[:10])}{'...' if len(library_names) > 10 else ''}"
         )
 
-        # Return both full paths and library names
         return {"paths": libraries, "names": library_names}
 
 
 if __name__ == "__main__":
     # Example Usage (for testing)
-    # List available libraries
     libraries = LibraryManager.list_available_libraries()

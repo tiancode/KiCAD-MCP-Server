@@ -308,24 +308,19 @@ class ProjectCommands:
                 created_dir_root = topmost
                 os.makedirs(leaf_dir, exist_ok=True)
 
-            # Create a new board
             board = pcbnew.BOARD()
 
-            # Set project properties
             board.GetTitleBlock().SetTitle(project_name)
 
-            # Set current date with proper parameter
             from datetime import datetime
 
             current_date = datetime.now().strftime("%Y-%m-%d")
             board.GetTitleBlock().SetDate(current_date)
 
-            # If template is specified, try to load it
             if template:
                 template_path = os.path.expanduser(template)
                 if os.path.exists(template_path):
                     template_board = pcbnew.LoadBoard(template_path)
-                    # Copy settings from template
                     board.SetDesignSettings(template_board.GetDesignSettings())
                     board.SetLayerStack(template_board.GetLayerStack())
 
@@ -433,7 +428,6 @@ class ProjectCommands:
                     "errorCode": "MISSING_PATH",
                 }
 
-            # Expand user path and make absolute
             filename = os.path.abspath(os.path.expanduser(filename))
 
             # A directory → resolve to the single .kicad_pro it contains.

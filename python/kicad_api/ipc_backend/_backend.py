@@ -18,8 +18,9 @@ from ._helpers import (
 
 logger = logging.getLogger("kicad_interface")
 
-from ._board_core import IPCBoardAPI
 from utils.responses import failed
+
+from ._board_core import IPCBoardAPI
 
 
 class IPCBackend(KiCADBackend):
@@ -153,7 +154,6 @@ class IPCBackend(KiCADBackend):
             self._kicad, used_path = chosen
             logger.info(f"Connected via socket: {used_path or 'auto-detected'}")
 
-            # Get version info
             self._version = self._get_kicad_version()
             logger.info(f"Connected to KiCAD {self._version} via IPC")
             self._connected = True
@@ -273,7 +273,6 @@ class IPCBackend(KiCADBackend):
             # Check for open documents (kipy 10 requires a doc_type arg).
             documents = get_open_documents_compat(self._kicad)
 
-            # Look for matching project
             path_str = str(path)
             for doc in documents:
                 if path_str in str(doc):

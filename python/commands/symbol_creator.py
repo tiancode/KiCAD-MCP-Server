@@ -34,10 +34,6 @@ def _esc(s: str) -> str:
 class SymbolCreator:
     """Creates and edits KiCAD .kicad_sym symbol library files."""
 
-    # ------------------------------------------------------------------ #
-    #  create_symbol                                                       #
-    # ------------------------------------------------------------------ #
-
     def create_symbol(
         self,
         library_path: str,
@@ -107,7 +103,6 @@ class SymbolCreator:
 
         lib_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load or create library
         if lib_path.exists():
             lib_content = lib_path.read_text(encoding="utf-8")
         else:
@@ -164,10 +159,6 @@ class SymbolCreator:
             "pin_count": len(pins),
         }
 
-    # ------------------------------------------------------------------ #
-    #  delete_symbol                                                       #
-    # ------------------------------------------------------------------ #
-
     def delete_symbol(self, library_path: str, name: str) -> Dict[str, Any]:
         """Remove a symbol from a .kicad_sym library."""
         lib_path = Path(library_path)
@@ -203,10 +194,6 @@ class SymbolCreator:
             "symbol_count": len(symbols),
             "symbols": symbols,
         }
-
-    # ------------------------------------------------------------------ #
-    #  register_symbol_library                                             #
-    # ------------------------------------------------------------------ #
 
     def register_symbol_library(
         self,
