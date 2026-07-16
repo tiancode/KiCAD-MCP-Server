@@ -7,6 +7,7 @@ See python/handlers/__init__.py for the calling convention.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 from commands.schematic_locks import atomic_write_text, serialize_on_param
@@ -15,6 +16,43 @@ if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger("handlers.schematic_component")
+
+
+def _footprint_resolves(footprint: str, project_dir: Path) -> Tuple[bool, str]:
+    """Read-only check that a ``Library:Name`` footprint id resolves to a real
+    footprint via the fp-lib-table.
+
+    Returns ``(resolves, reason)``.  Never mutates any library —
+    ``pcbnew.FootprintLoad`` reads a copy.  Reuses the exact resolution path of
+    ``_add_missing_footprints_from_schematic`` (get_library_manager +
+    FootprintLoad) so the check matches what the sync would later do.
+
+    Fails OPEN: if the check itself can't run (pcbnew unavailable, table
+    unreadable, FootprintLoad raises), it returns ``(True, "...skipped...")`` so
+    a validation hiccup never blocks a legitimate edit — only a definitive
+    "library/footprint missing" answer refuses.
+    """
+    if ":" not in footprint:
+        return False, "not a 'Library:Name' footprint id"
+    lib_name, fp_name = footprint.split(":", 1)
+    if not lib_name or not fp_name:
+        return False, "not a 'Library:Name' footprint id"
+    try:
+        import pcbnew  # type: ignore[import-not-found]
+        from commands.library import get_library_manager
+
+        library_path = get_library_manager(project_path=project_dir).libraries.get(lib_name)
+        if not library_path:
+            return False, f"library '{lib_name}' is not in the fp-lib-table"
+        try:
+            module = pcbnew.FootprintLoad(library_path, fp_name)
+        except Exception as e:  # loader error is not proof of absence — fail open
+            return True, f"validation skipped (FootprintLoad error: {e})"
+        if not module:
+            return False, f"footprint '{fp_name}' is not in library '{lib_name}'"
+        return True, ""
+    except Exception as e:  # pcbnew / library manager unavailable — fail open
+        return True, f"validation skipped ({e})"
 
 
 def handle_get_schematic_component(
@@ -311,6 +349,32 @@ def handle_edit_schematic_component(
                 "success": False,
                 "message": f"Component '{reference}' not found in schematic",
             }
+
+        # B1: refuse a footprint lib-id that resolves to no real footprint —
+        # a silent, well-formed-but-bogus footprint is the exact input that
+        # sync_schematic_to_board later drops on the floor.  Read-only check;
+        # opt out with allowUnresolvedFootprint:true (the edit then lands and
+        # the sync will report the skip).  Empty footprint = clear, never validated.
+        if new_footprint is not None and str(new_footprint).strip():
+            if not bool(params.get("allowUnresolvedFootprint", False)):
+                resolves, reason = _footprint_resolves(
+                    str(new_footprint), Path(schematic_path).parent
+                )
+                if not resolves:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Footprint '{new_footprint}' does not resolve: {reason}. "
+                            "The schematic was left unchanged. Fix the Library:Name, or "
+                            "pass allowUnresolvedFootprint=true to assign it anyway "
+                            "(sync_schematic_to_board will then skip this component)."
+                        ),
+                        "errorCode": "FOOTPRINT_NOT_FOUND",
+                        "hint": (
+                            "A footprint that resolves to nothing is silently dropped "
+                            "when syncing the schematic to the PCB."
+                        ),
+                    }
 
         # Apply property replacements within the found block
         block_text = content[block_start : block_end + 1]

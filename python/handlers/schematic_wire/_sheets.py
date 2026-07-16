@@ -25,7 +25,10 @@ def handle_add_sheet_pin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
         schematic_path = params.get("schematicPath")
         sheet_name = params.get("sheetName")
         pin_name = params.get("pinName")
-        pin_type = params.get("pinType", "bidirectional")
+        # A9: `shape` is the canonical field (aligns with create_hierarchical_sheet
+        # and add_schematic_hierarchical_label); `pinType` stays as a deprecated
+        # alias. Enum breadth matches the sibling tools (5 KiCad sheet-pin shapes).
+        pin_type = params.get("shape") or params.get("pinType") or "bidirectional"
         position = params.get("position")
         orientation = params.get("orientation", 0)
 
@@ -37,10 +40,11 @@ def handle_add_sheet_pin(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
             return {"success": False, "message": "pinName is required"}
         if not position or len(position) != 2:
             return {"success": False, "message": "position [x, y] is required"}
-        if pin_type not in ("input", "output", "bidirectional"):
+        _valid_shapes = ("input", "output", "bidirectional", "tri_state", "passive")
+        if pin_type not in _valid_shapes:
             return {
                 "success": False,
-                "message": "pinType must be input, output, or bidirectional",
+                "message": f"shape must be one of: {', '.join(_valid_shapes)}",
             }
 
         sch_file = Path(schematic_path)

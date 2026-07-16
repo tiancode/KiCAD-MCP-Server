@@ -508,11 +508,179 @@ class WireDragger:
         return result
 
     @staticmethod
+    def get_stationary_pin_details(
+        sch_data: list,
+        moved_reference: str,
+    ) -> Dict[Tuple[float, float], List[Tuple[str, str, str]]]:
+        """Like :meth:`get_all_stationary_pin_positions` but keeps EVERY pin at a
+        coordinate together with its owner and identity.
+
+        Returns ``{world_xy: [(reference, pin_number, pin_name), ...]}`` for
+        every pin of every symbol except ``moved_reference``.  The plain
+        position map collapses to a single reference per point and drops the pin
+        number/name; naming the foreign pin a moved pin was coincident with (A4)
+        needs the full identity.
+        """
+        sym_k = _K["symbol"]
+        prop_k = _K["property"]
+        result: Dict[Tuple[float, float], List[Tuple[str, str, str]]] = {}
+
+        seen_refs: set = set()
+        for item in sch_data:
+            if not (isinstance(item, list) and item and item[0] == sym_k):
+                continue
+            ref_val = None
+            for sub in item[1:]:
+                if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
+                    if str(sub[1]).strip('"') == "Reference":
+                        ref_val = str(sub[2]).strip('"')
+                        break
+            if ref_val is None or ref_val == moved_reference or ref_val in seen_refs:
+                continue
+            seen_refs.add(ref_val)
+            found = WireDragger.find_symbol(sch_data, ref_val)
+            if found is None:
+                continue
+            _, sx, sy, rotation, lib_id, mirror_x, mirror_y = found
+            pins = WireDragger.get_pin_defs(sch_data, lib_id)
+            for pin_num, pin in pins.items():
+                wx, wy = WireDragger.pin_world_xy(
+                    pin["x"], pin["y"], sx, sy, rotation, mirror_x, mirror_y
+                )
+                key = (round(wx, 6), round(wy, 6))
+                result.setdefault(key, []).append((ref_val, str(pin_num), str(pin.get("name", ""))))
+
+        return result
+
+    @staticmethod
+    def _label_positions(sch_data: list) -> Dict[Tuple[float, float], List[str]]:
+        """Return ``{world_xy: [label_name, ...]}`` for every net label.
+
+        Covers ``label`` / ``global_label`` / ``hierarchical_label``; the name is
+        the first token after the tag.  Used to name the net a detached stub was
+        carrying (A4).
+        """
+        label_syms = {_K["label"], _K["global_label"], _K["hierarchical_label"]}
+        at_k = _K["at"]
+        out: Dict[Tuple[float, float], List[str]] = {}
+        for item in sch_data:
+            if not (isinstance(item, list) and item and item[0] in label_syms):
+                continue
+            name = str(item[1]).strip('"') if len(item) >= 2 else ""
+            for sub in item[1:]:
+                if isinstance(sub, list) and sub and sub[0] == at_k and len(sub) >= 3:
+                    key = (round(float(sub[1]), 6), round(float(sub[2]), 6))
+                    out.setdefault(key, []).append(name)
+                    break
+        return out
+
+    @staticmethod
+    def find_detached_foreign_pins(
+        sch_data: list,
+        moved_reference: str,
+        pin_positions: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]],
+        eps: float = EPS,
+    ) -> Tuple[set, List[Dict[str, Any]]]:
+        """Identify moved pins that will DETACH from an accidentally-coincident
+        foreign pin (A4).
+
+        A moved pin qualifies when its OLD world position coincides with a
+        stationary component's pin AND the moved pin carries its own single-ended
+        stub — a ``connect_to_net`` wire whose far end is free (a net label or
+        nothing).  That overlap is a symbol collision, not an intentional
+        touching-pin connection: the moved pin's real net travels with its stub,
+        so the move must detach from the foreign pin rather than synthesize a
+        bridge (see :meth:`synthesize_touching_pin_wires`) that would re-short
+        them at the new location.
+
+        Returns ``(skip_positions, warnings)``:
+          * ``skip_positions`` — set of rounded OLD world positions to exclude
+            from :meth:`synthesize_touching_pin_wires`.
+          * ``warnings`` — one dict per detached point::
+
+              {"movedPin": str, "coordinate": {"x", "y"},
+               "foreign": [{"reference", "pin", "name"}, ...],
+               "netLabels": [str, ...]}
+        """
+        from collections import Counter
+
+        skip: set = set()
+        warnings: List[Dict[str, Any]] = []
+        if not pin_positions:
+            return skip, warnings
+
+        moved_old: Dict[Tuple[float, float], str] = {}
+        for pin_num, (old_xy, _new_xy) in pin_positions.items():
+            moved_old.setdefault((round(old_xy[0], 6), round(old_xy[1], 6)), str(pin_num))
+
+        foreign = WireDragger.get_stationary_pin_details(sch_data, moved_reference)
+        if not foreign:
+            return skip, warnings
+        stationary_keys = set(foreign.keys())
+
+        endpoint_count: Counter = Counter()
+        wires: List[List[Tuple[float, float]]] = []
+        for item in sch_data:
+            eps_pts = WireDragger._wire_endpoints(item)
+            if len(eps_pts) >= 2:
+                wires.append(eps_pts)
+                for ep in (eps_pts[0], eps_pts[-1]):
+                    endpoint_count[(round(ep[0], 6), round(ep[1], 6))] += 1
+
+        junction_keys: set = set()
+        for item in sch_data:
+            if isinstance(item, list) and item and item[0] == _K["junction"]:
+                for sub in item[1:]:
+                    if isinstance(sub, list) and sub and sub[0] == _K["at"] and len(sub) >= 3:
+                        junction_keys.add((round(float(sub[1]), 6), round(float(sub[2]), 6)))
+                        break
+
+        labels = WireDragger._label_positions(sch_data)
+
+        reported: set = set()
+        for eps_pts in wires:
+            a, b = eps_pts[0], eps_pts[-1]
+            a_key = (round(a[0], 6), round(a[1], 6))
+            b_key = (round(b[0], 6), round(b[1], 6))
+            a_moved = a_key in moved_old
+            b_moved = b_key in moved_old
+            # Exactly one endpoint on a moved pin => single-ended stub candidate.
+            if a_moved == b_moved:
+                continue
+            near_key = a_key if a_moved else b_key
+            far_key = b_key if a_moved else a_key
+            foreign_here = foreign.get(near_key)
+            if not foreign_here:
+                continue  # near end not shared with a foreign pin — nothing to detach
+            # Far end must be a genuinely free stub end (label / nothing).
+            if far_key in stationary_keys or far_key in moved_old:
+                continue
+            if endpoint_count.get(far_key, 0) > 1:
+                continue
+            if far_key in junction_keys:
+                continue
+            skip.add(near_key)
+            if near_key not in reported:
+                reported.add(near_key)
+                warnings.append(
+                    {
+                        "movedPin": moved_old.get(near_key),
+                        "coordinate": {"x": near_key[0], "y": near_key[1]},
+                        "foreign": [
+                            {"reference": r, "pin": p, "name": n} for (r, p, n) in foreign_here
+                        ],
+                        "netLabels": labels.get(far_key, []),
+                    }
+                )
+        return skip, warnings
+
+    @staticmethod
     def synthesize_touching_pin_wires(
         sch_data: list,
         moved_reference: str,
         pin_positions: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]],
         eps: float = EPS,
+        skip_old_positions: Optional[set] = None,
     ) -> int:
         """
         Detect touching-pin connections and synthesize wire segments to bridge gaps
@@ -524,6 +692,11 @@ class WireDragger:
           - If the pin now lands on another stationary pin's position, skip (they touch again).
           - If old_xy == new_xy, do nothing (no gap was created).
 
+        ``skip_old_positions`` is a set of rounded OLD world positions that must
+        NOT be bridged — used by the move handler to detach a pin that only
+        *accidentally* overlapped a foreign pin (A4) instead of re-shorting it at
+        the new location.  See :meth:`find_detached_foreign_pins`.
+
         Modifies sch_data in place.
         Returns the number of wire segments synthesized.
         """
@@ -534,9 +707,15 @@ class WireDragger:
         if not stationary_pins:
             return 0
 
+        skip = skip_old_positions or set()
         synthesized = 0
 
         for pin_num, (old_xy, new_xy) in pin_positions.items():
+            # A pin whose old position is flagged for clean detachment must not
+            # be bridged — bridging would re-short it to the foreign pin it only
+            # accidentally overlapped.
+            if (round(old_xy[0], 6), round(old_xy[1], 6)) in skip:
+                continue
             # Check if a stationary pin touches this pin's old position
             touching = any(
                 _coords_match(old_xy[0], old_xy[1], sx, sy, eps) for (sx, sy) in stationary_pins

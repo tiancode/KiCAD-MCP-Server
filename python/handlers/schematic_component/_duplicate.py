@@ -174,9 +174,13 @@ def handle_duplicate_schematic_component(
                 "schematicPath": schematic_path,
                 "component": component,
                 "placeAllUnits": place_all,
-                # A duplicate targets an explicit spot next to the original;
-                # snapping would nudge it off the requested offset.
-                "snapToGrid": params.get("snapToGrid", False),
+                # A2: a duplicate should land on the 1.27 mm connection grid just
+                # like a fresh add_schematic_component — off-grid clones produce
+                # endpoint_off_grid ERC warnings on every pin. Snap is default-on
+                # (only an explicit snapToGrid:false opts out); the snap delta is
+                # propagated to the response below so the caller sees the nudge.
+                "snapToGrid": params.get("snapToGrid"),
+                "snapGridMm": params.get("snapGridMm"),
             },
         )
         if not add_res.get("success"):

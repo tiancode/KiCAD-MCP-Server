@@ -142,9 +142,18 @@ def handle_connect_to_net(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         if not all([schematic_path, component_ref, pin_name, net_name]):
             return {"success": False, "message": "Missing required parameters"}
 
-        # Use ConnectionManager with new WireManager integration
+        # Use ConnectionManager with new WireManager integration.  Forward the
+        # A1 override: when a DIFFERENT component's pin is coincident with the
+        # target pin, connect_to_net refuses by default (kind:'coincident_pin')
+        # rather than silently capture that foreign pin onto the net;
+        # allowCoincidentPin=true connects anyway.
+        allow_coincident_pin = bool(params.get("allowCoincidentPin", False))
         result = ConnectionManager.connect_to_net(
-            Path(schematic_path), component_ref, pin_name, net_name
+            Path(schematic_path),
+            component_ref,
+            pin_name,
+            net_name,
+            allow_coincident_pin=allow_coincident_pin,
         )
 
         # Also assign the net to the pad on the PCB board

@@ -25,7 +25,12 @@ export function registerSchematicComponentTools(
     "Create a new schematic",
     {
       name: z.string().describe("Schematic name"),
-      path: z.string().optional().describe("Optional path"),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          "Optional: containing directory OR full <name>.kicad_sch file path (basename must match name, else errorCode SCHEMATIC_NAME_CONFLICT).",
+        ),
       overwrite: z
         .boolean()
         .optional()
@@ -51,9 +56,7 @@ export function registerSchematicComponentTools(
         .string()
         .optional()
         .describe("KiCAD footprint (e.g. Resistor_SMD:R_0603_1608Metric)"),
-      position: xyPointSchema
-        .optional()
-        .describe(`Position on schematic in mm. ${XY_POINT_FORMS}`),
+      position: xyPointSchema.optional().describe(`Position on schematic in mm. ${XY_POINT_FORMS}`),
       unit: z
         .number()
         .int()
@@ -77,6 +80,14 @@ export function registerSchematicComponentTools(
         .positive()
         .optional()
         .describe("Snap grid in mm (default 1.27; 2.54 = 100 mil is common for power rails)."),
+      autoAssign: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default false. When the reference is empty or already used, refuse " +
+            "(INVALID_REFERENCE / REFERENCE_EXISTS). Set true to instead auto-number " +
+            "the next free reference of the same prefix (e.g. R3 when R1/R2 exist).",
+        ),
     },
     async (args: {
       schematicPath: string;
@@ -89,6 +100,7 @@ export function registerSchematicComponentTools(
       placeAllUnits?: boolean;
       snapToGrid?: boolean;
       snapGridMm?: number;
+      autoAssign?: boolean;
     }) => {
       // Transform to what Python backend expects
       const [library, symbolName] = args.symbol.includes(":")
@@ -102,6 +114,7 @@ export function registerSchematicComponentTools(
         snapToGrid: args.snapToGrid,
         snapGridMm: args.snapGridMm,
         placeAllUnits: args.placeAllUnits,
+        autoAssign: args.autoAssign,
         component: {
           library,
           type: symbolName,
@@ -119,7 +132,12 @@ export function registerSchematicComponentTools(
       const result = await callKicadScript("add_schematic_component", transformed);
       if (result.success) {
         const pos = result.position;
-        let text = `Successfully added ${args.reference} (${args.symbol}) to schematic`;
+        // The backend may auto-assign a different reference (A6/A11) when the
+        // requested one was empty or already taken and autoAssign was set.
+        const landedRef = result.component_reference ?? args.reference;
+        let text = `Successfully added ${landedRef} (${args.symbol}) to schematic`;
+        if (result.autoAssignedReference && result.requestedReference !== undefined)
+          text += ` [auto-assigned; requested "${result.requestedReference}"]`;
         if (pos) text += ` at (${pos.x}, ${pos.y})`;
         // Contract: report the .snap delta whenever coordinates moved so an
         // agent aiming at an exact point isn't silently relocated.
@@ -195,13 +213,28 @@ export function registerSchematicComponentTools(
           "Default false. true also removes the wire stubs and net labels attached to the " +
             "deleted symbol's pins, so no orphans are left behind.",
         ),
+      removeStubs: z
+        .boolean()
+        .optional()
+        .describe(
+          "Deprecated alias for removeDanglingWires — kept so an older name still works. " +
+            "If either flag is true the stubs and labels are removed.",
+        ),
     },
     async (args: {
       schematicPath: string;
       reference: string;
       removeDanglingWires?: boolean;
+      removeStubs?: boolean;
     }) => {
-      const result = await callKicadScript("delete_schematic_component", args);
+      // Honor removeStubs as a deprecated alias (A5): OR it into the real flag
+      // before the passthrough, since the Python handler only reads
+      // removeDanglingWires and Zod would otherwise strip the alias.
+      const result = await callKicadScript("delete_schematic_component", {
+        schematicPath: args.schematicPath,
+        reference: args.reference,
+        removeDanglingWires: Boolean(args.removeDanglingWires || args.removeStubs),
+      });
       if (result.success) {
         const d = result.dangling ?? {};
         const wireCount = d.wireCount ?? 0;
@@ -220,8 +253,7 @@ export function registerSchematicComponentTools(
             .map((l: any) => `"${l.name}"@(${l.position.x},${l.position.y})`)
             .join(", ");
           if (labelCoords) text += `\n  labels: ${labelCoords}`;
-          if (!d.removed)
-            text += `\n  (pass removeDanglingWires=true to clean these up)`;
+          if (!d.removed) text += `\n  (pass removeDanglingWires=true to clean these up)`;
         } else {
           text += ` (no attached wire stubs or labels found)`;
         }
@@ -305,6 +337,12 @@ export function registerSchematicComponentTools(
           "Custom property names to delete. Built-ins (Reference/Value/Footprint/Datasheet) " +
             'cannot be removed — set their value to "" instead.',
         ),
+      allowUnresolvedFootprint: z
+        .boolean()
+        .optional()
+        .describe(
+          "Assign the footprint even if it does not resolve to a real library footprint (sync will then skip that component).",
+        ),
     },
     async (args: {
       schematicPath: string;
@@ -312,6 +350,7 @@ export function registerSchematicComponentTools(
       footprint?: string;
       value?: string;
       newReference?: string;
+      allowUnresolvedFootprint?: boolean;
       fieldPositions?: Record<string, { x: number; y: number; angle?: number }>;
       properties?: Record<
         string,
@@ -453,6 +492,8 @@ export function registerSchematicComponentTools(
         }
         // Page-awareness (S9): flag a move that landed off the sheet.
         if (result.offPageWarning) text += `\nOFF-PAGE: ${result.offPageWarning}`;
+        // A4: a move that detached a coincident foreign pin from a shared net.
+        if (result.detachWarning) text += `\nDETACHED: ${result.detachWarning}`;
         return {
           content: [{ type: "text" as const, text }],
           structuredContent: result,
@@ -543,6 +584,14 @@ export function registerSchematicComponentTools(
       position: xyPointSchema
         .optional()
         .describe(`Explicit position in mm for the clone (overrides offset). ${XY_POINT_FORMS}`),
+      snapToGrid: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default true — the clone snaps to the 1.27 mm grid like add_schematic_component " +
+            "so its pins stay on the connection grid. Pass false only for intentional sub-grid placement.",
+        ),
+      snapGridMm: z.number().positive().optional().describe("Snap grid in mm (default 1.27)."),
     },
     async (args: {
       schematicPath: string;
@@ -550,6 +599,8 @@ export function registerSchematicComponentTools(
       newReference?: string;
       offset?: XyPointInput;
       position?: XyPointInput;
+      snapToGrid?: boolean;
+      snapGridMm?: number;
     }) => {
       // Accept both {x,y} and [x,y] for offset/position (S12).
       const params: Record<string, unknown> = {
@@ -559,11 +610,19 @@ export function registerSchematicComponentTools(
       if (args.newReference !== undefined) params.newReference = args.newReference;
       if (args.offset !== undefined) params.offset = toXyObject(args.offset);
       if (args.position !== undefined) params.position = toXyObject(args.position);
+      if (args.snapToGrid !== undefined) params.snapToGrid = args.snapToGrid;
+      if (args.snapGridMm !== undefined) params.snapGridMm = args.snapGridMm;
 
       const result = await callKicadScript("duplicate_schematic_component", params);
       if (result.success) {
         const p = result.position ?? {};
         let text = `Duplicated ${args.reference} → ${result.reference} at (${p.x}, ${p.y})`;
+        // A2: report the grid-snap delta so the caller sees the clone was
+        // nudged onto the connection grid (matches add_schematic_component).
+        if (result.snap?.applied) {
+          const req = result.snap.requested;
+          text += ` [snapped to ${result.snap.gridMm} mm grid from (${req?.x}, ${req?.y})]`;
+        }
         if (result.copiedProperties?.length)
           text += `\nCopied properties: ${result.copiedProperties.join(", ")}`;
         if (result.footprint) text += `\nFootprint: ${result.footprint}`;

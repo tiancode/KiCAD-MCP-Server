@@ -104,9 +104,7 @@ def test_invalid_types_detected():
 def test_rewrite_matches_by_name_and_number():
     block = ee._symbol_span(_LIB, "RDA5807M")
     sym = _LIB[block[0] : block[1]]
-    lookup = spt.normalize_mapping(
-        {"VDD": "power_in", "gnd": "power_in", "3": "bidirectional"}
-    )
+    lookup = spt.normalize_mapping({"VDD": "power_in", "gnd": "power_in", "3": "bidirectional"})
     new_sym, records, matched = spt.rewrite_pins_in_block(sym, lookup)
     types = _pins_in(new_sym)
     assert types["VDD"] == "power_in"
@@ -243,9 +241,7 @@ def test_find_reference_lib_id():
 def test_apply_to_schematic_retypes_embedded(tmp_path):
     sch = tmp_path / "demo.kicad_sch"
     sch.write_text(_SCHEMATIC, encoding="utf-8")
-    lookup = spt.normalize_mapping(
-        {"VDD": "power_in", "GND": "power_in", "SDA": "bidirectional"}
-    )
+    lookup = spt.normalize_mapping({"VDD": "power_in", "GND": "power_in", "SDA": "bidirectional"})
     res = spt.apply_to_schematic(sch, "easyeda:RDA5807M", lookup)
     assert res["success"] is True
     assert res["target"] == "schematic"
@@ -482,6 +478,72 @@ def test_set_pin_types_composes_with_refresh(monkeypatch, tmp_path):
     types = _pins_in(embedded)
     assert types == {"VDD": "power_in", "GND": "power_in"}
     assert "unspecified" not in types.values()
+
+
+# ---------------------------------------------------------------------------
+# A13 — pin-type override marker persists across run_erc's pre-refresh
+# ---------------------------------------------------------------------------
+# set_symbol_pin_types (schematic mode) rewrites the EMBEDDED lib_symbols pin
+# types.  run_erc's pre-ERC refresh_schematic_lib_symbols wholesale-replaces
+# each embedded entry with the on-disk .kicad_sym copy, silently REVERTING the
+# deliberate edit (and persisting the revert).  The fix stamps a hidden
+# ``ki_pin_type_override`` marker so the refresh re-applies the marked pins
+# onto the fresh copy instead of dropping them.
+@pytest.mark.unit
+def test_marker_serialize_roundtrip():
+    ov = {"1": "output", "GND": "power_in", "SDA": "bidirectional"}
+    s = spt.serialize_pin_overrides(ov)
+    assert spt.deserialize_pin_overrides(s) == ov
+    # Deterministic (sorted) so apply/refresh stamps are byte-identical.
+    reversed_ov = dict(reversed(list(ov.items())))
+    assert spt.serialize_pin_overrides(ov) == spt.serialize_pin_overrides(reversed_ov)
+    # Bad types are dropped, never persisted.
+    assert spt.serialize_pin_overrides({"1": "bogus"}) == ""
+
+
+@pytest.mark.unit
+def test_apply_to_schematic_stamps_override_marker(tmp_path):
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text(_SCHEMATIC, encoding="utf-8")
+    res = spt.apply_to_schematic(
+        sch, "easyeda:RDA5807M", spt.normalize_mapping({"1": "output", "GND": "power_in"})
+    )
+    assert res["success"] is True
+    content = sch.read_text(encoding="utf-8")
+    ls_start = content.find("(lib_symbols")
+    ls_end = ee._match_paren(content, ls_start)
+    span = ee._symbol_span(content[ls_start:ls_end], "easyeda:RDA5807M")
+    embedded = content[ls_start:ls_end][span[0] : span[1]]
+    assert spt.PIN_TYPE_OVERRIDE_PROP in embedded
+    assert spt.read_pin_overrides(embedded) == {"1": "output", "GND": "power_in"}
+    # Still a single valid s-expression root.
+    assert content.count("(kicad_sch") == 1
+    sexpdata.loads(content)
+
+
+@pytest.mark.unit
+def test_apply_to_schematic_merges_override_marker_across_calls(tmp_path):
+    sch = tmp_path / "demo.kicad_sch"
+    sch.write_text(_SCHEMATIC, encoding="utf-8")
+    spt.apply_to_schematic(sch, "easyeda:RDA5807M", spt.normalize_mapping({"1": "output"}))
+    spt.apply_to_schematic(sch, "easyeda:RDA5807M", spt.normalize_mapping({"2": "power_in"}))
+    content = sch.read_text(encoding="utf-8")
+    ls_start = content.find("(lib_symbols")
+    ls_end = ee._match_paren(content, ls_start)
+    span = ee._symbol_span(content[ls_start:ls_end], "easyeda:RDA5807M")
+    embedded = content[ls_start:ls_end][span[0] : span[1]]
+    # Both edits recorded; exactly one marker property (no duplicates).
+    assert spt.read_pin_overrides(embedded) == {"1": "output", "2": "power_in"}
+    assert embedded.count(f'"{spt.PIN_TYPE_OVERRIDE_PROP}"') == 1
+
+
+@pytest.mark.unit
+def test_apply_to_library_does_not_stamp_marker(tmp_path):
+    # The library file is the source of truth — no override marker belongs there.
+    lib = tmp_path / "easyeda.kicad_sym"
+    lib.write_text(_LIB, encoding="utf-8")
+    spt.apply_to_library(lib, "RDA5807M", spt.normalize_mapping({"VDD": "power_in"}))
+    assert spt.PIN_TYPE_OVERRIDE_PROP not in lib.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

@@ -77,12 +77,20 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
         const lines: string[] = [];
         // Headline FIRST: real_errors (excludes PWR_FLAG false positives) is the
         // number that actually matters, then the raw error/warning totals.
-        lines.push(
-          `ERC: ${summary.real_errors ?? 0} real error(s) — excludes PWR_FLAG/lib_symbol false positives`,
-        );
+        // Only claim an exclusion when one actually happened — otherwise the
+        // "excludes ... false positives" boilerplate implied filtering that left
+        // the count unchanged (real_errors == raw errors), which read as a bug.
         const raw = summary.raw_by_severity ?? summary.by_severity ?? {};
+        const rawErrors: number = raw.error ?? 0;
+        const realErrors: number = summary.real_errors ?? 0;
+        const excludedErrors = rawErrors - realErrors;
         lines.push(
-          `  Totals: ${raw.error ?? 0} error(s), ${raw.warning ?? 0} warning(s), ${raw.info ?? 0} info — ${total} violation(s)`,
+          excludedErrors > 0
+            ? `ERC: ${realErrors} real error(s) — excluded ${excludedErrors} PWR_FLAG/lib_symbol false positive(s) of ${rawErrors} raw`
+            : `ERC: ${realErrors} real error(s)`,
+        );
+        lines.push(
+          `  Totals: ${rawErrors} error(s), ${raw.warning ?? 0} warning(s), ${raw.info ?? 0} info — ${total} violation(s)`,
         );
         if (summary.likely_false_positives) {
           lines.push(

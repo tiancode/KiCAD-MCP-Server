@@ -1031,3 +1031,180 @@ class TestTouchingPinIntegration:
         assert result["success"], result.get("message")
         assert result.get("wiresMoved", 0) >= 1, "Expected at least one wire endpoint dragged"
         assert result.get("wiresSynthesized", 0) >= 1, "Expected at least one touching-pin wire"
+
+
+# ---------------------------------------------------------------------------
+# TestForeignPinDetach  (A4) — a moved pin whose old position coincided with a
+# FOREIGN pin, while carrying its own connect_to_net stub, must DETACH cleanly:
+# no synthesized bridge re-shorting the foreign pin, plus a naming warning.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestForeignPinDetach:
+    """R1 (to move) at (0,0): pin2 world (0, 3.81).
+    R2 (stationary foreign) at (0, 7.62): pin1 world (0, 3.81) — coincident.
+    A stub runs from R1 pin2 (0, 3.81) to a free label point (2.54, 3.81)."""
+
+    def _setup_with_stub(self) -> Any:
+        stub = _make_wire(0, 3.81, 2.54, 3.81)
+        label = [
+            _sym("label"),
+            "NET1",
+            [_sym("at"), 2.54, 3.81, 0],
+            [_sym("uuid"), "00000000-0000-0000-0000-000000000002"],
+        ]
+        return _make_sch_data([_make_symbol("R1", 0, 0), _make_symbol("R2", 0, 7.62), stub, label])
+
+    def test_finds_foreign_pin_and_flags_skip(self) -> None:
+        sch = self._setup_with_stub()
+        pin_positions = WireDragger.compute_pin_positions(sch, "R1", 10, 0)
+        skip, warnings = WireDragger.find_detached_foreign_pins(sch, "R1", pin_positions)
+        assert (0.0, 3.81) in skip
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w["movedPin"] == "2"
+        assert any(f["reference"] == "R2" for f in w["foreign"])
+        assert "NET1" in w["netLabels"]
+
+    def test_skip_prevents_rebridge(self) -> None:
+        sch = self._setup_with_stub()
+        pin_positions = WireDragger.compute_pin_positions(sch, "R1", 10, 0)
+        skip, _ = WireDragger.find_detached_foreign_pins(sch, "R1", pin_positions)
+        count = WireDragger.synthesize_touching_pin_wires(
+            sch, "R1", pin_positions, skip_old_positions=skip
+        )
+        assert count == 0
+
+    def test_without_skip_would_rebridge(self) -> None:
+        """Proves the skip set is what prevents the accidental re-short."""
+        sch = self._setup_with_stub()
+        pin_positions = WireDragger.compute_pin_positions(sch, "R1", 10, 0)
+        count = WireDragger.synthesize_touching_pin_wires(sch, "R1", pin_positions)
+        assert count == 1
+
+    def test_genuine_touching_pin_without_stub_not_flagged(self) -> None:
+        """No stub → a real touching-pin connection: not a detach candidate,
+        and the bridge is still synthesized (existing behavior preserved)."""
+        sch = _make_sch_data([_make_symbol("R1", 0, 0), _make_symbol("R2", 0, 7.62)])
+        pin_positions = WireDragger.compute_pin_positions(sch, "R1", 10, 0)
+        skip, warnings = WireDragger.find_detached_foreign_pins(sch, "R1", pin_positions)
+        assert skip == set()
+        assert warnings == []
+        count = WireDragger.synthesize_touching_pin_wires(sch, "R1", pin_positions)
+        assert count == 1
+
+
+@pytest.mark.integration
+class TestForeignPinDetachIntegration:
+    """End-to-end A4: move a component off a coincident foreign pin."""
+
+    def _make_schematic(self) -> Any:
+        tmp = Path(tempfile.mkdtemp()) / "test.kicad_sch"
+        shutil.copy(TEMPLATE_PATH, tmp)
+        return tmp
+
+    def _append(self, path: Path, sexp: str) -> None:
+        content = path.read_text(encoding="utf-8")
+        idx = content.rfind(")")
+        path.write_text(content[:idx] + "\n" + sexp + "\n)", encoding="utf-8")
+
+    def _add_resistor(self, path: Path, ref: str, x: float, y: float) -> None:
+        import uuid
+
+        self._append(
+            path,
+            f"""
+  (symbol (lib_id "Device:R") (at {x} {y} 0) (unit 1)
+    (in_bom yes) (on_board yes) (dnp no)
+    (uuid "{uuid.uuid4()}")
+    (property "Reference" "{ref}" (at {x + 2.032} {y} 90)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "10k" (at {x} {y} 90)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid "{uuid.uuid4()}"))
+    (pin "2" (uuid "{uuid.uuid4()}"))
+    (instances (project "test" (path "/" (reference "{ref}") (unit 1))))
+  )""",
+        )
+
+    def _add_wire(self, path: Path, x1: float, y1: float, x2: float, y2: float) -> None:
+        import uuid
+
+        self._append(
+            path,
+            f"  (wire (pts (xy {x1} {y1}) (xy {x2} {y2})) "
+            f'(stroke (width 0) (type default)) (uuid "{uuid.uuid4()}"))',
+        )
+
+    def _add_label(self, path: Path, name: str, x: float, y: float) -> None:
+        import uuid
+
+        self._append(
+            path,
+            f'  (label "{name}" (at {x} {y} 0) '
+            f'(effects (font (size 1.27 1.27))) (uuid "{uuid.uuid4()}"))',
+        )
+
+    def _wires(self, path: Path) -> Any:
+        data = sexpdata.loads(path.read_text(encoding="utf-8"))
+        out = []
+        for item in data:
+            if not (isinstance(item, list) and item and item[0] == Symbol("wire")):
+                continue
+            pts = next(
+                (s for s in item[1:] if isinstance(s, list) and s and s[0] == Symbol("pts")),
+                None,
+            )
+            if pts is None:
+                continue
+            xys = [
+                p for p in pts[1:] if isinstance(p, list) and len(p) >= 3 and p[0] == Symbol("xy")
+            ]
+            if len(xys) >= 2:
+                out.append(
+                    (
+                        (float(xys[0][1]), float(xys[0][2])),
+                        (float(xys[-1][1]), float(xys[-1][2])),
+                    )
+                )
+        return out
+
+    def test_move_detaches_coincident_foreign_pin(self) -> None:
+        # Coincidence at (100, 96.19): R1 pin1 & R2 pin2 overlap there.
+        sch = self._make_schematic()
+        self._add_resistor(sch, "R1", 100, 100)
+        self._add_resistor(sch, "R2", 100, 92.38)
+        # R1's own connect_to_net stub: pin (100, 96.19) -> label at (97.46, 96.19).
+        self._add_wire(sch, 100, 96.19, 97.46, 96.19)
+        self._add_label(sch, "SPK", 97.46, 96.19)
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+        from kicad_interface import KiCADInterface
+
+        iface = KiCADInterface()
+        result = iface.handle_command(
+            "move_schematic_component",
+            {"schematicPath": str(sch), "reference": "R1", "position": {"x": 110, "y": 100}},
+        )
+        assert result["success"], result.get("message")
+
+        # A4: the coincident foreign pin (R2) is reported as detached, and a
+        # human-readable warning names it.
+        det = result.get("foreignPinDetachments")
+        assert det, f"expected foreignPinDetachments, got {result}"
+        assert any(any(f["reference"] == "R2" for f in d["foreign"]) for d in det)
+        assert "R2" in result.get("detachWarning", "")
+
+        # No bridge wire re-shorting old (100, 96.19) to new (110, 96.19).
+        assert result.get("wiresSynthesized", 0) == 0
+        for start, end in self._wires(sch):
+            rounded = {
+                (round(start[0], 2), round(start[1], 2)),
+                (round(end[0], 2), round(end[1], 2)),
+            }
+            assert not (
+                (100.0, 96.19) in rounded and (110.0, 96.19) in rounded
+            ), "spurious bridge re-shorted the detached foreign pin"

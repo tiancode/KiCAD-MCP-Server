@@ -1333,6 +1333,53 @@ class WireManager:
             return False
 
     @staticmethod
+    def _find_named_sheet_span(content: str, sheet_name: str) -> Optional[Tuple[int, int]]:
+        """Character span ``(open_idx, close_idx)`` of the ``(sheet ...)`` block
+        whose ``Sheetname`` property equals ``sheet_name`` (``close_idx`` indexes
+        the block's matching ``)``), or None.
+
+        Walks parentheses string-aware so the result is independent of
+        whitespace / formatting — a compact single-line block is found exactly
+        like a pretty-printed one (a line-anchored ``^\\s*\\(sheet`` regex
+        silently missed a block glued onto a compact line — see A10).
+        ``(sheet_instances ...)`` never matches: there is no word boundary after
+        ``sheet``.
+        """
+        name_re = re.compile(r'\(property\s+"Sheetname"\s+"' + re.escape(sheet_name) + r'"')
+        sheet_head = re.compile(r"sheet\b")
+        n = len(content)
+        i = 0
+        in_str = False
+        esc = False
+        stack: List[Tuple[int, bool]] = []
+        while i < n:
+            ch = content[i]
+            if esc:
+                esc = False
+                i += 1
+                continue
+            if ch == "\\":
+                esc = True
+                i += 1
+                continue
+            if ch == '"':
+                in_str = not in_str
+                i += 1
+                continue
+            if in_str:
+                i += 1
+                continue
+            if ch == "(":
+                stack.append((i, bool(sheet_head.match(content, i + 1))))
+            elif ch == ")":
+                if stack:
+                    open_idx, is_sheet = stack.pop()
+                    if is_sheet and name_re.search(content, open_idx, i + 1):
+                        return open_idx, i
+            i += 1
+        return None
+
+    @staticmethod
     def add_sheet_pin(
         content: str,
         sheet_name: str,
@@ -1343,49 +1390,23 @@ class WireManager:
     ) -> Tuple[str, bool]:
         """Insert a sheet pin into the named sheet block in the parent schematic.
 
-        Returns (modified_content, success).
+        The sheet lookup is serialization-agnostic (see
+        :meth:`_find_named_sheet_span`): it works whether the ``(sheet ...)``
+        block is pretty-printed across many lines or emitted compact on a single
+        line.  Returns (modified_content, success).
         """
-        lines = content.split("\n")
-        sheetname_pattern = re.compile(
-            r'\(property\s+"Sheetname"\s+"' + re.escape(sheet_name) + r'"'
-        )
-        # Tolerate any leading whitespace before ``(sheet`` so a block emitted
-        # by :meth:`add_sheet` (which indents one extra level when inserting
-        # before ``(sheet_instances``) is still found.  ``\b`` after ``sheet``
-        # keeps ``(sheet_instances`` from matching.
-        sheet_block_pattern = re.compile(r"^\s*\(sheet\b")
-
-        # Find the sheet block that contains the target Sheetname property
-        i = 0
-        while i < len(lines):
-            if sheet_block_pattern.match(lines[i]):
-                # Walk forward to find closing paren of this block
-                depth = sum(1 for c in lines[i] if c == "(") - sum(1 for c in lines[i] if c == ")")
-                j = i + 1
-                found_name = False
-                while j < len(lines) and depth > 0:
-                    if sheetname_pattern.search(lines[j]):
-                        found_name = True
-                    depth += sum(1 for c in lines[j] if c == "(") - sum(
-                        1 for c in lines[j] if c == ")"
-                    )
-                    j += 1
-                b_end = j - 1  # index of closing ")" line of the sheet block
-
-                if found_name:
-                    # Insert pin text before the closing paren of the sheet block
-                    pin_text = _make_sheet_pin_text(pin_name, pin_type, position, orientation)
-                    pin_lines = pin_text.rstrip("\n").split("\n")
-                    for offset, line in enumerate(pin_lines):
-                        lines.insert(b_end + offset, line)
-                    logger.info(f"Added sheet pin '{pin_name}' to sheet '{sheet_name}'")
-                    return "\n".join(lines), True
-
-                i = b_end + 1
-                continue
-            i += 1
-
-        return content, False
+        span = WireManager._find_named_sheet_span(content, sheet_name)
+        if span is None:
+            return content, False
+        _open_idx, close_idx = span
+        pin_text = _make_sheet_pin_text(pin_name, pin_type, position, orientation)
+        prefix = content[:close_idx]
+        # Keep the (pin ...) block on its own line even when the sheet block was
+        # serialized compact (no newline before its closing paren).
+        insertion = pin_text if prefix.endswith("\n") else "\n" + pin_text
+        new_content = prefix + insertion + content[close_idx:]
+        logger.info(f"Added sheet pin '{pin_name}' to sheet '{sheet_name}'")
+        return new_content, True
 
     @staticmethod
     @serialize_on_path(0)
@@ -1434,6 +1455,15 @@ class WireManager:
             page_number,
         )
 
+        # A leading newline so the multi-line (sheet ...) block always starts on
+        # its own line — otherwise, spliced into a compact single-line parent,
+        # the (sheet opener is glued mid-line and a line-based lookup never sees
+        # it (A10). No-op for a pretty-printed parent (prefix already ends in a
+        # newline once trailing indent is stripped), so that path is byte-identical.
+        def _lead(prefix: str) -> str:
+            trimmed = prefix.rstrip(" \t")
+            return "" if trimmed == "" or trimmed.endswith("\n") else "\n"
+
         # Insert before (sheet_instances on the root sheet; fall back to before
         # the final closing paren (sub-sheets have no sheet_instances block).
         insert_at = content.rfind("(sheet_instances")
@@ -1443,9 +1473,11 @@ class WireManager:
                 logger.error("add_sheet: could not find an insertion point")
                 return False, {"error": "no insertion point in schematic"}
             insert_at = len(stripped) - 1
-            new_content = content[:insert_at] + sheet_text + content[insert_at:]
+            prefix = content[:insert_at]
+            new_content = prefix + _lead(prefix) + sheet_text + content[insert_at:]
         else:
-            new_content = content[:insert_at] + sheet_text + "  " + content[insert_at:]
+            prefix = content[:insert_at]
+            new_content = prefix + _lead(prefix) + sheet_text + "  " + content[insert_at:]
 
         # Serialize-validate the assembled text before touching disk so a
         # malformed block can never truncate the existing schematic.

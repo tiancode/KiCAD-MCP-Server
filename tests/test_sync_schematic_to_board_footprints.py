@@ -721,8 +721,17 @@ class TestSchematicFieldPropagation:
         assert iface._is_propagatable_field("LCSC Part")
         assert iface._is_propagatable_field("Datasheet")
         # Standard / handled-elsewhere and internal keys are skipped.
-        for skip in ("Reference", "Value", "Footprint", "Sheetname", "Sheetfile",
-                     "ki_keywords", "ki_description", "ki_fp_filters", ""):
+        for skip in (
+            "Reference",
+            "Value",
+            "Footprint",
+            "Sheetname",
+            "Sheetfile",
+            "ki_keywords",
+            "ki_description",
+            "ki_fp_filters",
+            "",
+        ):
             assert not iface._is_propagatable_field(skip), skip
 
     def test_propagate_sets_custom_fields_skipping_internal(self) -> None:
@@ -761,9 +770,7 @@ class TestSchematicFieldPropagation:
         fp = _fp_with_fields("U1", {"LCSC Part": "C80215", "MPN": "OLD"})
         board = MagicMock(name="board")
         board.GetFootprints.return_value = [fp]
-        components = [
-            {"reference": "U1", "fields": {"MPN": "GD32F103VET6", "LCSC Part": "C80215"}}
-        ]
+        components = [{"reference": "U1", "fields": {"MPN": "GD32F103VET6", "LCSC Part": "C80215"}}]
 
         stats = _interface()._propagate_schematic_fields_to_board(board, components)
 
@@ -777,9 +784,7 @@ class TestSchematicFieldPropagation:
         fp = _fp_with_fields("U1", {"Note": "hand-added", "MPN": "OLD"})
         board = MagicMock(name="board")
         board.GetFootprints.return_value = [fp]
-        components = [
-            {"reference": "U1", "fields": {"MPN": "NEW", "Datasheet": "   ", "Note": ""}}
-        ]
+        components = [{"reference": "U1", "fields": {"MPN": "NEW", "Datasheet": "   ", "Note": ""}}]
 
         _interface()._propagate_schematic_fields_to_board(board, components)
 
@@ -798,3 +803,77 @@ class TestSchematicFieldPropagation:
         stats = _interface()._propagate_schematic_fields_to_board(board, components)
         assert stats == {"footprints_updated": 0, "fields_written": 0}
         fp.SetField.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# B1 — the handler must NOT report success when it silently dropped components
+# whose footprint lib-id did not resolve.  Any skipped footprint flips
+# success:false + errorCode FOOTPRINTS_SKIPPED + partial:true, and the dropped
+# refs + reasons are named in the message (the partial board is still written).
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+class TestSyncHandlerFootprintsSkipped:
+    def _run(self, tmp_path, skipped):
+        from handlers.schematic_io import handle_sync_schematic_to_board
+
+        sch = tmp_path / "demo.kicad_sch"
+        sch.write_text("(kicad_sch)\n", encoding="utf-8")
+        board_path = tmp_path / "demo.kicad_pcb"
+        board_path.write_text("(kicad_pcb)\n", encoding="utf-8")
+
+        board = MagicMock(name="board")
+        board.GetFootprints.return_value = []
+        board.GetFileName.return_value = str(board_path)
+        nbn = MagicMock()
+        nbn.has_key.return_value = False
+        netinfo = MagicMock()
+        netinfo.NetsByName.return_value = nbn
+        board.GetNetInfo.return_value = netinfo
+
+        iface = MagicMock(name="iface")
+        iface._safe_load_board.return_value = board
+        iface._export_schematic_netlist_xml.return_value = None
+        iface._pad_net_map_from_netlist_root.return_value = ({}, set())
+        iface._build_hierarchical_pad_net_map.return_value = ({}, set())
+        iface._add_missing_footprints_from_schematic.return_value = ([], skipped)
+        iface._extract_components_from_schematic.return_value = []
+        iface._propagate_schematic_fields_to_board.return_value = {
+            "footprints_updated": 0,
+            "fields_written": [],
+        }
+        iface.ipc_board_api = None
+        res = handle_sync_schematic_to_board(
+            iface, {"schematicPath": str(sch), "boardPath": str(board_path)}
+        )
+        return res, iface
+
+    def test_skipped_footprints_flip_success_false(self, tmp_path):
+        skipped = [
+            {
+                "reference": "J5",
+                "footprint": "TerminalBlock:TerminalBlock_bornier-2_P5.08mm",
+                "reason": "footprint 'TerminalBlock_bornier-2_P5.08mm' is not in 'TerminalBlock'",
+            },
+            {
+                "reference": "SW1",
+                "footprint": "Rotary_Encoder:RotaryEncoder_Alps_EC11E-Switch",
+                "reason": "library 'Rotary_Encoder' is not in the fp-lib-table",
+            },
+        ]
+        res, iface = self._run(tmp_path, skipped)
+        assert res["success"] is False
+        assert res["errorCode"] == "FOOTPRINTS_SKIPPED"
+        assert res["partial"] is True
+        # Full detail retained.
+        assert res["footprints_skipped"] == skipped
+        # Dropped refs + reasons surfaced in the message.
+        assert "J5" in res["message"] and "SW1" in res["message"]
+        assert "not in" in res["message"]
+        # The partial board was still written to disk.
+        iface._save_board_and_record.assert_called()
+
+    def test_no_skips_stays_success_true(self, tmp_path):
+        res, _ = self._run(tmp_path, [])
+        assert res["success"] is True
+        assert "errorCode" not in res
+        assert res.get("partial") in (None, False)

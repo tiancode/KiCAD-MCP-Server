@@ -244,3 +244,112 @@ def test_two_caps_opposite_nets_do_not_coincide(tmp_path: Path) -> None:
     assert res2["relocated"] is True
     assert res2["label_location"] != gnd_stub
     assert math.dist(res2["label_location"], gnd_stub) > ConnectionManager._STUB_COLLISION_GRID
+
+
+# ---------------------------------------------------------------------------
+# A1 (round 7): a foreign component pin coincident with the target pin must not
+# be silently captured onto the net — refuse by default, override to proceed.
+# ---------------------------------------------------------------------------
+
+
+def _coincident_pair(tmp_path: Path) -> Path:
+    """C1 at (100,100) with pin1 world (100, 96.19); C2 placed so its pin2 world
+    lands EXACTLY on C1/pin1 (a real symbol overlap, as in the GD32 J5/U1 case)."""
+    # C pin2 world = (Cx, Cy + 3.81); to make C2/pin2 == (100, 96.19): Cy = 92.38.
+    return _build(tmp_path, _placed("C1", 100, 100, 1) + _placed("C2", 100, 92.38, 2))
+
+
+@pytest.mark.unit
+class TestCoincidentForeignPin:
+    def test_helper_detects_the_foreign_pin(self, tmp_path: Path) -> None:
+        p = _coincident_pair(tmp_path)
+        pin_loc = PinLocator().get_pin_location(str(p), "C1", "1")
+        found = ConnectionManager._coincident_foreign_pins(p, "C1", pin_loc)
+        assert [f["ref"] for f in found] == ["C2"]
+        assert found[0]["pin"] == "2"  # C2/pin2 is the coincident one
+        assert math.dist(found[0]["point"], pin_loc) < 1e-6
+
+    def test_refuses_by_default_with_structured_error(self, tmp_path: Path) -> None:
+        p = _coincident_pair(tmp_path)
+        res = ConnectionManager.connect_to_net(p, "C1", "1", "SIG")
+
+        assert res["success"] is False
+        assert res["kind"] == "coincident_pin"
+        assert res["coincident_pin"]["ref"] == "C2"
+        assert res["coincident_pin"]["pin"] == "2"
+        assert "coincident" in res["message"].lower()
+        # SIG was NEVER written — no silent capture.
+        assert all(n != "SIG" for n, _xy in _labels_in(p))
+
+    def test_override_flag_connects_anyway(self, tmp_path: Path) -> None:
+        p = _coincident_pair(tmp_path)
+        res = ConnectionManager.connect_to_net(p, "C1", "1", "SIG", allow_coincident_pin=True)
+        assert res["success"] is True, res
+        # With the override, the net label IS written.
+        assert any(n == "SIG" for n, _xy in _labels_in(p))
+
+    def test_non_coincident_pins_not_flagged(self, tmp_path: Path) -> None:
+        # Two symbols with NO overlapping pins → normal connection, no refusal.
+        p = _build(tmp_path, _placed("C1", 100, 100, 1) + _placed("C2", 150, 150, 2))
+        res = ConnectionManager.connect_to_net(p, "C1", "1", "SIG")
+        assert res["success"] is True, res
+        assert res.get("kind") != "coincident_pin"
+
+    def test_power_flag_pin_does_not_trigger_refusal(self, tmp_path: Path) -> None:
+        # A foreign pin whose reference starts with '#' (power/flag symbol) is the
+        # normal connection mechanism, not a silent capture — must NOT refuse.
+        p = _coincident_pair(tmp_path)
+        pin_loc = PinLocator().get_pin_location(str(p), "C1", "1")
+        # Re-label C2 as a flag-style ref (#FLG) and confirm it's ignored.
+        text = p.read_text().replace('"C2"', '"#FLG01"')
+        p.write_text(text)
+        _clear()
+        found = ConnectionManager._coincident_foreign_pins(p, "C1", pin_loc)
+        assert found == []
+
+    # --- Handler-level: prove the A1 override is wired MCP-param → kwarg. ---
+
+    def test_handler_forwards_allow_coincident_pin_override(self, tmp_path: Path) -> None:
+        """Drive the MCP handler (not ConnectionManager directly) with
+        allowCoincidentPin:true — it must reach connect_to_net's
+        allow_coincident_pin kwarg so the label is written despite the overlap."""
+        from handlers.schematic_wire._wires import handle_connect_to_net
+
+        class _Iface:
+            board = None  # skip the PCB-pad side effect (schematic-only test)
+
+        p = _coincident_pair(tmp_path)
+        res = handle_connect_to_net(
+            _Iface(),
+            {
+                "schematicPath": str(p),
+                "componentRef": "C1",
+                "pinName": "1",
+                "netName": "SIG",
+                "allowCoincidentPin": True,
+            },
+        )
+        assert res["success"] is True, res
+        assert any(n == "SIG" for n, _xy in _labels_in(p))
+
+    def test_handler_refuses_by_default(self, tmp_path: Path) -> None:
+        """Without the override the handler path still refuses (no silent
+        capture) — the param genuinely gates the behaviour."""
+        from handlers.schematic_wire._wires import handle_connect_to_net
+
+        class _Iface:
+            board = None
+
+        p = _coincident_pair(tmp_path)
+        res = handle_connect_to_net(
+            _Iface(),
+            {
+                "schematicPath": str(p),
+                "componentRef": "C1",
+                "pinName": "1",
+                "netName": "SIG",
+            },
+        )
+        assert res["success"] is False
+        assert res["kind"] == "coincident_pin"
+        assert all(n != "SIG" for n, _xy in _labels_in(p))

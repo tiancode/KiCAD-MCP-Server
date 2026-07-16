@@ -42,7 +42,8 @@ def iface():
 # Minimal schematic templates
 # ---------------------------------------------------------------------------
 
-_MINIMAL_SUBSHEET = textwrap.dedent("""\
+_MINIMAL_SUBSHEET = textwrap.dedent(
+    """\
     (kicad_sch
     \t(version 20231120)
     \t(generator "eeschema")
@@ -53,9 +54,11 @@ _MINIMAL_SUBSHEET = textwrap.dedent("""\
     \t\t)
     \t)
     )
-""")
+"""
+)
 
-_MINIMAL_PARENT = textwrap.dedent("""\
+_MINIMAL_PARENT = textwrap.dedent(
+    """\
     (kicad_sch
     \t(version 20231120)
     \t(generator "eeschema")
@@ -85,9 +88,11 @@ _MINIMAL_PARENT = textwrap.dedent("""\
     \t\t)
     \t)
     )
-""")
+"""
+)
 
-_ROOT_WITH_UUID = textwrap.dedent("""\
+_ROOT_WITH_UUID = textwrap.dedent(
+    """\
     (kicad_sch
     \t(version 20250114)
     \t(generator "eeschema")
@@ -101,10 +106,12 @@ _ROOT_WITH_UUID = textwrap.dedent("""\
     \t\t)
     \t)
     )
-""")
+"""
+)
 
 
-_PARENT_TWO_SHEETS = textwrap.dedent("""\
+_PARENT_TWO_SHEETS = textwrap.dedent(
+    """\
     (kicad_sch
     \t(version 20231120)
     \t(sheet
@@ -135,7 +142,8 @@ _PARENT_TWO_SHEETS = textwrap.dedent("""\
     \t\t(path "/" (page "1"))
     \t)
     )
-""")
+"""
+)
 
 
 # ===========================================================================
@@ -281,7 +289,7 @@ class TestAddSheetPin:
                 "schematicPath": str(sch),
                 "sheetName": "Storage",
                 "pinName": "SD_CLK",
-                "pinType": "output",
+                "shape": "output",
                 "position": [140, 60],
             }
         )
@@ -300,7 +308,7 @@ class TestAddSheetPin:
                 "schematicPath": str(sch),
                 "sheetName": "Storage",
                 "pinName": "SD_D0",
-                "pinType": "bidirectional",
+                "shape": "bidirectional",
                 "position": [190, 60],
             }
         )
@@ -322,7 +330,7 @@ class TestAddSheetPin:
                 "schematicPath": str(sch),
                 "sheetName": "NonExistent",
                 "pinName": "SIG",
-                "pinType": "input",
+                "shape": "input",
                 "position": [100, 50],
             }
         )
@@ -338,7 +346,7 @@ class TestAddSheetPin:
             {
                 "schematicPath": str(sch),
                 "sheetName": "Storage",
-                "pinType": "input",
+                "shape": "input",
                 "position": [100, 50],
             }
         )
@@ -354,7 +362,7 @@ class TestAddSheetPin:
                 "schematicPath": str(sch),
                 "sheetName": "Storage",
                 "pinName": "VBUS",
-                "pinType": "input",
+                "shape": "input",
                 "position": [100, 60],
                 "orientation": 180,
             }
@@ -364,6 +372,75 @@ class TestAddSheetPin:
         content = sch.read_text()
         assert "(at 100 60 180)" in content
         assert "(justify right)" in content
+
+    def test_pintype_deprecated_alias_still_accepted(self, iface, tmp_path):
+        # A9: `shape` is canonical, but the old `pinType` key must still work.
+        sch = tmp_path / "parent.kicad_sch"
+        sch.write_text(_MINIMAL_PARENT)
+
+        result = iface._handle_add_sheet_pin(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Storage",
+                "pinName": "SD_CMD",
+                "pinType": "output",  # deprecated alias for shape
+                "position": [140, 62],
+            }
+        )
+
+        assert result["success"] is True, result
+        assert '(pin "SD_CMD" output' in sch.read_text()
+
+    def test_broadened_shape_enum_accepts_passive(self, iface, tmp_path):
+        # A9: enum breadth aligned with sibling tools (5 KiCad sheet-pin shapes).
+        sch = tmp_path / "parent.kicad_sch"
+        sch.write_text(_MINIMAL_PARENT)
+
+        result = iface._handle_add_sheet_pin(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "Storage",
+                "pinName": "NC",
+                "shape": "passive",
+                "position": [140, 64],
+            }
+        )
+
+        assert result["success"] is True, result
+        assert '(pin "NC" passive' in sch.read_text()
+
+    def test_add_pin_on_compact_single_line_sheet_block(self, iface, tmp_path):
+        # A10: a (sheet ...) block serialized COMPACT on a single line (mixed with
+        # a compact parent) must still be found — the old line-anchored
+        # ^\s*\(sheet lookup silently missed it and reported "not found".
+        sch = tmp_path / "compact.kicad_sch"
+        sch.write_text(
+            '(kicad_sch (version 20250114) (generator "x") '
+            '(uuid "5b9623a5-6d01-41fc-9865-e1bc779418c8") (paper "A4") (lib_symbols) '
+            '(sheet (at 180 50) (size 50 40) (uuid "aaaa1111-1111-4111-8111-aaaaaaaaaaaa") '
+            '(property "Sheetname" "power" (at 180 49 0)) '
+            '(property "Sheetfile" "power_child.kicad_sch" (at 180 91 0))) '
+            '(sheet_instances (path "/" (page "1"))))'
+        )
+
+        result = iface._handle_add_sheet_pin(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "power",
+                "pinName": "GND",
+                "shape": "input",
+                "position": [180, 55],
+                "orientation": 180,
+            }
+        )
+
+        assert result["success"] is True, result
+        content = sch.read_text()
+        assert '(pin "GND" input' in content
+        assert content.count("(") == content.count(")")
+        import sexpdata
+
+        assert sexpdata.loads(content)[0] == sexpdata.Symbol("kicad_sch")
 
 
 # ===========================================================================

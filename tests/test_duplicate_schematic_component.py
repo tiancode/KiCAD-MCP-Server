@@ -99,7 +99,11 @@ class TestDuplicateSchematicComponent:
         _place_source(sch, iface)
 
         res = handle_duplicate_schematic_component(
-            iface, {"schematicPath": str(sch), "reference": "R1"}
+            iface,
+            # snapToGrid=False keeps the offset math exact for this assertion;
+            # the default-on snap behaviour is covered by the dedicated tests
+            # below (A2).
+            {"schematicPath": str(sch), "reference": "R1", "snapToGrid": False},
         )
         assert res["success"] is True
         # Auto-assigned next free ref of the same prefix.
@@ -130,6 +134,7 @@ class TestDuplicateSchematicComponent:
                 "reference": "R1",
                 "newReference": "R7",
                 "position": {"x": 150, "y": 80},
+                "snapToGrid": False,
             },
         )
         assert res["success"] is True
@@ -143,7 +148,12 @@ class TestDuplicateSchematicComponent:
 
         res = handle_duplicate_schematic_component(
             iface,
-            {"schematicPath": str(sch), "reference": "R1", "offset": {"x": 0, "y": 20}},
+            {
+                "schematicPath": str(sch),
+                "reference": "R1",
+                "offset": {"x": 0, "y": 20},
+                "snapToGrid": False,
+            },
         )
         assert res["success"] is True
         assert res["position"]["x"] == 100.0
@@ -182,3 +192,43 @@ class TestDuplicateSchematicComponent:
             iface, {"schematicPath": str(sch), "reference": "U99"}
         )
         assert res["success"] is False
+
+    def test_snaps_to_grid_by_default_and_reports_delta(self, tmp_path):
+        """A2: a duplicate at round-mm coords must snap to the 1.27 mm grid
+        (like add_schematic_component) and report the snap delta — otherwise
+        every duplicated symbol's pins land off-grid and fire
+        endpoint_off_grid ERC warnings."""
+        iface = _iface()
+        sch = _project(tmp_path)
+        _place_source(sch, iface)
+
+        res = handle_duplicate_schematic_component(
+            iface,
+            {"schematicPath": str(sch), "reference": "R1", "position": {"x": 75, "y": 15}},
+        )
+        assert res["success"] is True
+        # 75 / 1.27 = 59.06 → 59 → 74.93 ; 15 / 1.27 = 11.81 → 12 → 15.24
+        assert res["position"]["x"] == pytest.approx(74.93, abs=1e-2)
+        assert res["position"]["y"] == pytest.approx(15.24, abs=1e-2)
+        assert res["snap"]["applied"] is True
+        assert res["snap"]["requested"] == {"x": 75, "y": 15}
+
+    def test_snap_false_preserves_exact_position(self, tmp_path):
+        """Explicit snapToGrid=false keeps the requested off-grid coordinate
+        and omits the .snap field."""
+        iface = _iface()
+        sch = _project(tmp_path)
+        _place_source(sch, iface)
+
+        res = handle_duplicate_schematic_component(
+            iface,
+            {
+                "schematicPath": str(sch),
+                "reference": "R1",
+                "position": {"x": 75, "y": 15},
+                "snapToGrid": False,
+            },
+        )
+        assert res["success"] is True
+        assert res["position"] == {"x": 75.0, "y": 15.0}
+        assert "snap" not in res

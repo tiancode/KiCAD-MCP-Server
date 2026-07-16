@@ -70,6 +70,38 @@ _PIN_NUMBER_RE = re.compile(r'\(number\s+"([^"]*)"')
 _INSTANCE_RE = re.compile(r'\(symbol\s+\(lib_id\s+"([^"]+)"')
 _REF_PROP_RE = re.compile(r'\(property\s+"Reference"\s+"([^"]*)"')
 
+# ---------------------------------------------------------------------------
+# Pin-type override marker (A13)
+# ---------------------------------------------------------------------------
+# run_erc pre-refreshes the schematic's embedded lib_symbols from the on-disk
+# .kicad_sym (refresh_schematic_lib_symbols) to silence lib_symbol_mismatch
+# drift.  That wholesale replace REVERTS a deliberate embedded pin-type edit
+# (apply_to_schematic) back to the library's original types — and persists the
+# revert.  apply_to_schematic therefore stamps a hidden ``ki_pin_type_override``
+# property on the embedded definition recording exactly which pin keys were
+# retyped and to what.  The refresh reads that marker and re-applies those pins
+# onto the fresh disk copy (dynamic_symbol_loader.refresh_embedded_lib_symbols)
+# instead of dropping them, so the edit survives while every OTHER library
+# change (positions, graphics, other pins, descriptions) still flows through.
+#
+# The ``ki_`` prefix marks it library-internal: KiCad keeps such fields on the
+# symbol definition and never stamps them onto placed instances (see
+# dynamic_symbol_loader's ki_* exclusion), so the marker stays invisible on the
+# canvas and out of the BOM.
+PIN_TYPE_OVERRIDE_PROP = "ki_pin_type_override"
+
+_OVERRIDE_MARKER_FIND = f'(property "{PIN_TYPE_OVERRIDE_PROP}"'
+_OVERRIDE_VALUE_RE = re.compile(
+    r'\(property\s+"' + re.escape(PIN_TYPE_OVERRIDE_PROP) + r'"\s+"((?:[^"\\]|\\.)*)"'
+)
+# Match a symbol block header up to (and including) its quoted name.
+_SYMBOL_HEADER_RE = re.compile(r'\(symbol\s+"(?:[^"\\]|\\.)*"')
+# A pin key persists only if it survives the compact ``key=type;…`` encoding
+# unambiguously — i.e. carries no delimiter or quote chars.  Pin numbers and
+# ordinary pin names qualify; an exotic key is simply not recorded (the pin is
+# still retyped, only its cross-refresh persistence is skipped).
+_MARKER_SAFE_KEY_RE = re.compile(r'^[^;="\\]+$')
+
 
 class SymbolPinTypeError(RuntimeError):
     """A user-facing failure editing a symbol's pin types."""
@@ -182,6 +214,81 @@ def rewrite_pins_in_block(
     return "".join(out), records, matched_keys
 
 
+def serialize_pin_overrides(overrides: Dict[str, str]) -> str:
+    """Encode ``{pinKey: type}`` as a deterministic ``key=type;…`` string.
+
+    Sorted (so apply-time and refresh-time stamps are byte-identical), skipping
+    any pair whose type is not a valid electrical type or whose key carries a
+    delimiter char that the compact encoding can't represent.
+    """
+    parts = []
+    for k, v in sorted(overrides.items()):
+        if v in VALID_PIN_TYPES and _MARKER_SAFE_KEY_RE.match(k):
+            parts.append(f"{k}={v}")
+    return ";".join(parts)
+
+
+def deserialize_pin_overrides(text: str) -> Dict[str, str]:
+    """Inverse of :func:`serialize_pin_overrides`; ignores malformed pairs."""
+    out: Dict[str, str] = {}
+    for part in text.split(";"):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        if k and v in VALID_PIN_TYPES:
+            out[k] = v
+    return out
+
+
+def _find_override_marker_span(block: str) -> Optional[Tuple[int, int]]:
+    idx = block.find(_OVERRIDE_MARKER_FIND)
+    if idx == -1:
+        return None
+    return idx, _match_paren(block, idx)
+
+
+def read_pin_overrides(block: str) -> Dict[str, str]:
+    """Return the ``{pinKey: type}`` overrides recorded on a symbol block, if any."""
+    m = _OVERRIDE_VALUE_RE.search(block)
+    if not m:
+        return {}
+    return deserialize_pin_overrides(m.group(1))
+
+
+def stamp_pin_overrides(block: str, overrides: Dict[str, str]) -> str:
+    """Return ``block`` carrying exactly one override marker for ``overrides``.
+
+    Any pre-existing marker is removed first, so repeated stamps never
+    accumulate duplicates.  With empty (or fully-filtered-out) ``overrides`` the
+    block is returned marker-free.  A non-symbol block is returned untouched.
+    """
+    span = _find_override_marker_span(block)
+    if span is not None:
+        s, e = span
+        line_start = block.rfind("\n", 0, s) + 1
+        # If the marker sat on its own line, drop the whole line (incl. trailing
+        # newline) so we don't leave a blank line behind.
+        if block[line_start:s].strip() == "" and e < len(block) and block[e] == "\n":
+            block = block[:line_start] + block[e + 1 :]
+        else:
+            block = block[:s] + block[e:]
+
+    serialized = serialize_pin_overrides(overrides)
+    if not serialized:
+        return block
+    hm = _SYMBOL_HEADER_RE.match(block.lstrip())
+    if not hm:
+        return block
+    # Offset the header match back into the un-lstripped block.
+    insert_at = (len(block) - len(block.lstrip())) + hm.end()
+    marker = (
+        f'\n    (property "{PIN_TYPE_OVERRIDE_PROP}" "{serialized}" (at 0 0 0)\n'
+        f"      (effects (font (size 1.27 1.27)) (hide yes))\n"
+        f"    )"
+    )
+    return block[:insert_at] + marker + block[insert_at:]
+
+
 def _atomic_write(path: Path, content: str, suffix: str) -> None:
     tmp = path.with_name(path.name + suffix)
     tmp.write_text(content, encoding="utf-8")
@@ -201,9 +308,7 @@ def _result(
 ) -> Dict[str, Any]:
     changed = [r for r in records if r["changed"]]
     unmatched = sorted(k for k in lookup if k not in matched_keys)
-    applied = [
-        {k: r[k] for k in ("number", "name", "old_type", "new_type")} for r in records
-    ]
+    applied = [{k: r[k] for k in ("number", "name", "old_type", "new_type")} for r in records]
     return {
         "success": True,
         "target": target,
@@ -289,9 +394,7 @@ def find_reference_lib_id(content: str, reference: str) -> Optional[str]:
     return None
 
 
-def apply_to_schematic(
-    sch_path: Path, lib_id: str, lookup: Dict[str, str]
-) -> Dict[str, Any]:
+def apply_to_schematic(sch_path: Path, lib_id: str, lookup: Dict[str, str]) -> Dict[str, Any]:
     """Rewrite matched pins of the embedded ``(symbol "lib_id" …)`` snapshot."""
     if not sch_path.exists():
         raise SymbolPinTypeError(f"Schematic not found: {sch_path}")
@@ -311,10 +414,20 @@ def apply_to_schematic(
             "Pass the full 'Library:Name' id, or a reference that is placed."
         )
     s, e = sym_span
-    new_sym, records, matched_keys = rewrite_pins_in_block(lib_block[s:e], lookup)
+    old_sym = lib_block[s:e]
+    new_sym, records, matched_keys = rewrite_pins_in_block(old_sym, lookup)
     changed = any(r["changed"] for r in records)
+    # A13: record which pins were deliberately retyped (merged with any override
+    # already on the block) so run_erc's pre-refresh re-applies them onto the
+    # fresh disk copy instead of reverting the edit.  Every matched pin is
+    # recorded — even one whose type was already correct — so the marker is
+    # present the moment ERC's refresh could otherwise revert it.
+    applied = {r["key"]: r["new_type"] for r in records}
+    merged = {**read_pin_overrides(new_sym), **applied}
+    if merged:
+        new_sym = stamp_pin_overrides(new_sym, merged)
     wrote = False
-    if changed:
+    if new_sym != old_sym:
         new_lib_block = lib_block[:s] + new_sym + lib_block[e:]
         new_content = content[:ls_start] + new_lib_block + content[ls_end:]
         _validate(new_content, sch_path)
