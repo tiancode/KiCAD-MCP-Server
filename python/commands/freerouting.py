@@ -362,6 +362,11 @@ def _skip_balanced_sexpr(text: str, start: int) -> int:
 
     Quoted strings (Specctra quote char ``"``) are skipped so parens inside net
     names like ``"unconnected-(J1-CC1-PadA5)"`` never unbalance the count.
+
+    The header's ``(string_quote ")`` block is skipped wholesale: its lone
+    literal ``"`` is the quote-char *definition*, not a string delimiter —
+    naive toggling on it would leave the scanner stuck "inside" a string for
+    the rest of the file (round-7 live-smoke finding).
     """
     depth = 0
     i = start
@@ -372,6 +377,12 @@ def _skip_balanced_sexpr(text: str, start: int) -> int:
         if in_quote:
             if c == '"':
                 in_quote = False
+        elif c == "(" and _is_string_quote_block(text, i):
+            j = text.find(")", i)
+            if j == -1:
+                return n
+            i = j + 1
+            continue
         elif c == '"':
             in_quote = True
         elif c == "(":
@@ -382,6 +393,17 @@ def _skip_balanced_sexpr(text: str, start: int) -> int:
                 return i + 1
         i += 1
     return i
+
+
+_STRING_QUOTE_TOKEN = "(string_quote"
+
+
+def _is_string_quote_block(text: str, i: int) -> bool:
+    """True when ``text[i:]`` opens the Specctra ``(string_quote …)`` block."""
+    if not text.startswith(_STRING_QUOTE_TOKEN, i):
+        return False
+    nxt = text[i + len(_STRING_QUOTE_TOKEN)] if i + len(_STRING_QUOTE_TOKEN) < len(text) else ""
+    return not (nxt.isalnum() or nxt in "_-")
 
 
 def _remove_sexpr_blocks(text: str, keyword: str) -> "tuple[str, int]":
@@ -407,6 +429,15 @@ def _remove_sexpr_blocks(text: str, keyword: str) -> "tuple[str, int]":
             if c == '"':
                 in_quote = False
             i += 1
+            continue
+        if c == "(" and _is_string_quote_block(text, i):
+            j = text.find(")", i)
+            if j == -1:
+                out.append(text[i:])
+                i = n
+                continue
+            out.append(text[i : j + 1])
+            i = j + 1
             continue
         if c == '"':
             in_quote = True

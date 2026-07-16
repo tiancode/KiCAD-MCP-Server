@@ -57,7 +57,7 @@ pytestmark = pytest.mark.skipif(
 # Subprocess driver — runs every scenario against a real board once and prints
 # a single JSON blob the tests below assert against.
 # ---------------------------------------------------------------------------
-_DRIVER = r'''
+_DRIVER = r"""
 import sys, json
 PYTHON_DIR, FP = sys.argv[1], sys.argv[2]
 sys.path.insert(0, PYTHON_DIR)
@@ -192,7 +192,7 @@ R["replace_unknown_fp"] = {"resp": c.replace_component({"reference": "R1", "newF
                            "still_fpid": b.FindFootprintByReference("R1").GetFPIDAsString()}
 
 print("RESULTS:" + json.dumps(R))
-'''
+"""
 
 
 @pytest.fixture(scope="module")
@@ -205,8 +205,10 @@ def results():
     )
     marker = "RESULTS:"
     line = next((ln for ln in proc.stdout.splitlines() if ln.startswith(marker)), None)
-    assert line is not None, f"driver produced no results\nstdout={proc.stdout}\nstderr={proc.stderr}"
-    return json.loads(line[len(marker):])
+    assert (
+        line is not None
+    ), f"driver produced no results\nstdout={proc.stdout}\nstderr={proc.stderr}"
+    return json.loads(line[len(marker) :])
 
 
 # ----------------------------- add_component_annotation --------------------- #
@@ -298,7 +300,9 @@ def test_group_regroup_removes_emptied_source(results):
 def test_replace_swaps_footprint_preserving_geometry_and_nets(results):
     r = results["replace_ok"]
     assert r["resp"]["success"] is True
-    assert r["new_fpid"] == "R_0805_2012Metric"
+    # The re-stamped FPID must keep the library nickname (round-7 live-smoke
+    # finding: FootprintLoad alone yields a bare, unresolvable item name).
+    assert r["new_fpid"] == "Resistor_SMD:R_0805_2012Metric"
     # reference / position / rotation / layer preserved
     assert r["pos"] == r["pre"]["pos"]
     assert r["rot"] == pytest.approx(r["pre"]["rot"])

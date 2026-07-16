@@ -259,6 +259,11 @@ def test_autoroute_no_boardpath_uses_open_board_file_and_reloads(tmp_path, jar):
 
 
 MULTICLASS_DSN = """(pcb "board.dsn"
+  (parser
+    (string_quote ")
+    (space_in_quoted_tokens on)
+    (host_cad "KiCad's Pcbnew")
+  )
   (structure
     (layer F.Cu (type signal))
     (layer B.Cu (type signal))
@@ -290,6 +295,21 @@ MULTICLASS_DSN = """(pcb "board.dsn"
   )
 )
 """
+
+
+@pytest.mark.unit
+def test_strip_survives_string_quote_header():
+    """Round-7 live-smoke regression: every real KiCad DSN starts with a
+    ``(parser (string_quote ") …)`` block whose lone literal ``"`` must not be
+    treated as a string delimiter — naive quote toggling left the scanner
+    stuck in-quote and turned the whole strip into a silent no-op."""
+    assert '(string_quote ")' in MULTICLASS_DSN
+    out, info = _strip_dsn_prerouting(MULTICLASS_DSN)
+    assert info["wiring_removed"] is True
+    assert info["planes_removed"] == 2
+    # The parser header itself is preserved untouched.
+    assert '(string_quote ")' in out
+    assert "(space_in_quoted_tokens on)" in out
 
 
 @pytest.mark.unit

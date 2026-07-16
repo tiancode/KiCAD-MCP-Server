@@ -395,6 +395,12 @@ class AnnotateGroupReplaceMixin:
                     "errorCode": "FOOTPRINT_NOT_FOUND",
                 }
 
+            # FootprintLoad only knows the directory path, so the loaded FPID
+            # carries no library nickname — restore it so the board file keeps
+            # a resolvable "Lib:Name" id (round-7 live-smoke finding).
+            if library_nickname and hasattr(pcbnew, "LIB_ID"):
+                new_module.SetFPID(pcbnew.LIB_ID(library_nickname, footprint_name))
+
             # Capture everything worth preserving BEFORE deleting the old part.
             old_pos = old.GetPosition()
             old_rot = old.GetOrientation()
