@@ -48,6 +48,7 @@ const READ_ONLY_EXACT = new Set<string>([
 /**
  * Tools that delete or overwrite existing data.  `delete_*` / `remove_*` are
  * caught by prefix; these are the destructive ops that aren't:
+ *   - replace_component deletes the old footprint and swaps in a new one.
  *   - create_project / create_schematic write their target .kicad_pcb /
  *     .kicad_sch with NO existence guard (commands/project.py SaveBoard +
  *     commands/schematic.py shutil.copy), so a name collision silently
@@ -60,6 +61,7 @@ const READ_ONLY_EXACT = new Set<string>([
  *     delete-/remove-prefixed tool that carried the hint via its name.
  */
 const DESTRUCTIVE_EXACT = new Set<string>([
+  "replace_component",
   "create_project",
   "create_schematic",
   "autoroute",

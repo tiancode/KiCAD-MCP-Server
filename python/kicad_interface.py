@@ -638,6 +638,9 @@ class KiCADInterface(BoardPersistenceMixin):
                     "align_components",
                     "check_courtyard_overlaps",
                     "duplicate_component",
+                    "add_component_annotation",
+                    "group_components",
+                    "replace_component",
                 ),
             ),
             (
@@ -2091,6 +2094,13 @@ class KiCADInterface(BoardPersistenceMixin):
         # Mutates pads of a placed footprint via SWIG (repairs broken
         # library footprints, e.g. empty pad numbers / copper == drill).
         "edit_component_pad",
+        # Re-implemented component tools (E2E round 7): all mutate the SWIG
+        # board (add a PCB_TEXT, add/move PCB_GROUPs, swap a footprint) and so
+        # must auto-save and hit the cross-backend conflict gate like their
+        # move_component / delete_component siblings.
+        "add_component_annotation",
+        "group_components",
+        "replace_component",
     }
 
     # IPC commands that only read the board.  Used by the cross-backend

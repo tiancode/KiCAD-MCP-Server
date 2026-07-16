@@ -114,6 +114,11 @@ EXPECTED_COMPONENT_COMMANDS = {
     "place_component",
     "place_component_array",
     "rotate_component",
+    # 2026-07 (E2E round 7): re-implemented tools that once had no Python
+    # backend — annotate / group / footprint-swap on the SWIG path.
+    "add_component_annotation",
+    "group_components",
+    "replace_component",
 }
 
 

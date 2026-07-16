@@ -225,6 +225,63 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   );
 
   // ------------------------------------------------------
+  // Add Component Annotation Tool
+  // ------------------------------------------------------
+  server.tool(
+    "add_component_annotation",
+    "Add a text annotation/comment near a PCB component: places a PCB_TEXT at the component's position (plus optional offset) on a silkscreen or comments layer. Use offset to sit the label beside the part instead of on top of it.",
+    {
+      reference: z.string().describe("Reference designator of the component to annotate (e.g., 'R5')"),
+      text: z.string().describe("Annotation / comment text"),
+      layer: z
+        .string()
+        .optional()
+        .describe(
+          "Target layer (default 'F.Silkscreen'); e.g. 'B.Silkscreen', 'User.Comments', 'F.Fab'. Legacy short names ('F.SilkS') are also accepted.",
+        ),
+      offset: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "inch", "mil"]).optional(),
+        })
+        .optional()
+        .describe("Offset from the component origin (default {0,0} mm — text lands at the part)"),
+      size: z.number().optional().describe("Text height in mm (default 1.0)"),
+    },
+    passthrough("add_component_annotation"),
+  );
+
+  // ------------------------------------------------------
+  // Group Components Tool
+  // ------------------------------------------------------
+  server.tool(
+    "group_components",
+    "Group PCB components into a named PCB_GROUP for easier selection. Refuses (creating nothing) if any reference is unknown. A component already in another group is moved into the new one; a group left empty by that move is removed — both reported.",
+    {
+      references: z.array(z.string()).describe("Reference designators to group (e.g., ['R1','R2'])"),
+      groupName: z.string().describe("Name for the new group"),
+    },
+    passthrough("group_components"),
+  );
+
+  // ------------------------------------------------------
+  // Replace Component Tool (DESTRUCTIVE)
+  // ------------------------------------------------------
+  server.tool(
+    "replace_component",
+    "Swap a placed footprint for a different library footprint. DESTRUCTIVE: deletes the old part and adds the new one, preserving reference, position, rotation and board side, and transferring pad nets by pad number. Pads that don't match on either side are reported.",
+    {
+      reference: z.string().describe("Reference designator of the component to replace (e.g., 'U1')"),
+      newFootprint: z
+        .string()
+        .describe("New footprint library id ('Library:Footprint' or bare 'Footprint')"),
+      newValue: z.string().optional().describe("Optional new component value (defaults to the old value)"),
+    },
+    passthrough("replace_component"),
+  );
+
+  // ------------------------------------------------------
   // Get Component Pads Tool
   // ------------------------------------------------------
   server.tool(
