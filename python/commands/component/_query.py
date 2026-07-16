@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -16,11 +17,7 @@ class QueryMixin:
         """Get detailed properties of a component"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             if not reference:
@@ -100,21 +97,13 @@ class QueryMixin:
 
         except Exception as e:
             logger.error(f"Error getting component properties: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get component properties",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get component properties", e)
 
     def get_component_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get a list of all components on the board"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             from utils.footprint_class import is_mounting_hole
 
@@ -162,11 +151,7 @@ class QueryMixin:
 
         except Exception as e:
             logger.error(f"Error getting component list: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get component list",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get component list", e)
 
     def find_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Find components on the loaded PCB (board, not schematic).
@@ -178,11 +163,7 @@ class QueryMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Get search parameters (tolerate explicit null / non-string).
             query = str(params.get("query") or "").lower()
@@ -234,8 +215,4 @@ class QueryMixin:
 
         except Exception as e:
             logger.error(f"Error finding components: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to find components",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to find components", e)

@@ -811,9 +811,7 @@ class PinLocator:
         )
 
     @staticmethod
-    def format_missing_pin_error(
-        symbol_reference: str, pin_name: str, diag: Dict[str, Any]
-    ) -> str:
+    def format_missing_pin_error(symbol_reference: str, pin_name: str, diag: Dict[str, Any]) -> str:
         """Build a user-facing message that distinguishes a MISSING COMPONENT
         from a missing PIN (S10).
 
@@ -831,9 +829,7 @@ class PinLocator:
         if reason == "not_found":
             hint = ""
             nums = [str(n) for n in (diag.get("valid_pins") or []) if str(n) != ""]
-            names = [
-                n for n in (diag.get("valid_pin_names") or []) if n and n not in ("~", "")
-            ]
+            names = [n for n in (diag.get("valid_pin_names") or []) if n and n not in ("~", "")]
             if nums:
                 shown = ", ".join(nums[:12])
                 more = "" if len(nums) <= 12 else f", … (+{len(nums) - 12} more)"
@@ -842,9 +838,7 @@ class PinLocator:
                 uniq = list(dict.fromkeys(names))
                 shown_n = ", ".join(uniq[:8])
                 hint += f" Pin names: {shown_n}{'' if len(uniq) <= 8 else ', …'}."
-            return (
-                f"Component {symbol_reference} exists but has no pin '{pin_name}'.{hint}"
-            )
+            return f"Component {symbol_reference} exists but has no pin '{pin_name}'.{hint}"
         if reason == "unplaced_unit":
             return PinLocator.format_unplaced_unit_error(symbol_reference, diag)
         return f"Could not locate pin {pin_name} on {symbol_reference}."

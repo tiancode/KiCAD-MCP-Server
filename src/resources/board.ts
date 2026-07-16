@@ -7,7 +7,7 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-import { countComponentTypes, jsonResource, resourceError } from "./resource-utils.js";
+import { boardSummary, componentSummary, jsonResource, resourceFailure } from "./resource-utils.js";
 import { CommandFunction } from "../tools/tool-response.js";
 
 /**
@@ -27,8 +27,7 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     const result = await callKicadScript("get_board_info", {});
 
     if (!result.success) {
-      logger.error(`Failed to retrieve board information: ${result.errorDetails}`);
-      return resourceError(uri, "Failed to retrieve board information", result.errorDetails);
+      return resourceFailure(uri, "Failed to retrieve board information", result);
     }
 
     logger.debug("Successfully retrieved board information");
@@ -43,8 +42,7 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     const result = await callKicadScript("get_layer_list", {});
 
     if (!result.success) {
-      logger.error(`Failed to retrieve layer list: ${result.errorDetails}`);
-      return resourceError(uri, "Failed to retrieve layer list", result.errorDetails);
+      return resourceFailure(uri, "Failed to retrieve layer list", result);
     }
 
     logger.debug(`Successfully retrieved ${result.layers?.length || 0} layers`);
@@ -71,8 +69,7 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
       const result = await callKicadScript("get_board_extents", { unit });
 
       if (!result.success) {
-        logger.error(`Failed to retrieve board extents: ${result.errorDetails}`);
-        return resourceError(uri, "Failed to retrieve board extents", result.errorDetails);
+        return resourceFailure(uri, "Failed to retrieve board extents", result);
       }
 
       logger.debug("Successfully retrieved board extents");
@@ -110,8 +107,7 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
       });
 
       if (!result.success) {
-        logger.error(`Failed to retrieve 2D board view: ${result.errorDetails}`);
-        return resourceError(uri, "Failed to retrieve 2D board view", result.errorDetails);
+        return resourceFailure(uri, "Failed to retrieve 2D board view", result);
       }
 
       logger.debug("Successfully retrieved 2D board view");
@@ -153,39 +149,40 @@ export function registerBoardResources(server: McpServer, callKicadScript: Comma
     // Get board info
     const boardResult = await callKicadScript("get_board_info", {});
     if (!boardResult.success) {
-      logger.error(`Failed to retrieve board information: ${boardResult.errorDetails}`);
-      return resourceError(uri, "Failed to generate board statistics", boardResult.errorDetails);
+      return resourceFailure(
+        uri,
+        "Failed to generate board statistics",
+        boardResult,
+        "Failed to retrieve board information",
+      );
     }
 
     // Get component list (limit:0 = uncapped; resources carry full data)
     const componentsResult = await callKicadScript("get_component_list", { limit: 0 });
     if (!componentsResult.success) {
-      logger.error(`Failed to retrieve component list: ${componentsResult.errorDetails}`);
-      return resourceError(
+      return resourceFailure(
         uri,
         "Failed to generate board statistics",
-        componentsResult.errorDetails,
+        componentsResult,
+        "Failed to retrieve component list",
       );
     }
 
     // Get nets list (limit:0 = uncapped; resources carry full data)
     const netsResult = await callKicadScript("get_nets_list", { limit: 0 });
     if (!netsResult.success) {
-      logger.error(`Failed to retrieve nets list: ${netsResult.errorDetails}`);
-      return resourceError(uri, "Failed to generate board statistics", netsResult.errorDetails);
+      return resourceFailure(
+        uri,
+        "Failed to generate board statistics",
+        netsResult,
+        "Failed to retrieve nets list",
+      );
     }
 
     // Combine all information into statistics
     const statistics = {
-      board: {
-        size: boardResult.size,
-        layers: boardResult.layers?.length || 0,
-        title: boardResult.title,
-      },
-      components: {
-        count: componentsResult.components?.length || 0,
-        types: countComponentTypes(componentsResult.components || []),
-      },
+      board: boardSummary(boardResult),
+      components: componentSummary(componentsResult),
       nets: {
         count: netsResult.nets?.length || 0,
       },

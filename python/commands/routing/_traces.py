@@ -15,6 +15,8 @@ from ._helpers import (
     _track_width_error,
     endpoint_net_conflicts,
 )
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -24,11 +26,7 @@ class TraceMixin:
         """Add a new net to the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             name = params.get("name")
             # The TS schema names this `netClass`; `class` kept as legacy alias
@@ -79,11 +77,7 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error adding net: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add net",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add net", e)
 
     def route_pad_to_pad(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Insert ONE straight trace segment between two component pads.
@@ -101,11 +95,7 @@ class TraceMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             from_ref = params.get("fromRef")
             from_pad = str(params.get("fromPad", ""))
@@ -346,11 +336,7 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error in route_pad_to_pad: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to route pad to pad",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to route pad to pad", e)
 
     @staticmethod
     def _trace_endpoint_nm(spec: Any, resolved_point: Any) -> Any:
@@ -363,7 +349,7 @@ class TraceMixin:
         """
         if isinstance(spec, dict) and "x" in spec and "y" in spec:
             unit = str(spec.get("unit", "mm"))
-            scale = 1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
+            scale = unit_to_nm_scale(unit)
             try:
                 return int(spec["x"] * scale), int(spec["y"] * scale)
             except (TypeError, ValueError):
@@ -378,11 +364,7 @@ class TraceMixin:
         """Route a trace between two points or pads"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             start = params.get("start")
             end = params.get("end")
@@ -496,21 +478,13 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error routing trace: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to route trace",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to route trace", e)
 
     def route_arc_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Route a copper arc trace from start/mid/end points."""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             start = params.get("start")
             mid = params.get("mid")
@@ -575,21 +549,13 @@ class TraceMixin:
             }
         except Exception as e:
             logger.error(f"Error routing arc trace: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to route arc trace",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to route arc trace", e)
 
     def delete_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Delete a trace from the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             trace_uuid = params.get("traceUuid")
             position = params.get("position")
@@ -640,11 +606,7 @@ class TraceMixin:
             # net argument as bulk and silently wiped a fully-routed net when a
             # caller passed both — a data-loss footgun.
             if position:
-                scale = (
-                    1000000
-                    if position.get("unit") == "mm"
-                    else (25400 if position.get("unit") == "mil" else 25400000)
-                )  # mm, mil, or inch to nm
+                scale = unit_to_nm_scale(position.get("unit"))
                 x_nm = int(position["x"] * scale)
                 y_nm = int(position["y"] * scale)
                 point = pcbnew.VECTOR2I(x_nm, y_nm)
@@ -726,11 +688,7 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error deleting trace: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to delete trace",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to delete trace", e)
 
     def modify_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Modify properties of an existing trace
@@ -740,11 +698,7 @@ class TraceMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Identification parameters
             trace_uuid = params.get("uuid")
@@ -773,10 +727,7 @@ class TraceMixin:
                         track = item
                         break
             elif position:
-                pos_unit = position.get("unit", "mm")
-                pos_scale = (
-                    scale if pos_unit == "mm" else (25400 if pos_unit == "mil" else 25400000)
-                )
+                pos_scale = unit_to_nm_scale(position.get("unit", "mm"))
                 x_nm = int(position["x"] * pos_scale)
                 y_nm = int(position["y"] * pos_scale)
                 point = pcbnew.VECTOR2I(x_nm, y_nm)
@@ -850,11 +801,7 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error modifying trace: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to modify trace",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to modify trace", e)
 
     def copy_routing_pattern(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Copy routing pattern from source components to target components
@@ -865,11 +812,7 @@ class TraceMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             source_refs = params.get("sourceRefs", [])  # e.g., ["U1", "U2", "U3"]
             target_refs = params.get("targetRefs", [])  # e.g., ["U4", "U5", "U6"]
@@ -1035,21 +978,13 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error copying routing pattern: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to copy routing pattern",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to copy routing pattern", e)
 
     def route_differential_pair(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Route a differential pair between two sets of points or pads"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             start_pos = params.get("startPos")
             end_pos = params.get("endPos")
@@ -1179,8 +1114,4 @@ class TraceMixin:
 
         except Exception as e:
             logger.error(f"Error routing differential pair: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to route differential pair",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to route differential pair", e)

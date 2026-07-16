@@ -9,7 +9,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction } from "./tool-response.js";
+import { CommandFunction, errorResult, textResult } from "./tool-response.js";
 
 export function registerSymbolLibraryTools(server: McpServer, callKicadScript: CommandFunction) {
   // Force-refresh the symbol library index after editing sym-lib-table
@@ -40,17 +40,11 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
             } entries came from a directory scan and aren't addressable by sym-lib-table nickname yet.`,
           );
         }
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return textResult(lines.join("\n"));
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to refresh symbol libraries: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `Failed to refresh symbol libraries: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
+      );
     },
   );
 
@@ -81,17 +75,11 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
             `Not found on disk: ${result.missing.join(", ")} — the library file may be missing or the symbol renamed.`,
           );
         }
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return textResult(lines.join("\n"));
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to refresh schematic lib_symbols: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `Failed to refresh schematic lib_symbols: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
+      );
     },
   );
 
@@ -179,17 +167,11 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
         if (result.next) {
           lines.push(result.next);
         }
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return textResult(lines.join("\n"));
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to set symbol pin types: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `Failed to set symbol pin types: ${result.message || result.errorDetails || "(no message; check Python logs)"}`,
+      );
     },
   );
 }

@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 
 import pcbnew
 from PIL import Image
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -62,11 +64,7 @@ class BoardViewCommands:
         """Get information about the current board"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Get board dimensions
             board_box = self.board.GetBoardEdgesBoundingBox()
@@ -103,11 +101,7 @@ class BoardViewCommands:
 
         except Exception as e:
             logger.error(f"Error getting board info: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get board information",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get board information", e)
 
     def get_board_2d_view(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get a 2D image of the PCB.
@@ -118,11 +112,7 @@ class BoardViewCommands:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Get parameters
             width = params.get("width", 800)
@@ -329,11 +319,7 @@ class BoardViewCommands:
 
         except Exception as e:
             logger.error(f"Error getting board 2D view: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get board 2D view",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get board 2D view", e)
 
     def _get_layer_type_name(self, type_id: int) -> str:
         """Convert KiCAD layer type constant to name"""
@@ -350,17 +336,11 @@ class BoardViewCommands:
         """Get the bounding box extents of the board"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Get unit preference (default to mm)
             unit = params.get("unit", "mm")
-            scale = (
-                1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(unit)
 
             # Get board bounding box
             board_box = self.board.GetBoardEdgesBoundingBox()
@@ -393,8 +373,4 @@ class BoardViewCommands:
 
         except Exception as e:
             logger.error(f"Error getting board extents: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get board extents",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get board extents", e)

@@ -45,9 +45,7 @@ def _resolve_library_path(
     return lib_path, symbol_name
 
 
-def handle_set_symbol_pin_types(
-    iface: "KiCADInterface", params: Dict[str, Any]
-) -> Dict[str, Any]:
+def handle_set_symbol_pin_types(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Rewrite the electrical types of pins on a library or embedded symbol."""
     logger.info("set_symbol_pin_types")
     try:

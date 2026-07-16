@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from typing import Any, Dict, List
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -92,11 +93,7 @@ class BomMixin:
         """Export Bill of Materials"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             output_path = params.get("outputPath")
             format = params.get("format", "CSV")
@@ -104,9 +101,7 @@ class BomMixin:
             # Accept both the schema name (includeAttributes) and the shorthand
             # (attributes) some callers use — the sourcing columns were silently
             # dropped when the two disagreed.
-            include_attributes = (
-                params.get("includeAttributes") or params.get("attributes") or []
-            )
+            include_attributes = params.get("includeAttributes") or params.get("attributes") or []
             include_mounting_holes = params.get("includeMountingHoles", False)
 
             if not output_path:
@@ -158,7 +153,9 @@ class BomMixin:
             resolved_map: Dict[str, str] = {}  # column header -> field name
             attributes_resolved: List[Dict[str, str]] = []
             missing_attributes: List[str] = []
-            candidate_fields = sorted(f for f in available_fields if f.lower() not in _BASE_BOM_KEYS)
+            candidate_fields = sorted(
+                f for f in available_fields if f.lower() not in _BASE_BOM_KEYS
+            )
             for attr in include_attributes:
                 if attr.lower() in _BASE_BOM_KEYS:
                     # Already a base column — not a "missing" attribute.
@@ -272,11 +269,7 @@ class BomMixin:
 
         except Exception as e:
             logger.error(f"Error exporting BOM: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to export BOM",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to export BOM", e)
 
     def _export_bom_csv(self, path: str, components: List[Dict[str, Any]]) -> None:
         """Export BOM to CSV format"""

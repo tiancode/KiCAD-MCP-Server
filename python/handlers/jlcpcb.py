@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Dict
+from utils.responses import no_board_loaded
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
@@ -275,11 +276,7 @@ def handle_check_bom_availability(
         from commands.bom_check import evaluate_bom_lines, group_bom
 
         if not iface.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         stats = iface.jlcpcb_parts.get_database_stats()
         if not stats or not stats.get("total_parts"):

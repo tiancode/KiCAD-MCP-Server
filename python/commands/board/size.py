@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, Optional
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -26,11 +27,7 @@ class BoardSizeCommands:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             width = params.get("width")
             height = params.get("height")
@@ -101,4 +98,4 @@ class BoardSizeCommands:
 
         except Exception as e:
             logger.error(f"Error setting board size: {str(e)}")
-            return {"success": False, "message": "Failed to set board size", "errorDetails": str(e)}
+            return failed("Failed to set board size", e)

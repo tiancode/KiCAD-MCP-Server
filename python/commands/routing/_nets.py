@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 import pcbnew
 
 from ._helpers import _track_width_error
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -88,11 +90,7 @@ class NetMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             include_stats = bool(params.get("includeStats"))
             from utils.units import normalize_unit
@@ -125,11 +123,7 @@ class NetMixin:
 
         except Exception as e:
             logger.error(f"Error getting nets list: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get nets list",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get nets list", e)
 
     def _attach_net_stats(self, nets: list, unit: str) -> None:
         """Attach ``{trackCount, viaCount, totalLength}`` (in ``unit``) to each
@@ -189,11 +183,7 @@ class NetMixin:
         """Query traces by net, layer, or bounding box"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Get filter parameters
             net_name = params.get("net")
@@ -213,14 +203,12 @@ class NetMixin:
                     net_name, self._board_net_names()
                 )
 
-            scale = 1000000  # nm to mm conversion factor
-
             # Output unit: the TS schema documents `unit` for trace
             # coordinates but it was silently ignored (always mm).
             out_unit = params.get("unit", "mm")
             if out_unit not in ("mm", "mil", "inch"):
                 out_unit = "mm"
-            out_scale = {"mm": 1000000, "mil": 25400, "inch": 25400000}[out_unit]
+            out_scale = unit_to_nm_scale(out_unit)
 
             traces = []
             vias = []
@@ -247,11 +235,7 @@ class NetMixin:
                     # Filter by bounding box
                     if bbox:
                         bbox_unit = bbox.get("unit", "mm")
-                        bbox_scale = (
-                            scale
-                            if bbox_unit == "mm"
-                            else (25400 if bbox_unit == "mil" else 25400000)
-                        )
+                        bbox_scale = unit_to_nm_scale(bbox_unit)
                         x1 = int(bbox.get("x1", 0) * bbox_scale)
                         y1 = int(bbox.get("y1", 0) * bbox_scale)
                         x2 = int(bbox.get("x2", 0) * bbox_scale)
@@ -332,21 +316,13 @@ class NetMixin:
 
         except Exception as e:
             logger.error(f"Error querying traces: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to query traces",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to query traces", e)
 
     def create_netclass(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new net class with specified properties"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             name = params.get("name")
             clearance = params.get("clearance")
@@ -497,11 +473,7 @@ class NetMixin:
 
         except Exception as e:
             logger.error(f"Error creating net class: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to create net class",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to create net class", e)
 
     def _persist_netclass_to_project(
         self,
@@ -573,11 +545,7 @@ class NetMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             net_name = params.get("net") or params.get("netName")
             class_name = params.get("netClass") or params.get("className")
@@ -642,11 +610,7 @@ class NetMixin:
 
         except Exception as e:
             logger.error(f"Error assigning net to class: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to assign net to class",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to assign net to class", e)
 
     def assign_netclass_pattern(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Append a wildcard pattern -> net-class rule to the project JSON.
@@ -657,11 +621,7 @@ class NetMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             class_name = params.get("netClass") or params.get("className")
             pattern = params.get("pattern")
@@ -707,8 +667,4 @@ class NetMixin:
 
         except Exception as e:
             logger.error(f"Error assigning netclass pattern: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to assign netclass pattern",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to assign netclass pattern", e)

@@ -8,13 +8,10 @@ import re
 from typing import Any, Dict, List, Optional, Set
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
-
-
-def _unit_scale(unit: str) -> int:
-    """nm per <unit>. mm / mil / inch."""
-    return 1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
 
 
 # A coordinate more than this many board-widths/heights away can only be a
@@ -139,11 +136,7 @@ class PlacementMixin:
         """Place a component on the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Get parameters
             component_id = params.get("componentId")
@@ -226,11 +219,7 @@ class PlacementMixin:
                 }
 
             # Set position
-            scale = (
-                1000000
-                if position["unit"] == "mm"
-                else (25400 if position["unit"] == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(position["unit"])
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
@@ -292,21 +281,13 @@ class PlacementMixin:
 
         except Exception as e:
             logger.error(f"Error placing component: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to place component",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to place component", e)
 
     def move_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Move an existing component to a new position"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             position = params.get("position")
@@ -331,11 +312,7 @@ class PlacementMixin:
                 }
 
             # Set new position
-            scale = (
-                1000000
-                if position["unit"] == "mm"
-                else (25400 if position["unit"] == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(position["unit"])
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
 
@@ -448,17 +425,13 @@ class PlacementMixin:
 
         except Exception as e:
             logger.error(f"Error moving component: {str(e)}")
-            return {"success": False, "message": "Failed to move component", "errorDetails": str(e)}
+            return failed("Failed to move component", e)
 
     def rotate_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Rotate an existing component"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             angle = params.get("angle")
@@ -491,21 +464,13 @@ class PlacementMixin:
 
         except Exception as e:
             logger.error(f"Error rotating component: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to rotate component",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to rotate component", e)
 
     def delete_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Delete a component from the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             if not reference:
@@ -533,11 +498,7 @@ class PlacementMixin:
 
         except Exception as e:
             logger.error(f"Error deleting component: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to delete component",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to delete component", e)
 
     def duplicate_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Duplicate an existing footprint one or more times.
@@ -561,11 +522,7 @@ class PlacementMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             new_reference = params.get("newReference")
@@ -602,24 +559,20 @@ class PlacementMixin:
             try:
                 new_refs = _allocate_duplicate_refs(reference, new_reference, count, used)
             except ValueError as ve:
-                return {
-                    "success": False,
-                    "message": "Reference already exists",
-                    "errorDetails": str(ve),
-                }
+                return failed("Reference already exists", ve)
 
             # Compute per-copy positions.
             nm_per_mm = 1000000
             base = source.GetPosition()
             positions = []
             if offset is not None:
-                oscale = _unit_scale(offset.get("unit", "mm"))
+                oscale = unit_to_nm_scale(offset.get("unit", "mm"))
                 ox = offset["x"] * oscale
                 oy = offset["y"] * oscale
                 for i in range(1, count + 1):
                     positions.append(pcbnew.VECTOR2I(int(base.x + ox * i), int(base.y + oy * i)))
             elif position is not None:
-                pscale = _unit_scale(position.get("unit", "mm"))
+                pscale = unit_to_nm_scale(position.get("unit", "mm"))
                 px = position["x"] * pscale
                 py = position["y"] * pscale
                 # Absolute placement of the first copy; stack any extras 5 mm
@@ -682,21 +635,13 @@ class PlacementMixin:
 
         except Exception as e:
             logger.error(f"Error duplicating component: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to duplicate component",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to duplicate component", e)
 
     def edit_component(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Edit the properties of an existing component"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             new_reference = params.get("newReference")
@@ -750,4 +695,4 @@ class PlacementMixin:
 
         except Exception as e:
             logger.error(f"Error editing component: {str(e)}")
-            return {"success": False, "message": "Failed to edit component", "errorDetails": str(e)}
+            return failed("Failed to edit component", e)

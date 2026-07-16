@@ -9,6 +9,20 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("kicad_interface")
 
 
+def _copper_layer_from_name(layer: str) -> Any:
+    """Copper layers addressable by add_track / add_arc, defaulting unknown
+    names to F.Cu (writes beyond In2 are not supported on this path today).
+    kipy is imported lazily like everywhere else in this backend."""
+    from kipy.proto.board.board_types_pb2 import BoardLayer
+
+    return {
+        "F.Cu": BoardLayer.BL_F_Cu,
+        "B.Cu": BoardLayer.BL_B_Cu,
+        "In1.Cu": BoardLayer.BL_In1_Cu,
+        "In2.Cu": BoardLayer.BL_In2_Cu,
+    }.get(layer, BoardLayer.BL_F_Cu)
+
+
 class _TrackMixin:
     def add_track(
         self,
@@ -28,7 +42,6 @@ class _TrackMixin:
         try:
             from kipy.board_types import Track
             from kipy.geometry import Vector2
-            from kipy.proto.board.board_types_pb2 import BoardLayer
             from kipy.util.units import from_mm
 
             board = self._get_board()
@@ -40,13 +53,7 @@ class _TrackMixin:
             track.width = from_mm(width)
 
             # Set layer
-            layer_map = {
-                "F.Cu": BoardLayer.BL_F_Cu,
-                "B.Cu": BoardLayer.BL_B_Cu,
-                "In1.Cu": BoardLayer.BL_In1_Cu,
-                "In2.Cu": BoardLayer.BL_In2_Cu,
-            }
-            track.layer = layer_map.get(layer, BoardLayer.BL_F_Cu)
+            track.layer = _copper_layer_from_name(layer)
 
             # Set net if specified
             if net_name:
@@ -92,7 +99,6 @@ class _TrackMixin:
         try:
             from kipy.board_types import ArcTrack
             from kipy.geometry import Vector2
-            from kipy.proto.board.board_types_pb2 import BoardLayer
             from kipy.util.units import from_mm
 
             board = self._get_board()
@@ -103,13 +109,7 @@ class _TrackMixin:
             arc.end = Vector2.from_xy(from_mm(end_x), from_mm(end_y))
             arc.width = from_mm(width)
 
-            layer_map = {
-                "F.Cu": BoardLayer.BL_F_Cu,
-                "B.Cu": BoardLayer.BL_B_Cu,
-                "In1.Cu": BoardLayer.BL_In1_Cu,
-                "In2.Cu": BoardLayer.BL_In2_Cu,
-            }
-            arc.layer = layer_map.get(layer, BoardLayer.BL_F_Cu)
+            arc.layer = _copper_layer_from_name(layer)
 
             if net_name:
                 nets = board.get_nets()

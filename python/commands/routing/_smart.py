@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ._helpers import _refuse_cross_net_short, _track_width_error, endpoint_net_conflicts
 from ._nets import netclass_property, resolve_netclass_name
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -33,11 +34,7 @@ class SmartRouteMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             from ._astar import obstacles_from_board_items, route_grid_astar
 
@@ -161,11 +158,7 @@ class SmartRouteMixin:
             }
         except Exception as e:  # API boundary; bucket: catch + return
             logger.error(f"Error in route_smart: {str(e)}", exc_info=True)
-            return {
-                "success": False,
-                "message": "Failed to route with route_smart",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to route with route_smart", e)
 
     # -- helpers -----------------------------------------------------------
 
@@ -276,7 +269,7 @@ class SmartRouteMixin:
                 return layer_name
         return ""
 
-    def _project_netclass_props(self, net: Optional[str]) -> Dict[str, float]:
+    def _project_netclass_props(self, net: Optional[str]) -> Dict[str, Any]:
         """Resolve ``net``'s net-class trace/via widths (mm) from the .kicad_pro.
 
         In KiCad 9/10 net-class membership lives in the project JSON, not the
@@ -304,7 +297,8 @@ class SmartRouteMixin:
             class_name = resolve_netclass_name(net_settings, net)
             if not class_name:
                 return {}
-            props: Dict[str, float] = {"className": class_name}
+            # Mixed values: className is a str, the width/diameter keys are floats.
+            props: Dict[str, Any] = {"className": class_name}
             for key in ("track_width", "via_diameter", "via_drill"):
                 value = netclass_property(net_settings, class_name, key)
                 if value is not None:
@@ -314,7 +308,7 @@ class SmartRouteMixin:
             return {}
 
     def _smart_default_width_mm(
-        self, net: Optional[str], netclass_props: Optional[Dict[str, float]] = None
+        self, net: Optional[str], netclass_props: Optional[Dict[str, Any]] = None
     ) -> float:
         """Netclass track width for the net, falling back to the board default.
 
@@ -420,7 +414,7 @@ class SmartRouteMixin:
         result: Any,
         net: Optional[str],
         width_mm: float,
-        netclass_props: Optional[Dict[str, float]] = None,
+        netclass_props: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create board tracks/vias for an A* result; returns creation stats.
 

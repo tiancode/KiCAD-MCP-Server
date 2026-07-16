@@ -139,7 +139,7 @@ def handle_get_pcb_overview(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     tracks = _safe_call("tracks", rc.query_traces, {"includeVias": True})
     zones = _safe_call("zones", rc.query_zones, {})
     nets = _safe_call("nets", rc.get_nets_list, {})
-    layers: Dict[str, Any] = {"success": True}
+    layers = {"success": True}
     get_board_info = getattr(bc, "get_board_info", None)
     if callable(get_board_info):
         layers = _safe_call("board_info", get_board_info, {})

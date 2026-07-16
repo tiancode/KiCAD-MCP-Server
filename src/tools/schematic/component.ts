@@ -7,7 +7,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   CommandFunction,
+  errorResult,
+  failureResult,
   makePassthrough,
+  textResult,
   toXyObject,
   XY_POINT_FORMS,
   xyPointSchema,
@@ -176,20 +179,9 @@ export function registerSchematicComponentTools(
         }
         // Append the raw position/snap blocks so structured consumers get them.
         text += `\n${JSON.stringify({ position: pos ?? null, snap: result.snap ?? null })}`;
-        return {
-          content: [{ type: "text" as const, text }],
-          structuredContent: result,
-        };
+        return textResult(text, result);
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to add component: ${result.message || JSON.stringify(result)}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(`Failed to add component: ${result.message || JSON.stringify(result)}`);
       }
     },
   );
@@ -257,20 +249,9 @@ export function registerSchematicComponentTools(
         } else {
           text += ` (no attached wire stubs or labels found)`;
         }
-        return {
-          content: [{ type: "text" as const, text }],
-          structuredContent: result,
-        };
+        return textResult(text, result);
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to remove component: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to remove component", result);
     },
   );
 
@@ -382,24 +363,11 @@ export function registerSchematicComponentTools(
           summaryParts.push(`updated=${Object.keys(updated.propertiesUpdated).join(",")}`);
         if (updated.propertiesRemoved)
           summaryParts.push(`removed=${updated.propertiesRemoved.join(",")}`);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Successfully updated ${args.reference}: ${summaryParts.join("; ") || "(no-op)"}`,
-            },
-          ],
-        };
+        return textResult(
+          `Successfully updated ${args.reference}: ${summaryParts.join("; ") || "(no-op)"}`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Failed to edit component: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to edit component", result);
     },
   );
 
@@ -422,24 +390,11 @@ export function registerSchematicComponentTools(
           ([name, f]: [string, any]) =>
             `  ${name}: "${f.value}" @ (${f.x}, ${f.y}, angle=${f.angle}°)`,
         );
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Component ${result.reference} at ${pos}\nFields:\n${fieldLines.join("\n")}`,
-            },
-          ],
-        };
+        return textResult(
+          `Component ${result.reference} at ${pos}\nFields:\n${fieldLines.join("\n")}`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to get component: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to get component", result);
     },
   );
 
@@ -494,20 +449,9 @@ export function registerSchematicComponentTools(
         if (result.offPageWarning) text += `\nOFF-PAGE: ${result.offPageWarning}`;
         // A4: a move that detached a coincident foreign pin from a shared net.
         if (result.detachWarning) text += `\nDETACHED: ${result.detachWarning}`;
-        return {
-          content: [{ type: "text" as const, text }],
-          structuredContent: result,
-        };
+        return textResult(text, result);
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to move component: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to move component", result);
     },
   );
 
@@ -539,24 +483,11 @@ export function registerSchematicComponentTools(
         const shown = result.angle ?? args.angle;
         const norm =
           result.requestedAngle !== undefined ? ` (normalized from ${result.requestedAngle}°)` : "";
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Rotated ${args.reference} to ${shown}°${norm}${args.mirror ? ` (mirrored ${args.mirror})` : ""}`,
-            },
-          ],
-        };
+        return textResult(
+          `Rotated ${args.reference} to ${shown}°${norm}${args.mirror ? ` (mirrored ${args.mirror})` : ""}`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to rotate component: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to rotate component", result);
     },
   );
 
@@ -629,20 +560,9 @@ export function registerSchematicComponentTools(
         if (result.units)
           text += `\nUnits: ${result.units.total} total, placed ${JSON.stringify(result.units.placed)}`;
         if (result.offPageWarning) text += `\nOFF-PAGE: ${result.offPageWarning}`;
-        return {
-          content: [{ type: "text" as const, text }],
-          structuredContent: result,
-        };
+        return textResult(text, result);
       }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Failed to duplicate component: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to duplicate component", result);
     },
   );
 
@@ -659,39 +579,18 @@ export function registerSchematicComponentTools(
       if (result.success) {
         const annotated = result.annotated || [];
         if (annotated.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  "No components needed annotation — every symbol already has a " +
-                  "concrete reference (no '?' placeholders found). This is the " +
-                  "expected state when add_schematic_component was called with " +
-                  "explicit references; you can drop annotate_schematic from this " +
-                  "flow.",
-              },
-            ],
-          };
+          return textResult(
+            "No components needed annotation — every symbol already has a " +
+              "concrete reference (no '?' placeholders found). This is the " +
+              "expected state when add_schematic_component was called with " +
+              "explicit references; you can drop annotate_schematic from this " +
+              "flow.",
+          );
         }
         const lines = annotated.map((a: any) => `  ${a.oldReference} → ${a.newReference}`);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Annotated ${annotated.length} component(s):\n${lines.join("\n")}`,
-            },
-          ],
-        };
+        return textResult(`Annotated ${annotated.length} component(s):\n${lines.join("\n")}`);
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to annotate: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to annotate", result);
     },
   );
 }

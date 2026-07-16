@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, List, Tuple
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -17,11 +18,7 @@ class DocumentMixin:
         """Export PDF files"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             output_path = params.get("outputPath")
             layers = params.get("layers", [])
@@ -150,8 +147,4 @@ class DocumentMixin:
 
         except Exception as e:
             logger.error(f"Error exporting PDF file: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to export PDF file",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to export PDF file", e)

@@ -7,11 +7,10 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
-
-# mm/mil/inch -> nm input factors (inverse of utils.units.nm_to_unit).
-_NM_PER_UNIT = {"mm": 1_000_000.0, "mil": 25_400.0, "inch": 25_400_000.0}
 
 
 def _parse_size_mm(value: Any) -> Optional[Tuple[float, float]]:
@@ -41,11 +40,7 @@ class PadsMixin:
         """Get all pads for a component with their positions and net connections"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             if not reference:
@@ -137,21 +132,13 @@ class PadsMixin:
 
         except Exception as e:
             logger.error(f"Error getting component pads: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get component pads",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get component pads", e)
 
     def get_pad_position(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get the position of a specific pad on a component"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             # The TS schema names this argument ``pad`` (and that's what
@@ -208,11 +195,7 @@ class PadsMixin:
 
         except Exception as e:
             logger.error(f"Error getting pad position: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get pad position",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get pad position", e)
 
     # ------------------------------------------------------------------
     # edit_component_pad — repair pads on a PLACED footprint.
@@ -236,11 +219,7 @@ class PadsMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             reference = params.get("reference")
             if not reference:
@@ -261,7 +240,7 @@ class PadsMixin:
             from utils.units import nm_to_unit, normalize_unit
 
             unit = normalize_unit(params.get("unit", "mm"))
-            unit_scale = _NM_PER_UNIT[unit]
+            unit_scale = unit_to_nm_scale(unit)
 
             pad_number = params.get("padNumber")
             pad_index = params.get("padIndex")
@@ -534,8 +513,4 @@ class PadsMixin:
 
         except Exception as e:
             logger.error(f"Error editing component pad: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to edit component pad",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to edit component pad", e)

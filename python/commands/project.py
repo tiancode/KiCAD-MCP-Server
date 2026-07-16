@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, Optional
 
 import pcbnew  # type: ignore
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -408,11 +409,7 @@ class ProjectCommands:
                     if os.path.normpath(d) == os.path.normpath(created_dir_root):
                         break
                     d = os.path.dirname(d)
-            return {
-                "success": False,
-                "message": "Failed to create project",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to create project", e)
 
     def open_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Open an existing KiCAD project.
@@ -554,21 +551,13 @@ class ProjectCommands:
 
         except Exception as e:
             logger.error(f"Error opening project: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to open project",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to open project", e)
 
     def save_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Save the current KiCAD project"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Save-as target: accept `path` (TS schema) or `filename` (legacy).
             # Previously only `filename` was read, so the documented `path`
@@ -609,21 +598,13 @@ class ProjectCommands:
 
         except Exception as e:
             logger.error(f"Error saving project: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to save project",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to save project", e)
 
     def get_project_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get information about the current project"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             title_block = self.board.GetTitleBlock()
             filename = self.board.GetFileName()
@@ -652,8 +633,4 @@ class ProjectCommands:
 
         except Exception as e:
             logger.error(f"Error getting project info: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get project information",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get project information", e)

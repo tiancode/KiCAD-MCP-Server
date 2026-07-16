@@ -8,6 +8,7 @@ import math
 from typing import Any, Dict, List, Optional
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -17,11 +18,7 @@ class ArrayMixin:
         """Place an array of components in a grid or circular pattern"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             component_id = params.get("componentId")
             pattern = params.get("pattern", "grid")  # grid or circular
@@ -115,21 +112,13 @@ class ArrayMixin:
 
         except Exception as e:
             logger.error(f"Error placing component array: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to place component array",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to place component array", e)
 
     def align_components(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Align multiple components along a line or distribute them evenly"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             references = params.get("references", [])
             # Canonical field is alignmentType (what the TS tool sends); keep
@@ -239,11 +228,7 @@ class ArrayMixin:
 
         except Exception as e:
             logger.error(f"Error aligning components: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to align components",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to align components", e)
 
     def _place_grid_array(
         self,

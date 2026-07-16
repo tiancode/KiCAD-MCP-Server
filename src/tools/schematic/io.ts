@@ -5,7 +5,13 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, makePassthrough } from "../tool-response.js";
+import {
+  CommandFunction,
+  errorResult,
+  failureResult,
+  makePassthrough,
+  textResult,
+} from "../tool-response.js";
 
 export function registerSchematicIoTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
@@ -21,24 +27,9 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
     async (args: { schematicPath: string; outputPath: string; blackAndWhite?: boolean }) => {
       const result = await callKicadScript("export_schematic_pdf", args);
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Exported schematic PDF to ${result.file?.path || args.outputPath}`,
-            },
-          ],
-        };
+        return textResult(`Exported schematic PDF to ${result.file?.path || args.outputPath}`);
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to export PDF: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to export PDF", result);
     },
   );
 
@@ -136,17 +127,11 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
             );
           }
         }
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return textResult(lines.join("\n"));
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `ERC failed: ${result.message || "Unknown error"}${result.errorDetails ? "\n" + result.errorDetails : ""}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorResult(
+          `ERC failed: ${result.message || "Unknown error"}${result.errorDetails ? "\n" + result.errorDetails : ""}`,
+        );
       }
     },
   );
@@ -178,24 +163,9 @@ export function registerSchematicIoTools(server: McpServer, callKicadScript: Com
           }),
         ].join("\n");
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: output,
-            },
-          ],
-        };
+        return textResult(output);
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to generate netlist: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to generate netlist", result);
       }
     },
   );

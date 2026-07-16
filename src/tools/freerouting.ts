@@ -6,7 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, makePassthrough } from "./tool-response.js";
+import { CommandFunction, makePassthrough, textResult } from "./tool-response.js";
 
 export function registerFreeroutingTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
@@ -141,14 +141,7 @@ export function registerFreeroutingTools(server: McpServer, callKicadScript: Com
         }
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: lines.join("\n"),
-          },
-        ],
-      };
+      return textResult(lines.join("\n"));
     },
   );
 }

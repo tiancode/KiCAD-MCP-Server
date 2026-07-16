@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List
+from utils.responses import no_board_loaded
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
@@ -34,11 +35,7 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
         )
 
         if not iface.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         only_refs = set(params.get("components") or [])
         fixed_refs = set(params.get("fixedRefs") or [])

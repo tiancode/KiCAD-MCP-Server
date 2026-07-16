@@ -7,7 +7,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   CommandFunction,
+  failureResult,
   formatKicadResult,
+  textResult,
   toXyObject,
   toXyTuple,
   XY_POINT_FORMS,
@@ -44,24 +46,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         waypoints: args.waypoints.map(toXyTuple),
       });
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: result.message || "Wire added successfully",
-            },
-          ],
-        };
+        return textResult(result.message || "Wire added successfully");
       } else {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Failed to add wire: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to add wire", result);
       }
     },
   );
@@ -124,15 +111,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       if (result.success) {
         return formatKicadResult(result);
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to add net label: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to add net label", result);
       }
     },
   );
@@ -213,15 +192,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       if (result.success) {
         return formatKicadResult(result);
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to connect to net: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to connect to net", result);
       }
     },
   );
@@ -254,24 +225,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
           lines.push("Power flags (PWR_FLAG):");
           for (const p of powerFlags) lines.push(`  - ${p.ref}/${p.pin} [${p.attachment}]`);
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: lines.join("\n"),
-            },
-          ],
-        };
+        return textResult(lines.join("\n"));
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to get net connections: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to get net connections", result);
       }
     },
   );
@@ -313,28 +269,14 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
           .map((w: any) => `  - (${w.start.x},${w.start.y}) → (${w.end.x},${w.end.y})`)
           .join("\n");
         const qp = result.query_point;
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `Net: ${netLabel}\n` +
-                `Via: ${result.via ?? "—"}\n` +
-                `Query point: (${qp?.x ?? args.x}, ${qp?.y ?? args.y})\n` +
-                `Connected pins:\n${pinList || "  (none found)"}\n\nWire segments:\n${wireList || "  (none)"}`,
-            },
-          ],
-        };
+        return textResult(
+          `Net: ${netLabel}\n` +
+            `Via: ${result.via ?? "—"}\n` +
+            `Query point: (${qp?.x ?? args.x}, ${qp?.y ?? args.y})\n` +
+            `Connected pins:\n${pinList || "  (none found)"}\n\nWire segments:\n${wireList || "  (none)"}`,
+        );
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to get wire connections: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to get wire connections", result);
       }
     },
   );
@@ -367,24 +309,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         );
         let text = `Pin locations for ${args.reference}:\n${lines.join("\n")}`;
         if (result.warning) text += `\nWARNING: ${result.warning}`;
-        return {
-          content: [
-            {
-              type: "text",
-              text,
-            },
-          ],
-        };
+        return textResult(text);
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to get pin locations: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to get pin locations", result);
       }
     },
   );
@@ -422,19 +349,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
           );
         if (result.failed?.length)
           lines.push(`Failed (${result.failed.length}): ${result.failed.join(", ")}`);
-        return {
-          content: [{ type: "text", text: result.message + "\n" + lines.join("\n") }],
-        };
+        return textResult(result.message + "\n" + lines.join("\n"));
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Passthrough failed: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Passthrough failed", result);
       }
     },
   );
@@ -458,24 +375,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         end,
       });
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Deleted wire from (${start.x}, ${start.y}) to (${end.x}, ${end.y})`,
-            },
-          ],
-        };
+        return textResult(`Deleted wire from (${start.x}, ${start.y}) to (${end.x}, ${end.y})`);
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to delete wire: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to delete wire", result);
     },
   );
 
@@ -572,24 +474,9 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         position: toXyTuple(args.position),
       });
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: result.message || `Added hierarchical label '${args.text}'`,
-            },
-          ],
-        };
+        return textResult(result.message || `Added hierarchical label '${args.text}'`);
       }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Failed to add hierarchical label: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to add hierarchical label", result);
     },
   );
 }

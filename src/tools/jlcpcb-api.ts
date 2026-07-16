@@ -5,7 +5,14 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
+import {
+  CommandFunction,
+  errorResult,
+  failureResult,
+  formatKicadResult,
+  makePassthrough,
+  textResult,
+} from "./tool-response.js";
 
 export function registerJLCPCBApiTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
@@ -25,32 +32,19 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     async (args: { force?: boolean }) => {
       const result = await callKicadScript("download_jlcpcb_database", args);
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `✓ Successfully downloaded JLCPCB parts database\n\n` +
-                `Total parts: ${result.total_parts}\n` +
-                `Basic parts: ${result.basic_parts}\n` +
-                `Extended parts: ${result.extended_parts}\n` +
-                `Database size: ${result.db_size_mb} MB\n` +
-                `Database path: ${result.db_path}`,
-            },
-          ],
-        };
+        return textResult(
+          `✓ Successfully downloaded JLCPCB parts database\n\n` +
+            `Total parts: ${result.total_parts}\n` +
+            `Basic parts: ${result.basic_parts}\n` +
+            `Extended parts: ${result.extended_parts}\n` +
+            `Database size: ${result.db_size_mb} MB\n` +
+            `Database path: ${result.db_path}`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `✗ Failed to download JLCPCB database: ${result.message || "Unknown error"}\n\n` +
-              `The JLCSearch path needs no credentials but is slow/flaky; for a reliable, fuller catalog run scripts/download_jlcpcb.py instead.`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `✗ Failed to download JLCPCB database: ${result.message || "Unknown error"}\n\n` +
+          `The JLCSearch path needs no credentials but is slow/flaky; for a reliable, fuller catalog run scripts/download_jlcpcb.py instead.`,
+      );
     },
   );
 
@@ -94,19 +88,13 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
         const warningText = warnings.length > 0 ? `⚠️ ${warnings.join("\n⚠️ ")}\n\n` : "";
 
         if (result.parts.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  warningText +
-                  `No JLCPCB parts found matching your criteria (incl. out-of-stock).\n\n` +
-                  `Tip: search by a candidate manufacturer part number via the 'mpn' parameter — ` +
-                  `it's the most reliable path. For free-text, fewer/looser words match better ` +
-                  `(all words must match), and put package in the 'package' filter.`,
-              },
-            ],
-          };
+          return textResult(
+            warningText +
+              `No JLCPCB parts found matching your criteria (incl. out-of-stock).\n\n` +
+              `Tip: search by a candidate manufacturer part number via the 'mpn' parameter — ` +
+              `it's the most reliable path. For free-text, fewer/looser words match better ` +
+              `(all words must match), and put package in the 'package' filter.`,
+          );
         }
 
         const oosNote = result.out_of_stock_only
@@ -128,31 +116,18 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
           })
           .join("\n");
 
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                warningText +
-                oosNote +
-                fuzzyNote +
-                `Found ${result.count} JLCPCB parts:\n\n${partsList}\n\n` +
-                `💡 Cost: prefer Basic (no setup fee), then Preferred (stocked, low/no fee), then Extended (~$3 setup fee per unique part).`,
-            },
-          ],
-        };
+        return textResult(
+          warningText +
+            oosNote +
+            fuzzyNote +
+            `Found ${result.count} JLCPCB parts:\n\n${partsList}\n\n` +
+            `💡 Cost: prefer Basic (no setup fee), then Preferred (stocked, low/no fee), then Extended (~$3 setup fee per unique part).`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Failed to search JLCPCB parts: ${result.message || "Unknown error"}\n\n` +
-              `Make sure you've downloaded the database first using download_jlcpcb_database.`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `Failed to search JLCPCB parts: ${result.message || "Unknown error"}\n\n` +
+          `Make sure you've downloaded the database first using download_jlcpcb_database.`,
+      );
     },
   );
 
@@ -179,37 +154,24 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
               result.footprints.map((f: string) => `  - ${f}`).join("\n")
             : "";
 
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `LCSC: ${p.lcsc}\n` +
-                `MFR Part: ${p.mfr_part}\n` +
-                `Manufacturer: ${p.manufacturer}\n` +
-                `Category: ${p.category} / ${p.subcategory}\n` +
-                `Package: ${p.package}\n` +
-                `Description: ${p.description}\n` +
-                `Library Type: ${p.library_type} ${p.library_type === "Basic" ? "(Free assembly!)" : ""}\n` +
-                `Stock: ${p.stock}\n` +
-                (p.datasheet ? `Datasheet: ${p.datasheet}\n` : "") +
-                priceTable +
-                footprints,
-            },
-          ],
-        };
+        return textResult(
+          `LCSC: ${p.lcsc}\n` +
+            `MFR Part: ${p.mfr_part}\n` +
+            `Manufacturer: ${p.manufacturer}\n` +
+            `Category: ${p.category} / ${p.subcategory}\n` +
+            `Package: ${p.package}\n` +
+            `Description: ${p.description}\n` +
+            `Library Type: ${p.library_type} ${p.library_type === "Basic" ? "(Free assembly!)" : ""}\n` +
+            `Stock: ${p.stock}\n` +
+            (p.datasheet ? `Datasheet: ${p.datasheet}\n` : "") +
+            priceTable +
+            footprints,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Part not found: ${args.lcsc_number}\n\n` +
-              `Make sure you've downloaded the JLCPCB database first.`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `Part not found: ${args.lcsc_number}\n\n` +
+          `Make sure you've downloaded the JLCPCB database first.`,
+      );
     },
   );
 
@@ -241,29 +203,16 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
             : result.source === "lcsc_fallback"
               ? " [via lcsc.com fallback]"
               : "";
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `✓ Datasheet for ${result.lcsc} saved${srcNote}${kb}\n\n` +
-                `Path: ${result.path}\n` +
-                `Source URL: ${result.url}`,
-            },
-          ],
-        };
+        return textResult(
+          `✓ Datasheet for ${result.lcsc} saved${srcNote}${kb}\n\n` +
+            `Path: ${result.path}\n` +
+            `Source URL: ${result.url}`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `✗ Failed to download datasheet: ${result.message || "Unknown error"}` +
-              (result.url ? `\n\nURL tried: ${result.url}` : ""),
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `✗ Failed to download datasheet: ${result.message || "Unknown error"}` +
+          (result.url ? `\n\nURL tried: ${result.url}` : ""),
+      );
     },
   );
 
@@ -276,32 +225,19 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
       const result = await callKicadScript("get_jlcpcb_database_stats", {});
       if (result.success) {
         const stats = result.stats;
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `JLCPCB Database Statistics:\n\n` +
-                `Total parts: ${stats.total_parts.toLocaleString()}\n` +
-                `Basic parts: ${stats.basic_parts.toLocaleString()} (free assembly)\n` +
-                `Extended parts: ${stats.extended_parts.toLocaleString()} ($3 setup fee each)\n` +
-                `In stock: ${stats.in_stock.toLocaleString()}\n` +
-                `Database path: ${stats.db_path}`,
-            },
-          ],
-        };
+        return textResult(
+          `JLCPCB Database Statistics:\n\n` +
+            `Total parts: ${stats.total_parts.toLocaleString()}\n` +
+            `Basic parts: ${stats.basic_parts.toLocaleString()} (free assembly)\n` +
+            `Extended parts: ${stats.extended_parts.toLocaleString()} ($3 setup fee each)\n` +
+            `In stock: ${stats.in_stock.toLocaleString()}\n` +
+            `Database path: ${stats.db_path}`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `JLCPCB database not found or empty.\n\n` +
-              `Run download_jlcpcb_database first to populate the database.`,
-          },
-        ],
-        isError: true,
-      };
+      return errorResult(
+        `JLCPCB database not found or empty.\n\n` +
+          `Run download_jlcpcb_database first to populate the database.`,
+      );
     },
   );
 
@@ -317,14 +253,7 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
       const result = await callKicadScript("suggest_jlcpcb_alternatives", args);
       if (result.success && result.alternatives) {
         if (result.alternatives.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No alternatives found for ${args.lcsc_number}`,
-              },
-            ],
-          };
+          return textResult(`No alternatives found for ${args.lcsc_number}`);
         }
 
         const altsList = result.alternatives
@@ -341,24 +270,9 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
           })
           .join("\n\n");
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Alternative parts for ${args.lcsc_number}:\n\n${altsList}`,
-            },
-          ],
-        };
+        return textResult(`Alternative parts for ${args.lcsc_number}:\n\n${altsList}`);
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to find alternatives: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to find alternatives", result);
     },
   );
 

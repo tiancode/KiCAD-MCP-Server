@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -130,11 +132,7 @@ class BoardOutlineCommands:
         """Add a board outline to the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             # Claude sends dimensions nested inside a "params" key:
             # {"shape": "rectangle", "params": {"x": 0, "y": 0, "width": 38, ...}}
@@ -182,9 +180,7 @@ class BoardOutlineCommands:
                 }
 
             # Convert to internal units (nanometers)
-            scale = (
-                1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(unit)
 
             # Create drawing for edge cuts
             edge_layer = self.board.GetLayerID("Edge.Cuts")
@@ -306,21 +302,13 @@ class BoardOutlineCommands:
 
         except Exception as e:
             logger.error(f"Error adding board outline: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add board outline",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add board outline", e)
 
     def add_mounting_hole(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Add a mounting hole to the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             position = params.get("position")
             diameter = params.get("diameter")
@@ -336,11 +324,7 @@ class BoardOutlineCommands:
                 }
 
             # Convert to internal units (nanometers)
-            scale = (
-                1000000
-                if position.get("unit", "mm") == "mm"
-                else (25400 if position.get("unit", "mm") == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(position.get("unit", "mm"))
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             diameter_nm = int(diameter * scale)
@@ -465,21 +449,13 @@ class BoardOutlineCommands:
 
         except Exception as e:
             logger.error(f"Error adding mounting hole: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add mounting hole",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add mounting hole", e)
 
     def add_text(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Add text annotation to the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             text = params.get("text")
             position = params.get("position")
@@ -506,11 +482,7 @@ class BoardOutlineCommands:
                 }
 
             # Convert to internal units (nanometers)
-            scale = (
-                1000000
-                if position.get("unit", "mm") == "mm"
-                else (25400 if position.get("unit", "mm") == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(position.get("unit", "mm"))
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             size_nm = int(size * scale)
@@ -566,11 +538,7 @@ class BoardOutlineCommands:
 
         except Exception as e:
             logger.error(f"Error adding text: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add text",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add text", e)
 
     def _add_edge_line(self, start: pcbnew.VECTOR2I, end: pcbnew.VECTOR2I, layer: int) -> None:
         """Add a line to the edge cuts layer"""

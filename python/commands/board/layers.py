@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, Optional
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -21,11 +22,7 @@ class BoardLayerCommands:
         """Add a new layer to the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             name = params.get("name")
             layer_type = params.get("type")
@@ -80,17 +77,13 @@ class BoardLayerCommands:
 
         except Exception as e:
             logger.error(f"Error adding layer: {str(e)}")
-            return {"success": False, "message": "Failed to add layer", "errorDetails": str(e)}
+            return failed("Failed to add layer", e)
 
     def set_active_layer(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Set the active layer for PCB operations"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             layer = params.get("layer")
             if not layer:
@@ -120,21 +113,13 @@ class BoardLayerCommands:
 
         except Exception as e:
             logger.error(f"Error setting active layer: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to set active layer",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to set active layer", e)
 
     def get_layer_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get a list of all layers in the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             layers = []
             for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
@@ -153,7 +138,7 @@ class BoardLayerCommands:
 
         except Exception as e:
             logger.error(f"Error getting layer list: {str(e)}")
-            return {"success": False, "message": "Failed to get layer list", "errorDetails": str(e)}
+            return failed("Failed to get layer list", e)
 
     def _get_layer_type(self, type_name: str) -> int:
         """Convert layer type name to KiCAD layer type constant"""

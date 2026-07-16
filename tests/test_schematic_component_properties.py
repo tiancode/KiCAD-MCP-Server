@@ -710,6 +710,23 @@ class TestLibNameBeforeLibIdOrdering:
 
     @pytest.fixture
     def sch_with_libname(self, tmp_path: Any) -> Any:
+        # Hermetic footprint resolution for the builtin-fields edit test: the
+        # B1 validation resolves the assigned footprint via the fp-lib-table,
+        # so ship a project table + minimal .pretty in the project dir instead
+        # of depending on a machine-wide KiCad standard-library install.
+        pretty = tmp_path / "Resistor_SMD.pretty"
+        pretty.mkdir()
+        (pretty / "R_0603_1608Metric.kicad_mod").write_text(
+            '(footprint "R_0603_1608Metric" (version 20240108) (generator "pcbnew")'
+            ' (layer "F.Cu"))\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "fp-lib-table").write_text(
+            "(fp_lib_table\n"
+            f'  (lib (name "Resistor_SMD")(type KiCad)(uri "{pretty}")(options "")(descr ""))\n'
+            ")\n",
+            encoding="utf-8",
+        )
         return _make_test_schematic(tmp_path, PLACED_RESISTOR_BLOCK_LIBNAME_FIRST)
 
     def _iface(self) -> Any:

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import textwrap
 from typing import TYPE_CHECKING, Any, Dict
+from utils.responses import no_board_loaded
 
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
@@ -90,11 +91,7 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
     logger.info("Refilling zones (subprocess isolation, force=True)")
     try:
         if not iface.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         # First make sure the on-disk file and the in-memory board agree so
         # the subprocess fills the right data.  If an external actor (text

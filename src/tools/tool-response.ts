@@ -91,6 +91,33 @@ function summarize(record: Record<string, unknown> | null, isError: boolean): st
   return message ? `✓ ${message}` : "";
 }
 
+/**
+ * Success result whose text block was hand-built by the tool. Optionally
+ * attaches the raw Python payload as `structuredContent` (same rules as
+ * `formatKicadResult` — see `McpTextResult`).
+ */
+export function textResult(text: string, structured?: unknown): McpTextResult {
+  const out: McpTextResult = { content: [{ type: "text", text }] };
+  const record = asRecord(structured);
+  if (record) out.structuredContent = record;
+  return out;
+}
+
+/** Error result with a hand-built text block. */
+export function errorResult(text: string): McpTextResult {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
+/**
+ * The dominant failure shape tools were hand-rolling:
+ * `"<prefix>: <result.message or 'Unknown error'>"` with `isError` set.
+ */
+export function failureResult(prefix: string, result: unknown): McpTextResult {
+  const record = asRecord(result);
+  const message = (record && pickString(record, "message")) || "Unknown error";
+  return errorResult(`${prefix}: ${message}`);
+}
+
 export function formatKicadResult(result: unknown): McpTextResult {
   const record = asRecord(result);
   const isError = isKicadFailure(record);
