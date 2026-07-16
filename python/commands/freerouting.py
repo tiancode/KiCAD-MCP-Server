@@ -345,13 +345,24 @@ def _ses_routed_nets(ses_text: str) -> set:
 class FreeroutingCommands:
     """Handles Freerouting autoroute operations."""
 
-    def __init__(self, board: Any = None, signature_callback: Any = None) -> None:
+    def __init__(
+        self,
+        board: Any = None,
+        signature_callback: Any = None,
+        board_reload_callback: Any = None,
+    ) -> None:
         self.board = board
         # Optional callback `fn(path)` invoked after this class saves the
         # board directly, so the parent KiCADInterface can keep its
         # in-memory disk signature in sync. Without it, _auto_save_board()
         # on the next mutation would see a stale hash and refuse.
         self._signature_callback = signature_callback
+        # Optional callback `fn(path) -> bool` that asks the parent
+        # KiCADInterface to replace its in-memory board with a fresh load of
+        # ``path`` (rebinding every command handler). Autoroute uses it after
+        # importing a SES into the currently-open project's file so later
+        # reads serve the routed result.
+        self._board_reload_callback = board_reload_callback
 
     def _save_and_record(self, board_path: str) -> None:
         """Save the board and notify the parent interface (if any).

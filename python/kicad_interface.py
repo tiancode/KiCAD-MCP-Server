@@ -539,7 +539,9 @@ class KiCADInterface(BoardPersistenceMixin):
         self.component_commands = ComponentCommands(self.board, self.footprint_library)
         self.routing_commands = RoutingCommands(self.board)
         self.freerouting_commands = FreeroutingCommands(
-            self.board, signature_callback=self._on_swig_direct_save
+            self.board,
+            signature_callback=self._on_swig_direct_save,
+            board_reload_callback=self.reload_board_from_disk,
         )
         self.design_rule_commands = DesignRuleCommands(self.board)
         self.export_commands = ExportCommands(self.board)
@@ -2301,6 +2303,30 @@ class KiCADInterface(BoardPersistenceMixin):
             "dirtyReason": "Board file matches the MCP recorded disk signature",
             "diskChangedExternally": False,
         }
+
+    def reload_board_from_disk(self, board_path: str) -> bool:
+        """Replace the in-memory board with a fresh load of ``board_path``.
+
+        Used by commands that rewrite the loaded board's file wholesale (e.g.
+        autoroute's SES import) so subsequent reads serve the canonical on-disk
+        content instead of a stale in-place-mutated proxy. Mirrors the
+        sync_schematic_to_board reload: inherits ``_safe_load_board``'s
+        dehydration recovery, rebinds every command handler, and re-records the
+        disk signature. Returns False (leaving the current board in place) if
+        the reload fails.
+        """
+        reloaded = self._safe_load_board(board_path)
+        if reloaded is None:
+            logger.warning(
+                "reload_board_from_disk: could not reload %s; keeping the "
+                "current in-memory board",
+                board_path,
+            )
+            return False
+        self.board = reloaded
+        self._update_command_handlers()
+        self._record_board_signature(board_path)
+        return True
 
     def _update_command_handlers(self) -> None:
         """Update board reference in all command handlers"""
