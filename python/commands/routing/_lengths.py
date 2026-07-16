@@ -9,12 +9,51 @@ board and delegates here. Via barrel length is not included in totals —
 import fnmatch
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
 _NM_PER_MM = 1_000_000
+
+
+def extract_track_via_dicts(board: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Extract plain track/via dicts from a SWIG board for ``compute_net_lengths``.
+
+    Returns ``(tracks, vias)``: vias carry only their net; straight tracks carry
+    net + endpoints (mm) + layer, and arcs additionally carry their true curved
+    ``length`` (mm). Unreadable items are skipped with a warning, never fatal.
+    Shared by ``report_net_lengths`` and ``get_nets_list`` stats so the two
+    tools can't drift on how copper is read off the board.
+    """
+    import pcbnew
+
+    tracks: List[Dict[str, Any]] = []
+    vias: List[Dict[str, Any]] = []
+    for track in list(board.Tracks()):
+        try:
+            if track.Type() == pcbnew.PCB_VIA_T:
+                vias.append({"net": track.GetNetname()})
+                continue
+            start = track.GetStart()
+            end = track.GetEnd()
+            item: Dict[str, Any] = {
+                "net": track.GetNetname(),
+                "startX": start.x / _NM_PER_MM,
+                "startY": start.y / _NM_PER_MM,
+                "endX": end.x / _NM_PER_MM,
+                "endY": end.y / _NM_PER_MM,
+                "layer": board.GetLayerName(track.GetLayer()),
+            }
+            # Arcs report their true curved length; straight segments are
+            # computed from endpoints in compute_net_lengths.
+            if track.Type() == pcbnew.PCB_ARC_T and hasattr(track, "GetLength"):
+                item["length"] = track.GetLength() / _NM_PER_MM
+            tracks.append(item)
+        except Exception as track_err:  # noqa: BLE001 — skip unreadable items
+            logger.warning(f"extract_track_via_dicts: skipping track: {track_err}")
+    return tracks, vias
 
 
 def compute_net_lengths(
@@ -116,33 +155,7 @@ class LengthMixin:
             if not self.board:
                 return no_board_loaded()
 
-            import pcbnew
-
-            tracks: List[Dict[str, Any]] = []
-            vias: List[Dict[str, Any]] = []
-            for track in list(self.board.Tracks()):
-                try:
-                    if track.Type() == pcbnew.PCB_VIA_T:
-                        vias.append({"net": track.GetNetname()})
-                        continue
-                    start = track.GetStart()
-                    end = track.GetEnd()
-                    item: Dict[str, Any] = {
-                        "net": track.GetNetname(),
-                        "startX": start.x / _NM_PER_MM,
-                        "startY": start.y / _NM_PER_MM,
-                        "endX": end.x / _NM_PER_MM,
-                        "endY": end.y / _NM_PER_MM,
-                        "layer": self.board.GetLayerName(track.GetLayer()),
-                    }
-                    # Arcs report their true curved length; straight segments
-                    # are computed from endpoints in compute_net_lengths.
-                    if track.Type() == pcbnew.PCB_ARC_T and hasattr(track, "GetLength"):
-                        item["length"] = track.GetLength() / _NM_PER_MM
-                    tracks.append(item)
-                except Exception as track_err:  # noqa: BLE001 — skip unreadable items
-                    logger.warning(f"report_net_lengths: skipping track: {track_err}")
-
+            tracks, vias = extract_track_via_dicts(self.board)
             per_net = compute_net_lengths(tracks, vias)
             report = build_length_report(
                 per_net,

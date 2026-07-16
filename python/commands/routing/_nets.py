@@ -8,10 +8,10 @@ import os
 from typing import Any, Dict, Optional
 
 import pcbnew
-
-from ._helpers import _track_width_error
 from utils.responses import failed, no_board_loaded
 from utils.units import unit_to_nm_scale
+
+from ._helpers import _track_width_error
 
 logger = logging.getLogger("kicad_interface")
 
@@ -135,35 +135,11 @@ class NetMixin:
         """
         from utils.units import nm_to_unit
 
-        from ._lengths import compute_net_lengths
+        from ._lengths import compute_net_lengths, extract_track_via_dicts
 
         _NM_PER_MM = 1_000_000
 
-        tracks: list = []
-        vias: list = []
-        for track in list(self.board.Tracks()):
-            try:
-                if track.Type() == pcbnew.PCB_VIA_T:
-                    vias.append({"net": track.GetNetname()})
-                    continue
-                start = track.GetStart()
-                end = track.GetEnd()
-                item: Dict[str, Any] = {
-                    "net": track.GetNetname(),
-                    "startX": start.x / _NM_PER_MM,
-                    "startY": start.y / _NM_PER_MM,
-                    "endX": end.x / _NM_PER_MM,
-                    "endY": end.y / _NM_PER_MM,
-                    "layer": self.board.GetLayerName(track.GetLayer()),
-                }
-                # Arcs report their true curved length; straight segments are
-                # derived from endpoints inside compute_net_lengths.
-                if track.Type() == pcbnew.PCB_ARC_T and hasattr(track, "GetLength"):
-                    item["length"] = track.GetLength() / _NM_PER_MM
-                tracks.append(item)
-            except Exception as track_err:  # noqa: BLE001 — skip unreadable items
-                logger.warning(f"get_nets_list stats: skipping track: {track_err}")
-
+        tracks, vias = extract_track_via_dicts(self.board)
         per_net = compute_net_lengths(tracks, vias)
         for net in nets:
             stats = per_net.get(net.get("name"))

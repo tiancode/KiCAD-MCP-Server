@@ -55,37 +55,33 @@ def _is_on_grid(value: float, grid_mm: float, eps: float = 1e-9) -> bool:
     return abs(value - snapped) < eps
 
 
-def _snap_xy_pair(item: list, grid_mm: float) -> int:
+def _snap_indexed_pair(item: list, grid_mm: float, tag: str) -> int:
     """
-    Snap a ``(xy x y)`` S-expression item in place.
+    Snap the coordinate pair at indices 1 and 2 of a ``(<tag> x y ...)``
+    S-expression item in place. Any trailing elements (index 3+, e.g. an
+    ``(at)`` angle) are left untouched.
     Returns 1 if at least one coordinate changed, 0 otherwise.
     """
-    if not (isinstance(item, list) and len(item) >= 3 and item[0] == Symbol("xy")):
+    if not (isinstance(item, list) and len(item) >= 3 and item[0] == Symbol(tag)):
         return 0
     x_orig, y_orig = float(item[1]), float(item[2])
-    x_new = _snap_mm(x_orig, grid_mm)
-    y_new = _snap_mm(y_orig, grid_mm)
     changed = not (_is_on_grid(x_orig, grid_mm) and _is_on_grid(y_orig, grid_mm))
-    item[1] = x_new
-    item[2] = y_new
+    item[1] = _snap_mm(x_orig, grid_mm)
+    item[2] = _snap_mm(y_orig, grid_mm)
     return 1 if changed else 0
+
+
+def _snap_xy_pair(item: list, grid_mm: float) -> int:
+    """Snap a ``(xy x y)`` S-expression item in place."""
+    return _snap_indexed_pair(item, grid_mm, "xy")
 
 
 def _snap_at_xy(item: list, grid_mm: float) -> int:
     """
     Snap an ``(at x y ...)`` S-expression item in place (indices 1 and 2 only).
     Preserves rotation / angle at index 3+ unchanged.
-    Returns 1 if at least one coordinate changed, 0 otherwise.
     """
-    if not (isinstance(item, list) and len(item) >= 3 and item[0] == Symbol("at")):
-        return 0
-    x_orig, y_orig = float(item[1]), float(item[2])
-    x_new = _snap_mm(x_orig, grid_mm)
-    y_new = _snap_mm(y_orig, grid_mm)
-    changed = not (_is_on_grid(x_orig, grid_mm) and _is_on_grid(y_orig, grid_mm))
-    item[1] = x_new
-    item[2] = y_new
-    return 1 if changed else 0
+    return _snap_indexed_pair(item, grid_mm, "at")
 
 
 def snap_to_grid(

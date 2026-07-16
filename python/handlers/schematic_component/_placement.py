@@ -16,6 +16,8 @@ from commands.schematic import SchematicManager
 from commands.schematic_locks import atomic_write_text, serialize_on_param
 from commands.wire_manager import WireManager
 
+from ._shared import find_placed_symbol_blocks
+
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
@@ -656,7 +658,6 @@ def handle_delete_schematic_component(
     """Remove a placed symbol from a schematic using text-based manipulation (no skip writes)"""
     logger.info("Deleting schematic component")
     try:
-        import re
         from pathlib import Path
 
         schematic_path = params.get("schematicPath")
@@ -691,45 +692,11 @@ def handle_delete_schematic_component(
         with open(sch_file, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Skip lib_symbols section
-        lib_sym_pos = content.find("(lib_symbols")
-        lib_sym_end = iface._find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
-
-        # Find ALL placed symbol blocks matching the reference (handles duplicates).
-        # Use content-string search so multi-line KiCAD format is handled correctly:
-        # KiCAD writes (symbol\n\t\t(lib_id "...") across two lines, which a
-        # line-by-line regex would never match.
-        blocks_to_delete = []  # list of (char_start, char_end) into content
-        search_start = 0
-        # Match the opening of any placed-symbol block. KiCAD may emit the
-        # children of (symbol ...) in any order — most commonly
-        # `(symbol (lib_id "..."))`, but symbols whose library entry has been
-        # rescued / customised carry an additional `(lib_name "...")` first:
-        # `(symbol (lib_name "...") (lib_id "...") ...)`. Matching just
-        # `(symbol\s+(` covers both, and the lib_symbols range check below
-        # still excludes library-definition symbols (which use the
-        # `(symbol "name" ...)` form with a quoted string, not a paren).
-        pattern = re.compile(r"\(symbol\s+\(")
-        while True:
-            m = pattern.search(content, search_start)
-            if not m:
-                break
-            pos = m.start()
-            # Skip blocks inside lib_symbols
-            if lib_sym_pos >= 0 and lib_sym_pos <= pos <= lib_sym_end:
-                search_start = lib_sym_end + 1
-                continue
-            end = iface._find_matching_paren(content, pos)
-            if end < 0:
-                search_start = pos + 1
-                continue
-            block_text = content[pos : end + 1]
-            if re.search(
-                r'\(property\s+"Reference"\s+"' + re.escape(reference) + r'"',
-                block_text,
-            ):
-                blocks_to_delete.append((pos, end))
-            search_start = end + 1
+        # Find ALL placed symbol blocks matching the reference (handles
+        # duplicates). Content-string search handles multi-line KiCAD format
+        # correctly: KiCAD writes (symbol\n\t\t(lib_id "...") across two lines,
+        # which a line-by-line regex would never match.
+        blocks_to_delete = find_placed_symbol_blocks(iface, content, reference)
 
         if not blocks_to_delete:
             return {

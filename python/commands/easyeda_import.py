@@ -29,6 +29,12 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import sexpdata
+from utils.sexpr import find_block_end, rewrite_pin_blocks
+
+# Back-compat alias: the quote-aware paren matcher used to live here as
+# ``_match_paren`` before it moved to ``utils.sexpr.find_block_end``. Kept so
+# callers/tests referencing ``easyeda_import._match_paren`` keep resolving.
+_match_paren = find_block_end
 
 logger = logging.getLogger("kicad_interface")
 
@@ -87,42 +93,6 @@ _PIN_NAME_RE = re.compile(r'\(name\s+"([^"]*)"')
 
 class EasyEdaImportError(RuntimeError):
     """A user-facing failure importing an LCSC part (network/tool/parse)."""
-
-
-# ---------------------------------------------------------------------------
-# S-expression span helpers (quote/escape aware so parens inside a property
-# value like "GigaDevice(兆易创新)" don't throw off the paren matcher)
-# ---------------------------------------------------------------------------
-def _match_paren(text: str, start: int) -> int:
-    """Return the index just past the ``)`` that closes the ``(`` at ``start``.
-
-    Skips parentheses inside double-quoted strings (and honours ``\\`` escapes),
-    so a Value/Manufacturer field containing literal parens can't unbalance the
-    scan. Falls back to len(text) if unbalanced.
-    """
-    depth = 0
-    in_str = False
-    i = start
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if in_str:
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-        else:
-            if c == '"':
-                in_str = True
-            elif c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-        i += 1
-    return n
 
 
 def _is_power_pin_name(name: str) -> bool:
@@ -187,41 +157,19 @@ def _retype_single_pin(pin_block: str) -> "tuple[str, int]":
 def _rewrite_inferred_pins(block: str) -> "tuple[str, int]":
     """Retype every pin inside a symbol block to its inferred electrical type.
 
-    Walks the text quote-aware so ``(pin `` only matches real s-expression
-    openings, never a substring inside a quoted value.
+    Delegates the quote-aware ``(pin …)`` walk to ``sexpr.rewrite_pin_blocks``
+    so only real s-expression openings are matched, never a substring inside a
+    quoted value.
     """
-    out: List[str] = []
     changed = 0
-    i = 0
-    n = len(block)
-    in_str = False
-    while i < n:
-        c = block[i]
-        if in_str:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(block[i + 1])
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-            i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        if c == "(" and block.startswith("(pin ", i):
-            end = _match_paren(block, i)
-            new_pin, ch = _retype_single_pin(block[i:end])
-            out.append(new_pin)
-            changed += ch
-            i = end
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out), changed
+
+    def _transform(pin_block: str) -> str:
+        nonlocal changed
+        new_pin, ch = _retype_single_pin(pin_block)
+        changed += ch
+        return new_pin
+
+    return rewrite_pin_blocks(block, _transform), changed
 
 
 def _symbol_span(content: str, symbol_name: str) -> "tuple[int, int] | None":
@@ -234,7 +182,7 @@ def _symbol_span(content: str, symbol_name: str) -> "tuple[int, int] | None":
     start = content.find(marker)
     if start == -1:
         return None
-    return start, _match_paren(content, start)
+    return start, find_block_end(content, start)
 
 
 def _count_symbol_units(lib_path: Path, symbol_name: str) -> int:

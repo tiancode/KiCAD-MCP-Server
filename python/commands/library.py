@@ -10,6 +10,8 @@ import os
 import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Protocol, Tuple, TypeVar
+
+from utils.lib_tables import find_global_lib_table, parse_lib_table_entries, resolve_lib_uri
 from utils.responses import failed
 
 logger = logging.getLogger("kicad_interface")
@@ -90,37 +92,7 @@ class LibraryManager:
 
     def _get_global_fp_lib_table(self) -> Optional[Path]:
         """Get path to global fp-lib-table file."""
-        # Linux native + Flatpak (Flathub sandboxes the config under .var/app)
-        linux_bases = [
-            Path.home() / ".config" / "kicad",
-            Path.home() / ".var" / "app" / "org.kicad.KiCad" / "config" / "kicad",
-        ]
-        # Windows
-        windows_bases = [Path.home() / "AppData" / "Roaming" / "kicad"]
-        # macOS native + sandboxed (App Store / Mac App)
-        macos_bases = [
-            Path.home() / "Library" / "Preferences" / "kicad",
-            Path.home()
-            / "Library"
-            / "Containers"
-            / "org.kicad.KiCad"
-            / "Data"
-            / "Library"
-            / "Preferences"
-            / "kicad",
-        ]
-
-        kicad_config_paths: List[Path] = []
-        for base in linux_bases + windows_bases + macos_bases:
-            for version in ("10.0", "9.0", "8.0"):
-                kicad_config_paths.append(base / version / "fp-lib-table")
-            kicad_config_paths.append(base / "fp-lib-table")
-
-        for path in kicad_config_paths:
-            if path.exists():
-                return path
-
-        return None
+        return find_global_lib_table("fp-lib-table")
 
     def _parse_fp_lib_table(self, table_path: Path) -> None:
         """
@@ -139,32 +111,13 @@ class LibraryManager:
             if table_path not in self._table_paths:
                 self._table_paths.append(table_path)
 
-            # Simple regex-based parser for lib entries
-            # Pattern: (lib (name "NAME")(type TYPE)(uri "URI")...)
-            lib_pattern = r'\(lib\s+\(name\s+"?([^")\s]+)"?\)\s*\(type\s+"?([^")\s]+)"?\)\s*\(uri\s+"?([^")\s]+)"?'
-
-            for match in re.finditer(lib_pattern, content, re.IGNORECASE):
-                nickname = match.group(1)
-                lib_type = match.group(2)
-                uri = match.group(3)
-
-                if lib_type.lower() == "table":
-                    table_uri = uri
-                    if os.path.isabs(table_uri) and os.path.isfile(table_uri):
-                        logger.info(f"  Following Table reference: {nickname} -> {table_uri}")
-                        self._parse_fp_lib_table(Path(table_uri))
-                    else:
-                        logger.warning(f"  Could not resolve Table URI: {table_uri}")
-                    continue
-
-                # Resolve environment variables in URI
-                resolved_uri = self._resolve_uri(uri)
-
-                if resolved_uri:
-                    self.libraries[nickname] = resolved_uri
-                    logger.debug(f"  Found library: {nickname} -> {resolved_uri}")
-                else:
-                    logger.warning(f"  Could not resolve URI for library {nickname}: {uri}")
+            parse_lib_table_entries(
+                content,
+                self._resolve_uri,
+                self._parse_fp_lib_table,
+                self.libraries,
+                unresolved_level=logging.WARNING,
+            )
 
         except (OSError, ValueError) as e:
             logger.exception(f"Error parsing fp-lib-table at {table_path}: {e}")
@@ -180,11 +133,8 @@ class LibraryManager:
         - Relative paths
         - Absolute paths
         """
-        # Replace environment variables
-        resolved = uri
-
         # Common KiCAD environment variables
-        env_vars = {
+        env_vars: Dict[str, Optional[str]] = {
             "KICAD10_FOOTPRINT_DIR": self._find_kicad_footprint_dir(),
             "KICAD9_FOOTPRINT_DIR": self._find_kicad_footprint_dir(),
             "KICAD8_FOOTPRINT_DIR": self._find_kicad_footprint_dir(),
@@ -196,28 +146,7 @@ class LibraryManager:
             "KICAD_3RD_PARTY": self._find_kicad_3rdparty_dir(),
         }
 
-        # Project directory
-        if self.project_path:
-            env_vars["KIPRJMOD"] = str(self.project_path)
-
-        # Replace environment variables
-        for var, value in env_vars.items():
-            if value:
-                resolved = resolved.replace(f"${{{var}}}", value)
-                resolved = resolved.replace(f"${var}", value)
-
-        # Expand ~ to home directory
-        resolved = os.path.expanduser(resolved)
-
-        # Convert to absolute path
-        path = Path(resolved)
-
-        # Check if path exists
-        if path.exists():
-            return str(path)
-        else:
-            logger.debug(f"    Path does not exist: {path}")
-            return None
+        return resolve_lib_uri(uri, env_vars, self.project_path)
 
     def _find_kicad_footprint_dir(self) -> Optional[str]:
         """Memoized wrapper around :meth:`_locate_kicad_footprint_dir`."""

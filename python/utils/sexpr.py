@@ -11,7 +11,7 @@ cannot contain a bare ``(`` or ``)`` (they would be backslash-escaped).
 """
 
 import re
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 
 def escape_sexpr_string(value: str) -> str:
@@ -43,6 +43,86 @@ def find_matching_paren(s: str, start: int) -> int:
                 return i
         i += 1
     return -1
+
+
+def find_block_end(text: str, start: int) -> int:
+    """Return the index just past the ``)`` that closes the ``(`` at ``start``.
+
+    Quote/escape aware: parentheses inside double-quoted strings (honouring
+    ``\\`` escapes) are skipped, so a property value with literal parens
+    (``"GigaDevice(兆易创新)"``, ``"GPO(OD)"``) — which easyeda2kicad emits
+    unescaped — can't unbalance the scan. Falls back to ``len(text)`` if
+    unbalanced.
+
+    Unlike :func:`find_matching_paren` (which returns the index *of* the close,
+    ``-1`` on failure, and does not understand string literals), this returns
+    the index *past* the close and is string-literal aware — required for
+    ``.kicad_sym`` / ``.kicad_sch`` data that may carry unescaped parens inside
+    quoted values.
+    """
+    depth = 0
+    in_str = False
+    i = start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+        i += 1
+    return n
+
+
+def rewrite_pin_blocks(block: str, transform: Callable[[str], str]) -> str:
+    """Walk ``block`` quote-aware, replacing every top-level ``(pin …)`` block.
+
+    ``transform`` receives the full text of each ``(pin …)`` s-expression and
+    returns its replacement (any accumulation is the caller's side effect). The
+    walk is quote/escape aware so ``(pin `` only matches a real s-expression
+    opening, never a substring inside a quoted value; all non-pin text is
+    copied verbatim.
+    """
+    out: List[str] = []
+    i = 0
+    n = len(block)
+    in_str = False
+    while i < n:
+        c = block[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(block[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "(" and block.startswith("(pin ", i):
+            end = find_block_end(block, i)
+            out.append(transform(block[i:end]))
+            i = end
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def set_property_in_block(

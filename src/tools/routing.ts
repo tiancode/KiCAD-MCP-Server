@@ -4,7 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { paginationParams } from "./pagination-params.js";
+import { boundingBoxFilter, paginationParams } from "./pagination-params.js";
 import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
 export function registerRoutingTools(server: McpServer, callKicadScript: CommandFunction) {
@@ -208,16 +208,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .string()
         .optional()
         .describe("Filter by layer name (zones: matches zones that include this layer)"),
-      boundingBox: z
-        .object({
-          x1: z.number(),
-          y1: z.number(),
-          x2: z.number(),
-          y2: z.number(),
-          unit: z.enum(["mm", "inch", "mil"]).optional(),
-        })
-        .optional()
-        .describe("Filter by bounding box region"),
+      boundingBox: boundingBoxFilter,
       unit: z.enum(["mm", "inch", "mil"]).optional().describe("traces only: unit for coordinates"),
       includeVias: z.boolean().optional().describe("traces only: also return vias (default false)"),
       ...paginationParams,

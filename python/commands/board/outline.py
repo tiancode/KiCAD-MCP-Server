@@ -199,24 +199,7 @@ class BoardOutlineCommands:
                 center_y_nm = int(center_y * scale)
 
                 # Create rectangle
-                top_left = pcbnew.VECTOR2I(
-                    center_x_nm - width_nm // 2, center_y_nm - height_nm // 2
-                )
-                top_right = pcbnew.VECTOR2I(
-                    center_x_nm + width_nm // 2, center_y_nm - height_nm // 2
-                )
-                bottom_right = pcbnew.VECTOR2I(
-                    center_x_nm + width_nm // 2, center_y_nm + height_nm // 2
-                )
-                bottom_left = pcbnew.VECTOR2I(
-                    center_x_nm - width_nm // 2, center_y_nm + height_nm // 2
-                )
-
-                # Add lines for rectangle
-                self._add_edge_line(top_left, top_right, edge_layer)
-                self._add_edge_line(top_right, bottom_right, edge_layer)
-                self._add_edge_line(bottom_right, bottom_left, edge_layer)
-                self._add_edge_line(bottom_left, top_left, edge_layer)
+                self._add_rect_edges(center_x_nm, center_y_nm, width_nm, height_nm, edge_layer)
 
             elif shape == "rounded_rectangle":
                 if width is None or height is None:
@@ -550,6 +533,24 @@ class BoardOutlineCommands:
         line.SetWidth(0)  # Zero width for edge cuts
         self.board.Add(line)
 
+    def _add_rect_edges(
+        self,
+        center_x_nm: int,
+        center_y_nm: int,
+        width_nm: int,
+        height_nm: int,
+        layer: int,
+    ) -> None:
+        """Add the four edge lines of an axis-aligned rectangle to *layer*."""
+        top_left = pcbnew.VECTOR2I(center_x_nm - width_nm // 2, center_y_nm - height_nm // 2)
+        top_right = pcbnew.VECTOR2I(center_x_nm + width_nm // 2, center_y_nm - height_nm // 2)
+        bottom_right = pcbnew.VECTOR2I(center_x_nm + width_nm // 2, center_y_nm + height_nm // 2)
+        bottom_left = pcbnew.VECTOR2I(center_x_nm - width_nm // 2, center_y_nm + height_nm // 2)
+        self._add_edge_line(top_left, top_right, layer)
+        self._add_edge_line(top_right, bottom_right, layer)
+        self._add_edge_line(bottom_right, bottom_left, layer)
+        self._add_edge_line(bottom_left, top_left, layer)
+
     def _add_rounded_rect(
         self,
         center_x_nm: int,
@@ -562,17 +563,7 @@ class BoardOutlineCommands:
         """Add a rounded rectangle to the edge cuts layer"""
         if radius_nm <= 0:
             # If no radius, create regular rectangle
-            top_left = pcbnew.VECTOR2I(center_x_nm - width_nm // 2, center_y_nm - height_nm // 2)
-            top_right = pcbnew.VECTOR2I(center_x_nm + width_nm // 2, center_y_nm - height_nm // 2)
-            bottom_right = pcbnew.VECTOR2I(
-                center_x_nm + width_nm // 2, center_y_nm + height_nm // 2
-            )
-            bottom_left = pcbnew.VECTOR2I(center_x_nm - width_nm // 2, center_y_nm + height_nm // 2)
-
-            self._add_edge_line(top_left, top_right, layer)
-            self._add_edge_line(top_right, bottom_right, layer)
-            self._add_edge_line(bottom_right, bottom_left, layer)
-            self._add_edge_line(bottom_left, top_left, layer)
+            self._add_rect_edges(center_x_nm, center_y_nm, width_nm, height_nm, layer)
             return
 
         # Calculate corner centers

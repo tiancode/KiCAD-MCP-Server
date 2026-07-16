@@ -165,6 +165,14 @@ def _parse_lib_symbol_graphics_by_unit(symbol_def: list) -> Dict[int, List[Tuple
     def _add(unit: int, pt: Tuple[float, float]) -> None:
         by_unit.setdefault(unit, []).append(pt)
 
+    def _add_pts_xy(node: list, unit: int) -> None:
+        """Add every ``(xy x y)`` point under this node's ``(pts …)`` list."""
+        for sub in node[1:]:
+            if isinstance(sub, list) and len(sub) > 0 and sub[0] == Symbol("pts"):
+                for pt in sub[1:]:
+                    if isinstance(pt, list) and len(pt) >= 3 and pt[0] == Symbol("xy"):
+                        _add(unit, (float(pt[1]), float(pt[2])))
+
     def _recurse(sexp: Any, unit: int) -> None:
         if not isinstance(sexp, list) or len(sexp) == 0:
             return
@@ -183,11 +191,7 @@ def _parse_lib_symbol_graphics_by_unit(symbol_def: list) -> Dict[int, List[Tuple
                     if sub[0] in (Symbol("start"), Symbol("end")):
                         _add(unit, (float(sub[1]), float(sub[2])))
         elif tag == Symbol("polyline"):
-            for sub in sexp[1:]:
-                if isinstance(sub, list) and len(sub) > 0 and sub[0] == Symbol("pts"):
-                    for pt in sub[1:]:
-                        if isinstance(pt, list) and len(pt) >= 3 and pt[0] == Symbol("xy"):
-                            _add(unit, (float(pt[1]), float(pt[2])))
+            _add_pts_xy(sexp, unit)
         elif tag == Symbol("circle"):
             cx, cy, r = 0.0, 0.0, 0.0
             for sub in sexp[1:]:
@@ -204,11 +208,7 @@ def _parse_lib_symbol_graphics_by_unit(symbol_def: list) -> Dict[int, List[Tuple
                     if sub[0] in (Symbol("start"), Symbol("mid"), Symbol("end")):
                         _add(unit, (float(sub[1]), float(sub[2])))
         elif tag == Symbol("bezier"):
-            for sub in sexp[1:]:
-                if isinstance(sub, list) and len(sub) > 0 and sub[0] == Symbol("pts"):
-                    for pt in sub[1:]:
-                        if isinstance(pt, list) and len(pt) >= 3 and pt[0] == Symbol("xy"):
-                            _add(unit, (float(pt[1]), float(pt[2])))
+            _add_pts_xy(sexp, unit)
 
         # Recurse into sub-lists, carrying the current unit context.
         for sub in sexp[1:]:

@@ -182,6 +182,26 @@ def _outline_is_degenerate(points: List[Dict[str, Any]]) -> bool:
     return abs(area2) / 2.0 < 1e-6
 
 
+def zone_multi_match_delete_refusal(
+    match_count: int, zone_briefs: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Structured refusal when a delete_copper_pour net/layer filter matches
+    several zones and ``all=true`` was not passed.
+
+    Shared by the SWIG ZoneMixin and the IPC fast-path so the refusal message /
+    candidate-list shape can't drift (each backend supplies its own zone-brief
+    list; the SWIG path additionally stamps ``errorCode``).
+    """
+    return {
+        "success": False,
+        "message": (
+            f"{match_count} zones matched — pass all=true to delete "
+            "every match, or refine with zoneUuid (from query_zones)"
+        ),
+        "zones": zone_briefs,
+    }
+
+
 class ZoneMixin:
     def _board_net_names(self) -> List[str]:
         """All net names on the SWIG board (reliable across pcbnew versions)."""
@@ -768,15 +788,11 @@ class ZoneMixin:
             if err:
                 return err
             if len(matches) > 1 and not bool(params.get("all", False)):
-                return {
-                    "success": False,
-                    "message": (
-                        f"{len(matches)} zones matched — pass all=true to delete "
-                        "every match, or refine with zoneUuid (from query_zones)"
-                    ),
-                    "zones": [self._zone_brief(z) for z in matches],
-                    "errorCode": "VALIDATION",
-                }
+                refusal = zone_multi_match_delete_refusal(
+                    len(matches), [self._zone_brief(z) for z in matches]
+                )
+                refusal["errorCode"] = "VALIDATION"
+                return refusal
 
             deleted = [self._zone_brief(z) for z in matches]
             for zone in matches:

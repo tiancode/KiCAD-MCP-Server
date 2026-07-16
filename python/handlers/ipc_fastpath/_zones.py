@@ -527,14 +527,11 @@ def handle_delete_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -
         if err:
             return err
         if len(matches) > 1 and not bool(params.get("all", False)):
-            return {
-                "success": False,
-                "message": (
-                    f"{len(matches)} zones matched — pass all=true to delete "
-                    "every match, or refine with zoneUuid (from query_zones)"
-                ),
-                "zones": [_zone_brief_ipc(z) for z in matches],
-            }
+            from commands.routing._zones import zone_multi_match_delete_refusal
+
+            return zone_multi_match_delete_refusal(
+                len(matches), [_zone_brief_ipc(z) for z in matches]
+            )
         deleted = [_zone_brief_ipc(z) for z in matches]
         if not iface.ipc_board_api.remove_zones(matches):
             return {"success": False, "message": "Failed to delete copper pour via IPC"}
