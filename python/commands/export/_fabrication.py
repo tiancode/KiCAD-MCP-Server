@@ -61,6 +61,27 @@ def build_drill_export_cmd(
     return cmd
 
 
+def build_gerber_job_cmd(kicad_cli: str, output_dir: str, board_file: str) -> List[str]:
+    """Build ``kicad-cli pcb export gerbers`` — the batch export that writes the
+    ``.gbrjob`` Gerber job file next to the plotted gerbers.
+
+    ``PLOT_CONTROLLER.SetCreateGerberJobFile(True)`` does NOT emit a job file
+    for the layer-by-layer ``OpenPlotfile``/``PlotLayer`` loop the SWIG export
+    uses, so the promised ``.gbrjob`` never appeared.  This supplementary
+    call (used only when a map/job set is requested) produces it truthfully.
+    Isolated so tests can assert the flags without a real board/pcbnew.
+    """
+    return [
+        kicad_cli,
+        "pcb",
+        "export",
+        "gerbers",
+        "--output",
+        output_dir,
+        board_file,
+    ]
+
+
 class FabricationMixin:
     def export_gerber(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export Gerber files"""
@@ -158,15 +179,18 @@ class FabricationMixin:
                     {"layer": layer_name, "path": expected_path, "size_bytes": size_bytes}
                 )
 
+            # kicad-cli + on-disk board file are needed both for drill export
+            # and for the supplementary .gbrjob generation below — resolve once.
+            board_file = self.board.GetFileName()
+            kicad_cli = self._find_kicad_cli()
+            board_on_disk = bool(board_file and os.path.exists(board_file))
+
             # Generate drill files if requested
-            drill_files = []
+            drill_files: List[str] = []
             if generate_drill_files:
                 # KiCAD 9.0: Use kicad-cli for more reliable drill file generation
                 # The Python API's EXCELLON_WRITER.SetOptions() signature changed
-                board_file = self.board.GetFileName()
-                kicad_cli = self._find_kicad_cli()
-
-                if kicad_cli and board_file and os.path.exists(board_file):
+                if kicad_cli and board_on_disk:
                     import subprocess
 
                     # Generate drill files (+ optional drill map) using kicad-cli
@@ -183,18 +207,70 @@ class FabricationMixin:
                         if result.returncode == 0:
                             # Get list of generated drill files (exclude the
                             # drill-map files, which are collected separately).
+                            # Return ABSOLUTE paths so files.drill matches the
+                            # shape of files.gerber[].path / files.map[] (the E2E
+                            # run saw bare basenames here — inconsistent response).
                             for file in os.listdir(output_dir):
                                 if (
                                     file.endswith((".drl", ".cnc"))
                                     and _DRILL_MAP_MARKER not in file
                                 ):
-                                    drill_files.append(file)
+                                    drill_files.append(os.path.join(output_dir, file))
+                            drill_files.sort()
                         else:
                             logger.warning(f"Drill file generation failed: {result.stderr}")
                     except Exception as drill_error:
                         logger.warning(f"Could not generate drill files: {str(drill_error)}")
                 else:
                     logger.warning("kicad-cli not available for drill file generation")
+
+            # Generate the Gerber job file (.gbrjob).  PLOT_CONTROLLER's
+            # SetCreateGerberJobFile flag above does not emit a job file for the
+            # per-layer plot loop, so the schema's promised .gbrjob never
+            # appeared.  Produce it truthfully via a supplementary
+            # `kicad-cli pcb export gerbers` when a map/job set is requested,
+            # degrading gracefully (with a truthful note) if kicad-cli or the
+            # on-disk board is unavailable.
+            gerber_job_note: str = ""
+            if generate_map_file:
+                if kicad_cli and board_on_disk:
+                    import subprocess
+
+                    from utils.kicad_cli import c_locale_env
+
+                    job_cmd = build_gerber_job_cmd(kicad_cli, output_dir, board_file)
+                    try:
+                        job_result = subprocess.run(
+                            job_cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=120,
+                            env=c_locale_env(),
+                        )
+                        if job_result.returncode != 0:
+                            gerber_job_note = (
+                                "Gerber job file (.gbrjob) could not be generated "
+                                f"(kicad-cli exit {job_result.returncode}): "
+                                f"{job_result.stderr.strip() or '(no stderr)'}"
+                            )
+                            logger.warning(gerber_job_note)
+                    except Exception as job_error:
+                        gerber_job_note = (
+                            f"Gerber job file (.gbrjob) generation failed: {job_error}"
+                        )
+                        logger.warning(gerber_job_note)
+                elif not kicad_cli:
+                    gerber_job_note = (
+                        "Gerber job file (.gbrjob) not generated: kicad-cli not found "
+                        "(install KiCAD 8.0+ or set PATH)"
+                    )
+                    logger.warning(gerber_job_note)
+                else:
+                    gerber_job_note = (
+                        "Gerber job file (.gbrjob) not generated: board is not saved "
+                        "to disk (save the board first)"
+                    )
+                    logger.warning(gerber_job_note)
 
             # DEV MODE: copy MCP server log into project folder for later analysis
             if os.environ.get("KICAD_MCP_DEV") == "1":
@@ -207,11 +283,13 @@ class FabricationMixin:
             # plus the drill-map files kicad-cli just wrote next to the drill
             # files ("<name>-<PTH|NPTH>-drl_map.<ext>").
             map_files: List[str] = []
+            gerber_job_file: Any = None
             if generate_map_file:
                 for file in os.listdir(output_dir):
                     if file.endswith(".gbrjob") or _DRILL_MAP_MARKER in file:
                         map_files.append(os.path.join(output_dir, file))
                 map_files.sort()
+                gerber_job_file = next((m for m in map_files if m.endswith(".gbrjob")), None)
 
             requested_count = len(target_layers)
             written_count = len(written_files)
@@ -239,6 +317,12 @@ class FabricationMixin:
                 },
                 "outputDir": output_dir,
             }
+            if generate_map_file:
+                # Explicit .gbrjob path (None when it couldn't be produced) so
+                # callers don't have to grep files.map for it.
+                payload["gerberJobFile"] = gerber_job_file
+            if gerber_job_note:
+                payload["note"] = gerber_job_note
             if missing_layers:
                 payload["missing"] = missing_layers
             return payload
@@ -346,9 +430,13 @@ class FabricationMixin:
                 cmd.append(board_file)
 
             else:
+                # User error, not an internal fault: the MCP schema only offers
+                # STEP/VRML now, so an unsupported format is a bad request and
+                # must carry a validation errorCode (not INTERNAL_ERROR).
                 return {
                     "success": False,
                     "message": "Unsupported format",
+                    "errorCode": "UNSUPPORTED_FORMAT",
                     "errorDetails": f"Format {format} is not supported. Use 'STEP' or 'VRML'.",
                 }
 

@@ -59,7 +59,11 @@ class ConnectionManager:
 
     @staticmethod
     def connect_to_net(
-        schematic_path: Path, component_ref: str, pin_name: str, net_name: str
+        schematic_path: Path,
+        component_ref: str,
+        pin_name: str,
+        net_name: str,
+        allow_coincident_pin: bool = False,
     ) -> Dict[str, Any]:
         """
         Connect a component pin to a named net using a wire stub and label.
@@ -69,6 +73,11 @@ class ConnectionManager:
             component_ref: Reference designator (e.g., "U1", "U1_")
             pin_name: Pin name/number
             net_name: Name of the net to connect to (e.g., "VCC", "GND", "SIGNAL_1")
+            allow_coincident_pin: When False (default) the call REFUSES if the
+                target pin is coincident with another real component's pin —
+                naming a net there would silently capture that foreign pin onto
+                the net (they are one electrical node in KiCad). Set True to
+                connect anyway (A1, decision 4).
 
         The stub/label are placed at a point that is electrically FREE: never on
         another component's pin and never on a wire/label of a different net (nor
@@ -135,6 +144,43 @@ class ConnectionManager:
                     err_result["pin_not_found"] = True
                     err_result["valid_pins"] = diag.get("valid_pins", [])
                 return err_result
+
+            # A1: a foreign REAL-component pin coincident with the target pin
+            # means the net we are about to name would silently capture that pin
+            # (two pins at the same coordinate are one electrical node in KiCad).
+            # Refuse by default; the caller can override with
+            # allow_coincident_pin=True. Power/flag symbols (#…) sit ON component
+            # pins by design, so they never trigger this — nor does connecting a
+            # power port itself (handled below).
+            if not is_power_port and not allow_coincident_pin:
+                coincident = ConnectionManager._coincident_foreign_pins(
+                    schematic_path, component_ref, pin_loc
+                )
+                if coincident:
+                    first = coincident[0]
+                    names = ", ".join(
+                        f"{f['ref']}" + (f"/{f['pin']}" if f.get("pin") else "") for f in coincident
+                    )
+                    msg = (
+                        f"Refused to connect {component_ref}/{pin_name} to net "
+                        f"'{net_name}': its pin at {pin_loc} is coincident with another "
+                        f"component's pin ({names}), so naming this net would silently "
+                        f"capture that pin onto '{net_name}'. Move {component_ref} (or the "
+                        f"other component) so the pins no longer overlap, or re-run with "
+                        f"allow_coincident_pin=true to connect anyway."
+                    )
+                    logger.error(msg)
+                    return {
+                        "success": False,
+                        "message": msg,
+                        "kind": "coincident_pin",
+                        "coincident_pin": {
+                            "ref": first["ref"],
+                            "pin": first.get("pin"),
+                            "point": first["point"],
+                        },
+                        "coincident_pins": coincident,
+                    }
 
             # Power-symbol handling.
             #  * F4: a power PORT (#PWR…, lib_id "power:*") already joins the net
@@ -263,9 +309,7 @@ class ConnectionManager:
             # half-works — skip drawing it and reuse the existing segment.
             if ConnectionManager._wire_exists(schematic_path, pin_loc, stub_end):
                 wire_success = True
-                logger.info(
-                    f"Reusing existing wire {pin_loc}->{stub_end}; not drawing a duplicate"
-                )
+                logger.info(f"Reusing existing wire {pin_loc}->{stub_end}; not drawing a duplicate")
             else:
                 wire_success = WireManager.add_wire(schematic_path, pin_loc, stub_end)
             if not wire_success:
@@ -357,6 +401,11 @@ class ConnectionManager:
 
     _STUB_LEN = 2.54  # standard 0.1" grid step
     _STUB_COLLISION_GRID = 1.27  # one schematic grid step — "coincident" tolerance
+    # A1: a TRUE pin-on-pin short is an exact-coordinate coincidence (KiCad
+    # connectivity is exact-point). Pins one grid step (1.27 mm) apart are
+    # DISTINCT nodes and must not be flagged, so this is a tight float epsilon —
+    # not a grid step.
+    _COINCIDENT_PIN_TOL = 0.05
 
     @staticmethod
     def _existing_net_points(schematic_path: Path) -> List[Tuple[float, float, str]]:
@@ -507,10 +556,10 @@ class ConnectionManager:
                     continue
                 if abs(px - pin_loc[0]) <= eps and abs(py - pin_loc[1]) <= eps:
                     continue
-                if (
-                    math.hypot(px - stub_end[0], py - stub_end[1])
-                    <= ConnectionManager._STUB_COLLISION_GRID
-                    or ConnectionManager._point_on_segment_mm((px, py), pin_loc, stub_end)
+                if math.hypot(
+                    px - stub_end[0], py - stub_end[1]
+                ) <= ConnectionManager._STUB_COLLISION_GRID or ConnectionManager._point_on_segment_mm(
+                    (px, py), pin_loc, stub_end
                 ):
                     point = [round(px, 4), round(py, 4)]
                     break
@@ -519,10 +568,10 @@ class ConnectionManager:
         for ox, oy in pin_obstacles or []:
             if abs(ox - pin_loc[0]) <= eps and abs(oy - pin_loc[1]) <= eps:
                 continue  # the source pin itself — the wire legitimately starts here
-            if (
-                math.hypot(ox - stub_end[0], oy - stub_end[1])
-                <= ConnectionManager._STUB_COLLISION_GRID
-                or ConnectionManager._point_on_segment_mm((ox, oy), pin_loc, stub_end)
+            if math.hypot(
+                ox - stub_end[0], oy - stub_end[1]
+            ) <= ConnectionManager._STUB_COLLISION_GRID or ConnectionManager._point_on_segment_mm(
+                (ox, oy), pin_loc, stub_end
             ):
                 return {"kind": "pin", "net": None, "point": [round(ox, 4), round(oy, 4)]}
         return None
@@ -613,9 +662,7 @@ class ConnectionManager:
         caught. Our own same-net label at ``stub_end`` is ignored (that is the
         intended connection, not a foreign short)."""
         net_points = ConnectionManager._existing_net_points(schematic_path)
-        obstacles = ConnectionManager._component_pin_obstacles(
-            schematic_path, exclude=[pin_loc]
-        )
+        obstacles = ConnectionManager._component_pin_obstacles(schematic_path, exclude=[pin_loc])
         return ConnectionManager._stub_blocker(
             pin_loc, stub_end, net_name, net_points, obstacles, eps
         )
@@ -826,6 +873,104 @@ class ConnectionManager:
         if cand is not None:
             return cand[1], "wire", None
         return None, None, None
+
+    @staticmethod
+    def _coincident_foreign_pins(
+        schematic_path: Path,
+        component_ref: str,
+        pin_loc: List[float],
+        tol: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """Pins of OTHER *real* components coincident with ``pin_loc`` (A1).
+
+        Returns ``[{"ref", "pin", "point"}]`` for every pin of a placed symbol
+        other than ``component_ref`` that lies within ``tol`` (default
+        :data:`_COINCIDENT_PIN_TOL`, a tight epsilon — an exact-coordinate short,
+        NOT a grid step) of ``pin_loc``. Power / flag symbols
+        (references starting with ``#``) and template placeholders are excluded —
+        placing such a symbol's pin on a component pin is the normal connection
+        mechanism, not a silent capture. At most one entry per foreign reference.
+
+        Reuses :meth:`WireDragger.get_all_stationary_pin_positions` (read-only)
+        which returns ``{(x, y): reference}`` for every pin of every symbol except
+        the given reference, applying the same rotation/mirror transform as
+        :class:`PinLocator`.
+        """
+        if tol is None:
+            tol = ConnectionManager._COINCIDENT_PIN_TOL
+        import sexpdata
+
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                sch_data = sexpdata.loads(f.read())
+        except (OSError, ValueError) as e:
+            logger.debug(f"_coincident_foreign_pins: could not read {schematic_path}: {e}")
+            return []
+        try:
+            from commands.wire_dragger import WireDragger
+        except Exception as e:  # pragma: no cover - import guard
+            logger.debug(f"_coincident_foreign_pins: WireDragger unavailable: {e}")
+            return []
+
+        self_ref = str(component_ref).rstrip("_")
+        try:
+            positions = WireDragger.get_all_stationary_pin_positions(sch_data, component_ref)
+        except Exception as e:  # best-effort guard around the borrowed helper
+            logger.debug(f"_coincident_foreign_pins: pin scan failed: {e}")
+            return []
+
+        out: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for (px, py), ref in positions.items():
+            ref_s = str(ref).rstrip("_")
+            if (
+                ref_s == self_ref
+                or ref_s.startswith("#")
+                or ref_s.startswith("_TEMPLATE")
+                or ref_s in seen
+            ):
+                continue
+            if math.hypot(px - pin_loc[0], py - pin_loc[1]) <= tol:
+                seen.add(ref_s)
+                out.append(
+                    {
+                        "ref": ref_s,
+                        "pin": ConnectionManager._pin_number_at(schematic_path, ref_s, [px, py]),
+                        "point": [round(px, 4), round(py, 4)],
+                    }
+                )
+        return out
+
+    @staticmethod
+    def _pin_number_at(
+        schematic_path: Path,
+        ref: str,
+        point: List[float],
+        tol: Optional[float] = None,
+    ) -> Optional[str]:
+        """Best-effort: the pin number of ``ref`` nearest ``point`` within ``tol``.
+
+        Used only to enrich the coincident-pin message (e.g. name the offending
+        BOOT0 pin). Returns None when no locator is available or nothing is close.
+        """
+        if tol is None:
+            tol = ConnectionManager._STUB_COLLISION_GRID
+        locator = ConnectionManager.get_pin_locator()
+        if locator is None:
+            return None
+        try:
+            pins = locator.get_all_symbol_pins(Path(schematic_path), ref) or {}
+        except Exception:
+            return None
+        best: Optional[Tuple[float, str]] = None
+        for pn, coords in pins.items():
+            try:
+                d = math.hypot(coords[0] - point[0], coords[1] - point[1])
+            except (TypeError, IndexError):
+                continue
+            if d <= tol and (best is None or d < best[0]):
+                best = (d, pn)
+        return best[1] if best else None
 
     @staticmethod
     def _component_pin_obstacles(

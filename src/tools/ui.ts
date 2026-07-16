@@ -20,12 +20,12 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
     passthrough("get_backend_info"),
   );
 
-  // Check / launch the KiCAD UI
+  // Check / launch / quit the KiCAD UI
   server.tool(
     "manage_kicad_ui",
-    "Check ('status') or launch ('launch', optionally with a project file) the KiCAD UI. Board/IPC ops need the PCB editor open; the server auto-heals unless KICAD_AUTO_LAUNCH=false. On needs_pcb_editor, ask the user to open the board and wait — don't fall back to file-only edits.",
+    "Check ('status'), launch ('launch', optionally with a project file), or quit ('quit') the KiCAD UI. Board/IPC ops need the PCB editor open; the server auto-heals unless KICAD_AUTO_LAUNCH=false. On needs_pcb_editor, ask the user to open the board and wait — don't fall back to file-only edits. 'quit' terminates only the GUI the server itself launched (an externally started KiCad is left running) and releases the IPC socket.",
     {
-      action: z.enum(["status", "launch"]).describe("status | launch"),
+      action: z.enum(["status", "launch", "quit"]).describe("status | launch | quit"),
       projectPath: z.string().optional().describe("Path to .kicad_pcb file to open (launch only)"),
       autoLaunch: z
         .boolean()
@@ -35,14 +35,25 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
             "an explicit launch means to launch. KICAD_AUTO_LAUNCH=false forces off).",
         ),
     },
-    async (args: { action: "status" | "launch"; projectPath?: string; autoLaunch?: boolean }) => {
+    async (args: {
+      action: "status" | "launch" | "quit";
+      projectPath?: string;
+      autoLaunch?: boolean;
+    }) => {
       const { action, ...rest } = args;
       if (action === "launch") {
         logger.info(
           `Launching KiCAD UI${rest.projectPath ? " with project: " + rest.projectPath : ""}`,
         );
+      } else if (action === "quit") {
+        logger.info("Quitting KiCAD UI (server-launched GUI only)");
       }
-      const command = action === "launch" ? "launch_kicad_ui" : "check_kicad_ui";
+      const command =
+        action === "launch"
+          ? "launch_kicad_ui"
+          : action === "quit"
+            ? "quit_kicad_ui"
+            : "check_kicad_ui";
       const result = await callKicadScript(command, rest);
       return formatKicadResult(result);
     },
@@ -77,9 +88,23 @@ export function registerUITools(server: McpServer, callKicadScript: CommandFunct
   // -----------------------------------------------------------------
   server.tool(
     "run_action",
-    "Invoke a KiCad internal TOOL_ACTION by name via IPC (escape hatch; names are unstable across releases — use only when no dedicated tool exists). Returns statusName RAS_OK / RAS_INVALID / RAS_FRAME_NOT_OPEN.",
+    "Invoke a KiCad internal TOOL_ACTION by name via IPC (escape hatch; names are unstable across releases — use only when no dedicated tool exists). On KiCad 10 use the 'common.Control.<action>' namespace. Returns statusName RAS_OK / RAS_INVALID / RAS_FRAME_NOT_OPEN (RAS_INVALID → errorCode INVALID_ACTION so you can retry with a corrected name). Requires IPC; refuses without it unless allowLaunch:true.",
     {
-      action: z.string().describe("TOOL_ACTION name, e.g. 'pcbnew.EditorControl.zoomFitScreen'"),
+      action: z
+        .string()
+        .describe(
+          "TOOL_ACTION name, e.g. 'common.Control.zoomFitScreen' or " +
+            "'common.Control.zoomFitObjects' (the 'pcbnew.EditorControl.*' form " +
+            "does not resolve on KiCad 10).",
+        ),
+      allowLaunch: z
+        .boolean()
+        .optional()
+        .describe(
+          "If IPC is not connected, launch the KiCAD GUI to run the action " +
+            "(defaults to false — run_action refuses rather than spawning a " +
+            "heavyweight GUI as a side effect).",
+        ),
     },
     passthrough("run_action"),
   );

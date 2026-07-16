@@ -27,10 +27,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
 import sexpdata
-from sexpdata import Symbol
-
 from commands.schematic_locks import atomic_write_text
 from commands.wire_manager import WireManager
+from sexpdata import Symbol
 
 __all__ = ["create_hierarchical_sheet", "add_sheet_pin"]
 
@@ -325,7 +324,14 @@ def add_sheet_pin(
     new_content, ok = WireManager.add_sheet_pin(
         content, sheet_name, pin_name, shape, [px, py], orientation=angle
     )
-    if not ok or _load_root(new_content) is None:
+    if not ok:
+        # The sheet block could not be located (the earlier _find_sheet already
+        # passed, so this is a serialization mismatch, not corruption). Report the
+        # real cause rather than the misleading "would corrupt" (A8).
+        return _fail(
+            f"Sheet '{sheet_name}' not found in {parent.name} when inserting pin " f"'{pin_name}'"
+        )
+    if _load_root(new_content) is None:
         return _fail("Internal error: pin insertion would corrupt the parent schematic")
     atomic_write_text(parent, new_content)
 

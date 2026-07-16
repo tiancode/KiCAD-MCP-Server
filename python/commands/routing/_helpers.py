@@ -94,6 +94,141 @@ def _refuse_with_obstacles(
     }
 
 
+def _nets_equivalent(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether two net names refer to the same net.
+
+    Tolerates the sheet-root ``/`` prefix so a caller passing the bare name
+    (``GND``) is not falsely flagged as shorting the board's hierarchical
+    ``/GND``.  Empty / ``None`` never matches anything.
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.lstrip("/") == b.lstrip("/")
+
+
+def _endpoint_conflict_messages(endpoints: List[Any], net: str, pad_boxes: List[Any]) -> List[str]:
+    """Pure cross-net endpoint check shared by the SWIG and IPC paths.
+
+    ``endpoints``   ``[(x, y), ...]`` — the trace's endpoints.
+    ``net``         the net the trace will carry.
+    ``pad_boxes``   ``[(ref, pad_num, pad_net, (left, top, right, bottom)), ...]``
+                    in the SAME coordinate space as ``endpoints`` (all nm or
+                    all mm — callers keep the units consistent).
+
+    Returns one message per distinct foreign-net pad that contains an
+    endpoint — a pad whose non-empty net differs from ``net``, i.e. a hard
+    short.  Empty when ``net`` is falsy (nothing to compare) or nothing
+    conflicts.  Numeric-only comparison (guards against MagicMock coords in
+    tests / dehydrated SWIG proxies).
+    """
+    conflicts: List[str] = []
+    if not net:
+        return conflicts
+    seen = set()
+    for ref, pad_num, pad_net, box in pad_boxes:
+        if not pad_net or _nets_equivalent(pad_net, net):
+            continue
+        try:
+            left, top, right, bottom = box
+        except (TypeError, ValueError):
+            continue
+        for point in endpoints:
+            try:
+                px, py = point
+            except (TypeError, ValueError):
+                continue
+            if not (isinstance(px, (int, float)) and isinstance(py, (int, float))):
+                continue
+            if left <= px <= right and top <= py <= bottom:
+                key = (ref, pad_num, pad_net)
+                if key not in seen:
+                    seen.add(key)
+                    conflicts.append(
+                        f"Trace endpoint lands on pad {ref}.{pad_num} (net "
+                        f"'{pad_net}') but the trace net is '{net}' — connecting "
+                        f"them would short '{net}' to '{pad_net}'."
+                    )
+                break
+    return conflicts
+
+
+def endpoint_net_conflicts(board: Any, endpoints: List[Any], net: Optional[str]) -> List[str]:
+    """Cross-net shorts on a SWIG board: endpoints landing on a foreign pad.
+
+    ``endpoints`` are ``(x_nm, y_nm)`` points (pad centres or raw trace
+    endpoints); ``net`` is the net the trace will carry.  Scans every pad's
+    bounding box (nm) via the shared :func:`_endpoint_conflict_messages` core
+    and returns human-readable conflict strings — empty when clean or ``net``
+    is falsy.  Never raises: pad iteration is best-effort (a board with no
+    footprints, or a non-iterable mock, yields ``[]``).
+    """
+    if not net:
+        return []
+    pad_boxes: List[Any] = []
+    try:
+        for fp in board.GetFootprints():
+            try:
+                ref = fp.GetReference()
+            except Exception:
+                ref = "?"
+            for pad in fp.Pads():
+                try:
+                    pad_num = str(pad.GetNumber())
+                except Exception:
+                    continue
+                if not pad_num:
+                    continue  # mechanical / unnumbered pad — no electrical role
+                try:
+                    pad_net = pad.GetNetname()
+                except Exception:
+                    continue
+                if not pad_net or _nets_equivalent(pad_net, net):
+                    continue
+                try:
+                    bbox = pad.GetBoundingBox()
+                    box = (
+                        float(bbox.GetLeft()),
+                        float(bbox.GetTop()),
+                        float(bbox.GetRight()),
+                        float(bbox.GetBottom()),
+                    )
+                except Exception:
+                    continue
+                pad_boxes.append((ref, pad_num, pad_net, box))
+    except Exception:
+        return []
+    return _endpoint_conflict_messages(endpoints, net, pad_boxes)
+
+
+def _refuse_cross_net_short(net: Optional[str], conflicts: List[str]) -> Dict[str, Any]:
+    """Refusal for a routing op whose endpoint lands on a different-net pad.
+
+    Distinct ``errorCode`` ``CROSS_NET_SHORT`` (vs ``SHORT_REFUSED`` for a
+    third-pad crossing) so an agent can tell "you asked me to connect two
+    different nets" apart from "the straight line clips a bystander pad".
+    ``force=true`` overrides.
+    """
+    return {
+        "success": False,
+        "hasCrossNetShort": True,
+        "errorCode": "CROSS_NET_SHORT",
+        "conflictCount": len(conflicts),
+        "crossNetConflicts": conflicts,
+        "message": (
+            f"Refused: trace net '{net}' would be joined to a different net at "
+            f"{len(conflicts)} endpoint(s) — a hard short. " + " ".join(conflicts)
+        ),
+        "hint": (
+            "The two endpoints are on different nets; connecting them shorts "
+            "them together and produces net-shorting DRC violations. Check the "
+            "pad net assignments, or pass force=true to route anyway (you must "
+            "then fix the resulting short)."
+        ),
+    }
+
+
 def _point_to_segment_distance_nm(px: int, py: int, x1: int, y1: int, x2: int, y2: int) -> float:
     """Shortest distance (nm) from point (px,py) to segment (x1,y1)-(x2,y2).
 

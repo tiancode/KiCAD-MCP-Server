@@ -97,3 +97,64 @@ def test_create_schematic_accepts_full_sch_filename():
             used_path = mock_sch_cls.call_args[0][0]
             assert used_path.endswith("myschematic.kicad_sch")
             assert "myschematic.kicad_sch.kicad_sch" not in used_path
+
+
+# ---------------------------------------------------------------------------
+# A7 (handler layer) — create_schematic must accept a full .kicad_sch FILE path
+# in `path` instead of treating it as a directory and double-appending
+# <name>.kicad_sch (".../scratch.kicad_sch/scratch.kicad_sch" -> FILE_NOT_FOUND).
+# These exercise handle_create_schematic end-to-end (real file writes).
+# ---------------------------------------------------------------------------
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
+
+
+def _handler():
+    from handlers.schematic_io import handle_create_schematic
+
+    return handle_create_schematic
+
+
+def test_handler_full_file_path_in_path_not_double_appended():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = os.path.join(tmpdir, "scratch.kicad_sch")
+        res = _handler()(None, {"name": "scratch", "path": target})
+        assert res["success"] is True
+        assert res["file_path"] == target
+        assert os.path.isfile(target)
+        # No doubled ".../scratch.kicad_sch/scratch.kicad_sch" directory.
+        assert not os.path.exists(os.path.join(target, "scratch.kicad_sch"))
+
+
+def test_handler_full_file_path_without_name():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = os.path.join(tmpdir, "board.kicad_sch")
+        res = _handler()(None, {"path": target})
+        assert res["success"] is True
+        assert res["file_path"] == target
+        assert os.path.isfile(target)
+
+
+def test_handler_name_basename_conflict_refused():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = os.path.join(tmpdir, "alpha.kicad_sch")
+        res = _handler()(None, {"name": "beta", "path": target})
+        assert res["success"] is False
+        assert res["errorCode"] == "SCHEMATIC_NAME_CONFLICT"
+        assert not os.path.exists(target)
+
+
+def test_handler_name_agreeing_with_basename_accepted():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = os.path.join(tmpdir, "same.kicad_sch")
+        res = _handler()(None, {"name": "same", "path": target})
+        assert res["success"] is True
+        assert res["file_path"] == target
+        assert os.path.isfile(target)
+
+
+def test_handler_directory_path_still_works():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        res = _handler()(None, {"name": "sheet1", "path": tmpdir})
+        assert res["success"] is True
+        assert res["file_path"] == os.path.join(tmpdir, "sheet1.kicad_sch")
+        assert os.path.isfile(os.path.join(tmpdir, "sheet1.kicad_sch"))

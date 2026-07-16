@@ -863,3 +863,97 @@ class TestLibNameBeforeLibIdOrdering:
         )
         assert verify["success"] is False
         assert "not found" in verify.get("message", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# B1 — edit_schematic_component must validate a Library:Name footprint resolves.
+# An unresolved lib-id was written with zero validation, only to be silently
+# dropped later by sync_schematic_to_board.  Now the edit refuses
+# FOOTPRINT_NOT_FOUND unless allowUnresolvedFootprint:true.  Validation is
+# read-only (pcbnew.FootprintLoad on a library copy) and fails OPEN.
+# ---------------------------------------------------------------------------
+@pytest.mark.integration
+class TestEditFootprintValidation:
+    @pytest.fixture
+    def sch_with_r1(self, tmp_path: Any) -> Any:
+        return _make_test_schematic(tmp_path, PLACED_RESISTOR_BLOCK)
+
+    def _iface(self) -> Any:
+        from kicad_interface import KiCADInterface
+
+        return KiCADInterface()
+
+    def test_unresolved_footprint_refused(self, sch_with_r1: Any) -> None:
+        iface = self._iface()
+        res = iface.handle_command(
+            "edit_schematic_component",
+            {
+                "schematicPath": str(sch_with_r1),
+                "reference": "R1",
+                "footprint": "ZZZ_NoSuchLibrary_ZZZ:Nope",
+            },
+        )
+        assert res["success"] is False
+        assert res["errorCode"] == "FOOTPRINT_NOT_FOUND"
+        # Nothing written: the original footprint survives on disk.
+        content = sch_with_r1.read_text(encoding="utf-8")
+        assert "ZZZ_NoSuchLibrary_ZZZ:Nope" not in content
+        assert "Resistor_SMD:R_0603_1608Metric" in content
+
+    def test_unresolved_footprint_allowed_with_override(self, sch_with_r1: Any) -> None:
+        iface = self._iface()
+        res = iface.handle_command(
+            "edit_schematic_component",
+            {
+                "schematicPath": str(sch_with_r1),
+                "reference": "R1",
+                "footprint": "ZZZ_NoSuchLibrary_ZZZ:Nope",
+                "allowUnresolvedFootprint": True,
+            },
+        )
+        assert res["success"] is True, res.get("message")
+        assert "ZZZ_NoSuchLibrary_ZZZ:Nope" in sch_with_r1.read_text(encoding="utf-8")
+
+    def test_resolvable_footprint_passes(self, sch_with_r1: Any, monkeypatch: Any) -> None:
+        import handlers.schematic_component._properties as props
+
+        monkeypatch.setattr(props, "_footprint_resolves", lambda fp, d: (True, ""))
+        iface = self._iface()
+        res = iface.handle_command(
+            "edit_schematic_component",
+            {
+                "schematicPath": str(sch_with_r1),
+                "reference": "R1",
+                "footprint": "AnyLib:AnyFp",
+            },
+        )
+        assert res["success"] is True, res.get("message")
+        assert "AnyLib:AnyFp" in sch_with_r1.read_text(encoding="utf-8")
+
+    def test_value_only_edit_skips_footprint_validation(
+        self, sch_with_r1: Any, monkeypatch: Any
+    ) -> None:
+        import handlers.schematic_component._properties as props
+
+        called = {"n": 0}
+
+        def _spy(fp: str, d: Any):
+            called["n"] += 1
+            return True, ""
+
+        monkeypatch.setattr(props, "_footprint_resolves", _spy)
+        iface = self._iface()
+        res = iface.handle_command(
+            "edit_schematic_component",
+            {"schematicPath": str(sch_with_r1), "reference": "R1", "value": "22k"},
+        )
+        assert res["success"] is True, res.get("message")
+        assert called["n"] == 0
+
+    def test_clearing_footprint_is_allowed(self, sch_with_r1: Any) -> None:
+        iface = self._iface()
+        res = iface.handle_command(
+            "edit_schematic_component",
+            {"schematicPath": str(sch_with_r1), "reference": "R1", "footprint": ""},
+        )
+        assert res["success"] is True, res.get("message")

@@ -409,6 +409,17 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
     # only unavailable_tool_count to keep their responses small.
     response["unavailable_tools"] = list(iface.IPC_REQUIRED_COMMANDS)
     unavailable_count = len(response["unavailable_tools"])
+    # C8 truthfulness: most IPC-only tools self-heal by auto-launching KiCad on
+    # first use (the ipc_gate path, unless KICAD_AUTO_LAUNCH=false); run_action
+    # is the deliberate exception — it refuses without IPC and only launches
+    # when the caller opts in with allowLaunch:true.  Spell that out so the
+    # "unavailable" list doesn't imply every one of these tools behaves alike.
+    response["unavailable_tools_note"] = (
+        "Most of these auto-launch KiCad on first use to self-heal (unless "
+        "KICAD_AUTO_LAUNCH=false). Exception: run_action requires IPC and "
+        "refuses without it — it only launches KiCad when called with "
+        "allowLaunch:true."
+    )
     # Truthful, non-sticky detection: is_running() shares its strict process
     # check with manage_kicad_ui (get_process_info), so kicad_running here can
     # no longer contradict manage_kicad_ui's status (the P5 false positive).
@@ -436,9 +447,7 @@ def handle_get_backend_info(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         )
     else:
         socket_note = (
-            ""
-            if socket_live
-            else "  (No IPC socket is present, so the server is most likely off.)"
+            "" if socket_live else "  (No IPC socket is present, so the server is most likely off.)"
         )
         response["message"] = (
             "On SWIG backend — KiCad is running but its IPC API server "
@@ -461,27 +470,132 @@ def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
 
     The action namespace is KiCad-internal and not stable across releases —
     surface kipy's exact response (status + statusName) so callers can
-    detect ``RAS_INVALID`` vs ``RAS_FRAME_NOT_OPEN`` and recover.
-    Requires the IPC backend; SWIG has no equivalent.
+    detect ``RAS_INVALID`` vs ``RAS_FRAME_NOT_OPEN`` and recover.  On KiCad 10
+    the working namespace is ``common.Control.<action>`` (e.g.
+    ``common.Control.zoomFitScreen`` / ``common.Control.zoomFitObjects``); the
+    older ``pcbnew.EditorControl.*`` / ``pcbnew.Control.*`` prefixes return
+    ``RAS_INVALID`` (finding D4).
+
+    Requires the IPC backend; SWIG has no equivalent.  Unlike the board-op
+    self-heal path, run_action does NOT auto-launch KiCad by default (C8): when
+    IPC is unavailable it refuses cleanly rather than opening a heavyweight GUI
+    as a side effect.  Pass ``allowLaunch: true`` to opt into launching KiCad.
     """
     if not iface.use_ipc or not iface.ipc_backend:
         # Action names can target any frame (project manager / PCB / schematic
         # editor / plugin), so we don't require the PCB editor specifically —
         # kipy will report RAS_FRAME_NOT_OPEN with the action name if needed.
-        ok, reason = iface.ensure_ipc(allow_launch=True, require_pcb_editor=False)
+        # allow_launch defaults OFF so this escape hatch never spawns a GUI
+        # behind the caller's back (C8); the caller must opt in explicitly.
+        allow_launch = bool(params.get("allowLaunch", False))
+        ok, reason = iface.ensure_ipc(allow_launch=allow_launch, require_pcb_editor=False)
         if not ok:
+            opt_in = (
+                ""
+                if allow_launch
+                else (
+                    " Pass allowLaunch:true to have the server start KiCAD for "
+                    "you (opens the heavyweight GUI), or launch it yourself with "
+                    "manage_kicad_ui(action=launch)."
+                )
+            )
+            # Message keeps the "requires the IPC backend" phrasing so
+            # enrich_failure stamps the stable IPC_REQUIRED errorCode.
             return {
                 "success": False,
-                "message": ("run_action requires the IPC backend. " + reason),
+                "message": ("run_action requires the IPC backend. " + reason + opt_in),
             }
     action = params.get("action")
     if not isinstance(action, str) or not action:
         return {"success": False, "message": "'action' parameter is required (string)"}
     try:
-        return iface.ipc_backend.run_action(action)
+        result = iface.ipc_backend.run_action(action)
     except Exception as e:
         logger.error(f"Error invoking action {action!r}: {e}")
         return {"success": False, "action": action, "message": str(e)}
+    # D5: an unknown/invalid action NAME surfaces as RAS_INVALID — a CLIENT
+    # error the caller fixes by retrying with a valid name, NOT an internal
+    # fault.  Stamp a stable INVALID_ACTION errorCode (enrich_failure won't
+    # override a preset code) while KEEPING statusName so the documented
+    # retry contract still holds.
+    if (
+        isinstance(result, dict)
+        and result.get("success") is False
+        and result.get("statusName") == "RAS_INVALID"
+    ):
+        result.setdefault("errorCode", "INVALID_ACTION")
+        result.setdefault(
+            "hint",
+            "Unknown TOOL_ACTION name. On KiCad 10 use the 'common.Control.<action>' "
+            "namespace (e.g. common.Control.zoomFitScreen); 'pcbnew.EditorControl.*' "
+            "does not resolve. Retry with a valid name.",
+        )
+    return result
+
+
+def handle_quit_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
+    """Terminate the KiCad GUI that THIS server launched (manage_kicad_ui action=quit).
+
+    Symmetric with ``launch`` (finding D6): a caller that brought KiCad up
+    through the server can shut it down through the server, releasing the
+    shared ``/tmp/kicad/api.sock`` and returning to the idle state.
+
+    Safety: only ever signals a process the server itself recorded at launch
+    (``KiCADProcessManager._launched_pids``) AND that is *currently* a running
+    KiCad GUI binary — never an externally started KiCad (killing a user's own
+    editor risks data loss), and never a reused PID that is no longer a GUI.
+    Escalation is SIGTERM → bounded wait → SIGKILL.  The response reports every
+    case truthfully: what we terminated, a GUI we did NOT launch left running,
+    a launched GUI that had already exited, or nothing running at all.
+    """
+    result = KiCADProcessManager.terminate_launched()
+
+    terminated = result.get("terminated") or []
+    already_exited = result.get("alreadyExited") or []
+    external = result.get("externalGuiPids") or []
+    survived = result.get("survived") or []
+
+    if terminated:
+        # The IPC connection that GUI hosted is now dead — drop the backend so
+        # the next call cleanly re-probes / falls back to SWIG instead of
+        # erroring against a stale socket.
+        try:
+            iface.use_ipc = False
+            iface.ipc_backend = None
+            iface.ipc_board_api = None
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    if survived:
+        success = False
+        message = (
+            f"Sent SIGTERM+SIGKILL but {len(survived)} launched KiCad "
+            f"process(es) {survived} are still running; terminate them manually."
+        )
+    elif terminated:
+        success = True
+        note = " (SIGKILL required)" if result.get("forced") else ""
+        message = f"Terminated the KiCad GUI the server launched: pid(s) {terminated}{note}."
+    elif external:
+        success = True
+        message = (
+            f"A KiCad GUI is running (pid(s) {external}) but the server did not "
+            "launch it, so it was left untouched. Close it from KiCad (File → "
+            "Quit) if that was intended."
+        )
+    elif already_exited:
+        success = True
+        message = "The KiCad GUI the server launched has already exited; nothing to " "terminate."
+    else:
+        success = True
+        message = "No KiCad GUI is running; nothing to terminate."
+
+    out: Dict[str, Any] = {"success": success, **result, "message": message}
+    try:
+        out.update(iface._backend_status())
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return out
 
 
 def handle_reconcile_backends(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

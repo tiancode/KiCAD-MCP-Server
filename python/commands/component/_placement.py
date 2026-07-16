@@ -312,6 +312,7 @@ class PlacementMixin:
             position = params.get("position")
             rotation = params.get("rotation")
             layer = params.get("layer")
+            allow_off_board = bool(params.get("allowOffBoard", False))
 
             if not reference or not position:
                 return {
@@ -372,14 +373,34 @@ class PlacementMixin:
                     "boardOutline": board_outline,
                 }
 
+            # Off-board refusal (B10): a target outside the outline but not
+            # absurd is refused by default — silently parking a footprint off the
+            # board is almost never intended.  allowOffBoard:true reinstates the
+            # apply-with-warning behaviour for the deliberate case.  Classify
+            # BEFORE mutating so a refused move never moves the part.
+            if target_class == "off_board" and not allow_off_board:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Target position ({position['x']}, {position['y']}) "
+                        f"{position['unit']} is outside the board outline "
+                        f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
+                        f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm). Refusing to move "
+                        f"{reference} off the board; pass allowOffBoard:true to "
+                        f"place it there intentionally."
+                    ),
+                    "errorCode": "POSITION_OFF_BOARD",
+                    "boardOutline": board_outline,
+                }
+
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
 
-            # Set new rotation if provided
-            if rotation is not None:
-                angle = pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T)
-                module.SetOrientation(angle)
-
-            # Flip to target layer if specified
+            # Flip to the target layer FIRST, then set rotation (B2).  Flip()
+            # mirrors the current orientation, so setting the orientation before
+            # the flip lets the flip silently rewrite it — a requested 0° lands
+            # as 180° on the far side, while the old response still claimed 0°.
+            # Flipping first makes the SetOrientation below the last word on the
+            # angle, so the requested value is the one that sticks.
             if layer:
                 current_layer = self.board.GetLayerName(module.GetLayer())
                 if layer == "B.Cu" and current_layer != "B.Cu":
@@ -387,24 +408,34 @@ class PlacementMixin:
                 elif layer == "F.Cu" and current_layer != "F.Cu":
                     module.Flip(module.GetPosition(), False)
 
+            if rotation is not None:
+                angle = pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T)
+                module.SetOrientation(angle)
+
+            # Build the response from read-backs, never the requested values:
+            # after a flip the applied rotation/layer/position can differ from
+            # what was asked, and the caller must see what actually landed on
+            # disk (the B2 success-message-vs-disk mismatch).
+            final_pos = module.GetPosition()
             response: Dict[str, Any] = {
                 "success": True,
                 "message": f"Moved component: {reference}",
                 "component": {
                     "reference": reference,
-                    "position": {"x": position["x"], "y": position["y"], "unit": position["unit"]},
-                    "rotation": (
-                        rotation if rotation is not None else module.GetOrientation().AsDegrees()
-                    ),
+                    "position": {
+                        "x": final_pos.x / 1000000.0,
+                        "y": final_pos.y / 1000000.0,
+                        "unit": "mm",
+                    },
+                    "rotation": module.GetOrientation().AsDegrees(),
                     "layer": self.board.GetLayerName(module.GetLayer()),
                 },
             }
             if board_outline is not None:
                 response["boardOutline"] = board_outline
             if target_class == "off_board":
-                # The move still applied (KiCad places footprints off-board
-                # freely), but flag it so the caller isn't surprised the part now
-                # sits outside the outline.
+                # Reached only with allowOffBoard:true — the move applied, but
+                # flag that the footprint now sits outside the outline.
                 response["offBoardWarning"] = (
                     f"{reference} moved to ({position['x']}, {position['y']}) "
                     f"{position['unit']}, which is outside the board outline "

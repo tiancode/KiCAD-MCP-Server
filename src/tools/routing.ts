@@ -23,7 +23,8 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
   // Route trace tool (straight segment, or arc when mid is given)
   server.tool(
     "route_trace",
-    "Route a copper trace between two points on one layer: straight, or an arc when mid is given. Does NOT change layers — for cross-layer routes use route_smart (inserts a via).",
+    "Route a copper trace between two points on one layer: straight, or an arc when mid is given. Does NOT change layers — for cross-layer routes use route_smart (inserts a via). " +
+      "Refuses (errorCode CROSS_NET_SHORT) when an endpoint lands on a pad of a DIFFERENT net than `net` — connecting them shorts the two nets; pass force:true to route anyway.",
     {
       start: z
         .object({
@@ -50,6 +51,12 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
       layer: z.string().describe("PCB layer"),
       width: z.number().describe("Trace width in mm (must be >0 and <=50 mm)"),
       net: z.string().optional().describe("Net name (required for straight segments)"),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Route even when an endpoint sits on a different-net pad (default false: refused with CROSS_NET_SHORT)",
+        ),
     },
     async (args) => {
       if (!args.mid && !args.net) {
@@ -325,7 +332,10 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     "Create or update a net class with custom design rules, persisted to the .kicad_pro (KiCad 9/10 store net classes in project JSON, not the board). Optionally assign nets by name or wildcard pattern.",
     {
       name: z.string().describe("Net class name"),
-      traceWidth: z.number().optional().describe("Default trace width in mm (must be >0 and <=50 mm)"),
+      traceWidth: z
+        .number()
+        .optional()
+        .describe("Default trace width in mm (must be >0 and <=50 mm)"),
       clearance: z.number().optional().describe("Clearance in mm"),
       viaDiameter: z.number().optional().describe("Via diameter in mm"),
       viaDrill: z.number().optional().describe("Via drill size in mm"),
@@ -386,7 +396,8 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     "Route between two pads (or two points). strategy=astar (default): grid A* OBSTACLE AVOIDANCE around other " +
       "pads/traces/vias. strategy=direct: ONE straight segment between two pads, no avoidance — refuses if it " +
       "would cross a third pad unless force=true; that gate only checks pads, so still run_drc to catch " +
-      "trace/zone/edge crossings.",
+      "trace/zone/edge crossings. Both strategies refuse (CROSS_NET_SHORT) when the two endpoints are on " +
+      "DIFFERENT nets — connecting them shorts the nets; force=true overrides.",
     {
       strategy: z.enum(["astar", "direct"]).optional().describe("Routing strategy (default astar)"),
       fromRef: z.string().optional().describe("Source component reference (e.g. 'U1')"),
@@ -440,7 +451,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .boolean()
         .optional()
         .describe(
-          "direct: route even across other pads (default false: refused with obstacle list)",
+          "Route even across a foreign pad (direct: obstacle refusal; both: CROSS_NET_SHORT). Default false.",
         ),
     },
     async (args) => {
@@ -461,9 +472,10 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
           }),
         );
       }
-      const { force: _force, ...astar } = params;
-      void _force;
-      return formatKicadResult(await callKicadScript("route_smart", astar));
+      // Forward `force` into the astar branch too so a caller can override a
+      // CROSS_NET_SHORT refusal (route_smart adopts the source pad's net but
+      // the destination pad may be on a different one).
+      return formatKicadResult(await callKicadScript("route_smart", params));
     },
   );
 

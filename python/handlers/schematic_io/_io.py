@@ -195,9 +195,7 @@ def handle_sync_schematic_to_board(
         # export_bom.  Reuses the already-exported netlist (parse only, no
         # extra kicad-cli spawn) and covers BOTH the footprints we just added
         # and the ones already on the board (re-sync updates changed values).
-        sch_components = iface._extract_components_from_schematic(
-            schematic_path, root=netlist_root
-        )
+        sch_components = iface._extract_components_from_schematic(schematic_path, root=netlist_root)
         fields_result = iface._propagate_schematic_fields_to_board(board, sch_components)
 
         # Route through the iface helper so the in-memory signature tracks
@@ -249,12 +247,33 @@ def handle_sync_schematic_to_board(
                     f"y in [{min(ys)}, {max(ys)}] mm. "
                     f"Call move_component on each ref to reposition."
                 )
+        # Honest failure signalling (finding B1): a sync that could not place
+        # one or more schematic components (unresolved footprint lib-id) has
+        # produced a PARTIAL board.  A caller trusting success:true would ship
+        # it incomplete, so flip to success:false + errorCode FOOTPRINTS_SKIPPED
+        # + partial:true and NAME the dropped refs and why in the message — the
+        # partial board is still written to disk, and every detail is retained.
+        partial = bool(skipped_footprints)
+        base_message = (
+            f"PCB updated from schematic: {len(added_footprints)} footprints added, "
+            f"{len(added_nets)} nets added, {assigned_pads} pads assigned"
+        )
+        if partial:
+            dropped_desc = "; ".join(
+                f"{s.get('reference', '?')} ({s.get('footprint') or 'no footprint'}): "
+                f"{s.get('reason', 'unresolved footprint')}"
+                for s in skipped_footprints
+            )
+            message = (
+                base_message
+                + f". {len(skipped_footprints)} component(s) SKIPPED — footprint did not "
+                f"resolve, board is PARTIAL: {dropped_desc}"
+            )
+        else:
+            message = base_message
         response: Dict[str, Any] = {
-            "success": True,
-            "message": (
-                f"PCB updated from schematic: {len(added_footprints)} footprints added, "
-                f"{len(added_nets)} nets added, {assigned_pads} pads assigned"
-            ),
+            "success": not partial,
+            "message": message,
             "nets_added": added_nets,
             "nets_total": len(net_names),
             "pads_assigned": assigned_pads,
@@ -278,6 +297,9 @@ def handle_sync_schematic_to_board(
             # place/move/get_component_list calls see the synced footprints.
             "boardReloaded": board_reloaded,
         }
+        if partial:
+            response["errorCode"] = "FOOTPRINTS_SKIPPED"
+            response["partial"] = True
         if unmatched_pads:
             warn = (
                 f"{len(unmatched_pads)} schematic pin(s) expected a net but were not "
@@ -401,6 +423,35 @@ def handle_create_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         else:
             path = params.get("path", ".")
         metadata = params.get("metadata", {})
+
+        # Accept a full ``.kicad_sch`` FILE path in ``path`` (mirrors
+        # create_project's S1a normalization).  Callers naturally point ``path``
+        # at the file they want created; treating it strictly as a directory
+        # double-appended ``<name>.kicad_sch`` and produced
+        # ".../scratch.kicad_sch/scratch.kicad_sch" -> FILE_NOT_FOUND (A7).
+        if path and str(path).endswith(".kicad_sch"):
+            derived_name = os.path.splitext(os.path.basename(path))[0]
+            if project_name:
+                given = project_name
+                if given.endswith(".kicad_sch"):
+                    given = given[: -len(".kicad_sch")]
+                if given != derived_name:
+                    return {
+                        "success": False,
+                        "message": (
+                            f'Conflicting schematic names: path implies "{derived_name}" '
+                            f'(from {os.path.basename(path)}) but name="{project_name}". '
+                            "Pass `path` as the directory and `name` as the schematic "
+                            "name, or make the two agree."
+                        ),
+                        "errorCode": "SCHEMATIC_NAME_CONFLICT",
+                        "hint": (
+                            "`path` may be the containing directory OR the full "
+                            "<name>.kicad_sch file, but then its basename must match `name`."
+                        ),
+                    }
+            project_name = derived_name
+            path = os.path.dirname(path) or "."
 
         if not project_name:
             return {

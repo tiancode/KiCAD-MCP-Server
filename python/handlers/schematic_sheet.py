@@ -67,6 +67,18 @@ def handle_create_hierarchical_sheet(
             result["pins"] = pins_created
         if pin_errors:
             result["pinErrors"] = pin_errors
+            # A8: the documented auto-pin feature failed for at least one pin, so
+            # the call did NOT do what was asked — report success:false with a
+            # dedicated errorCode while preserving partial info (the sheet box was
+            # still inserted, and any pins that did succeed are listed).
+            result["success"] = False
+            result["errorCode"] = "SHEET_PINS_FAILED"
+            detail = "; ".join(f"{e.get('pin')}: {e.get('message')}" for e in pin_errors)
+            result["message"] = (
+                f"Sheet '{sheet_name}' was created, but "
+                f"{len(pin_errors)} of {len(pin_errors) + len(pins_created)} requested "
+                f"sheet pin(s) could not be added: {detail}"
+            )
         return result
     except Exception as e:  # API boundary; bucket: catch + return
         logger.error(f"Error creating hierarchical sheet: {e}", exc_info=True)

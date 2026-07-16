@@ -426,6 +426,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "get_backend_info": "ui",
         "get_backend_state": "ui",
         "launch_kicad_ui": "ui",
+        "quit_kicad_ui": "ui",
         "reconcile_backends": "ui",
         "run_action": "ui",
         "add_to_selection": "selection",
@@ -539,7 +540,9 @@ class KiCADInterface(BoardPersistenceMixin):
         self.component_commands = ComponentCommands(self.board, self.footprint_library)
         self.routing_commands = RoutingCommands(self.board)
         self.freerouting_commands = FreeroutingCommands(
-            self.board, signature_callback=self._on_swig_direct_save
+            self.board,
+            signature_callback=self._on_swig_direct_save,
+            board_reload_callback=self.reload_board_from_disk,
         )
         self.design_rule_commands = DesignRuleCommands(self.board)
         self.export_commands = ExportCommands(self.board)
@@ -635,6 +638,9 @@ class KiCADInterface(BoardPersistenceMixin):
                     "align_components",
                     "check_courtyard_overlaps",
                     "duplicate_component",
+                    "add_component_annotation",
+                    "group_components",
+                    "replace_component",
                 ),
             ),
             (
@@ -1918,15 +1924,21 @@ class KiCADInterface(BoardPersistenceMixin):
                 if result.get("success", False):
                     if command == "create_project" or command == "open_project":
                         logger.info("Updating board reference...")
-                        # Get board from the project commands handler
-                        self.board = self.project_commands.board
+                        # C2: transactional swap — validate the freshly
+                        # created/opened board BEFORE committing it, and keep
+                        # the previously-loaded board untouched until then.  A
+                        # create/open that yields an unusable board must NOT
+                        # strand the caller by clobbering the project they
+                        # already had loaded.
+                        previous_board = getattr(self, "board", None)
+                        candidate = self.project_commands.board
 
                         # Detect SWIG dehydration before claiming success.
                         # Without this, every later board op sees a raw
                         # SwigPyObject and raises AttributeError, while the
                         # MCP keeps reporting "Opened project" — the exact
                         # symptom users hit on KiCAD nightlies.
-                        if not self._is_board_healthy():
+                        if not self._is_board_healthy(candidate):
                             board_path = (result.get("project") or {}).get("boardPath")
                             recovered = None
                             if board_path:
@@ -1936,29 +1948,39 @@ class KiCADInterface(BoardPersistenceMixin):
                                 )
                                 recovered = self._safe_load_board(board_path)
                             if recovered is not None:
-                                self.board = recovered
-                                self.project_commands.board = recovered
+                                candidate = recovered
                                 result.setdefault("warnings", []).append(
                                     "SWIG board proxy was dehydrated on load; "
                                     "recovered via pcbnew module reload"
                                 )
                             else:
-                                # Surface the truth — never claim success when
-                                # the board is unusable.
+                                # Recovery failed — restore the previous board
+                                # so a bad open/create doesn't discard the
+                                # project the caller already had, and surface a
+                                # truthful failure (no false "loaded the board"
+                                # claim, no bogus restart advice for what is a
+                                # corrupt/unreadable file).
+                                self.project_commands.board = previous_board
+                                self.board = previous_board
                                 return {
                                     "success": False,
-                                    "message": (
-                                        f"{command} loaded the board but the SWIG "
-                                        "proxy is dehydrated and recovery failed"
-                                    ),
+                                    "message": (f"{command} could not load a usable board"),
+                                    "errorCode": "PARSE_ERROR",
                                     "errorDetails": (
                                         "pcbnew.LoadBoard returned a BOARD whose "
-                                        "method dispatch is missing (raw SwigPyObject). "
-                                        "This indicates SWIG state corruption in the "
-                                        "current Python process — restart the MCP "
-                                        "server to recover."
+                                        "method dispatch is missing (raw "
+                                        "SwigPyObject) — the file is unreadable or "
+                                        "the SWIG proxy is dehydrated. The "
+                                        "previously-loaded project (if any) was kept."
+                                    ),
+                                    "hint": (
+                                        "Verify the .kicad_pcb is a valid KiCad "
+                                        "board, then retry."
                                     ),
                                 }
+                        # Commit the validated board.
+                        self.board = candidate
+                        self.project_commands.board = candidate
                         self._update_command_handlers()
                         # Record the file's signature so subsequent auto-saves
                         # can detect external modifications and refuse to
@@ -2072,6 +2094,13 @@ class KiCADInterface(BoardPersistenceMixin):
         # Mutates pads of a placed footprint via SWIG (repairs broken
         # library footprints, e.g. empty pad numbers / copper == drill).
         "edit_component_pad",
+        # Re-implemented component tools (E2E round 7): all mutate the SWIG
+        # board (add a PCB_TEXT, add/move PCB_GROUPs, swap a footprint) and so
+        # must auto-save and hit the cross-backend conflict gate like their
+        # move_component / delete_component siblings.
+        "add_component_annotation",
+        "group_components",
+        "replace_component",
     }
 
     # IPC commands that only read the board.  Used by the cross-backend
@@ -2301,6 +2330,30 @@ class KiCADInterface(BoardPersistenceMixin):
             "dirtyReason": "Board file matches the MCP recorded disk signature",
             "diskChangedExternally": False,
         }
+
+    def reload_board_from_disk(self, board_path: str) -> bool:
+        """Replace the in-memory board with a fresh load of ``board_path``.
+
+        Used by commands that rewrite the loaded board's file wholesale (e.g.
+        autoroute's SES import) so subsequent reads serve the canonical on-disk
+        content instead of a stale in-place-mutated proxy. Mirrors the
+        sync_schematic_to_board reload: inherits ``_safe_load_board``'s
+        dehydration recovery, rebinds every command handler, and re-records the
+        disk signature. Returns False (leaving the current board in place) if
+        the reload fails.
+        """
+        reloaded = self._safe_load_board(board_path)
+        if reloaded is None:
+            logger.warning(
+                "reload_board_from_disk: could not reload %s; keeping the "
+                "current in-memory board",
+                board_path,
+            )
+            return False
+        self.board = reloaded
+        self._update_command_handlers()
+        self._record_board_signature(board_path)
+        return True
 
     def _update_command_handlers(self) -> None:
         """Update board reference in all command handlers"""
@@ -3102,9 +3155,7 @@ class KiCADInterface(BoardPersistenceMixin):
             return False
         return True
 
-    def _apply_schematic_fields_to_footprint(
-        self, fp: Any, fields: Dict[str, str]
-    ) -> List[str]:
+    def _apply_schematic_fields_to_footprint(self, fp: Any, fields: Dict[str, str]) -> List[str]:
         """Copy schematic custom fields onto one board footprint.
 
         Returns the names of fields actually written (added or value-changed).
@@ -3184,8 +3235,7 @@ class KiCADInterface(BoardPersistenceMixin):
                 fields_written += len(written)
         if footprints_updated:
             logger.info(
-                "propagated schematic sourcing fields to %d footprint(s), "
-                "%d field(s) written",
+                "propagated schematic sourcing fields to %d footprint(s), " "%d field(s) written",
                 footprints_updated,
                 fields_written,
             )

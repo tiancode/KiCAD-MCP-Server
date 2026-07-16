@@ -195,12 +195,19 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       componentRef: z.string().describe("Component reference (e.g., U1, R1)"),
       pinName: z.string().describe("Pin name/number to connect"),
       netName: z.string().describe("Name of the net to connect to"),
+      allowCoincidentPin: z
+        .boolean()
+        .optional()
+        .describe(
+          "connect even if a DIFFERENT component's pin sits at exactly the same coordinate — default refuses with kind:'coincident_pin'",
+        ),
     },
     async (args: {
       schematicPath: string;
       componentRef: string;
       pinName: string;
       netName: string;
+      allowCoincidentPin?: boolean;
     }) => {
       const result = await callKicadScript("connect_to_net", args);
       if (result.success) {

@@ -870,3 +870,74 @@ class TestSearchSymbolsMultiToken:
         results = manager.search_symbols("   VCC   power   ")
         names = [s.full_ref for s in results]
         assert names == ["power:VCC"]
+
+
+# ---------------------------------------------------------------------------
+# C10: register_symbol_library must validate the path before writing an entry
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+class TestRegisterSymbolLibraryValidation:
+    """register_symbol_library accepted nonexistent paths and wrong-type files,
+    writing dangling sym-lib-table entries KiCAD later fails to parse (C10).
+    It must now require an EXISTING .kicad_sym FILE."""
+
+    def _sym_table_text(self, project_dir: Path) -> str:
+        tbl = project_dir / "sym-lib-table"
+        return tbl.read_text(encoding="utf-8") if tbl.exists() else ""
+
+    def _project(self, tmp_path: Path) -> Path:
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "mini.kicad_pro").write_text("{}", encoding="utf-8")
+        return proj
+
+    def test_rejects_nonexistent_symbol_lib(self, tmp_path):
+        from commands.symbol_creator import SymbolCreator
+
+        proj = self._project(tmp_path)
+        out = SymbolCreator().register_symbol_library(
+            library_path=str(proj / "nope.kicad_sym"),
+            scope="project",
+            project_path=str(proj / "mini.kicad_pro"),
+        )
+        assert out["success"] is False
+        assert out["errorCode"] == "LIBRARY_NOT_FOUND"
+        assert "nope" not in self._sym_table_text(proj)
+
+    def test_rejects_wrong_type_file(self, tmp_path):
+        """A .kicad_pcb passed as a symbol library is a type error."""
+        from commands.symbol_creator import SymbolCreator
+
+        proj = self._project(tmp_path)
+        board = proj / "mini.kicad_pcb"
+        board.write_text("(kicad_pcb)", encoding="utf-8")
+
+        out = SymbolCreator().register_symbol_library(
+            library_path=str(board),
+            scope="project",
+            project_path=str(proj / "mini.kicad_pro"),
+        )
+        assert out["success"] is False
+        assert out["errorCode"] == "INVALID_LIBRARY_TYPE"
+        assert not self._sym_table_text(proj).strip() or "kicad_pcb" not in self._sym_table_text(
+            proj
+        )
+
+    def test_accepts_existing_kicad_sym(self, tmp_path):
+        from commands.symbol_creator import SymbolCreator
+
+        proj = self._project(tmp_path)
+        lib = proj / "custom.kicad_sym"
+        lib.write_text(
+            "(kicad_symbol_lib (version 20241209) (generator kicad-mcp))\n",
+            encoding="utf-8",
+        )
+
+        out = SymbolCreator().register_symbol_library(
+            library_path=str(lib),
+            scope="project",
+            project_path=str(proj / "mini.kicad_pro"),
+        )
+        assert out["success"] is True
+        assert out.get("already_registered") is False
+        assert '(name "custom")' in self._sym_table_text(proj)

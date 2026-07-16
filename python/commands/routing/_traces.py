@@ -9,7 +9,12 @@ from typing import Any, Dict
 
 import pcbnew
 
-from ._helpers import _refuse_with_obstacles, _track_width_error
+from ._helpers import (
+    _refuse_cross_net_short,
+    _refuse_with_obstacles,
+    _track_width_error,
+    endpoint_net_conflicts,
+)
 
 logger = logging.getLogger("kicad_interface")
 
@@ -163,6 +168,21 @@ class TraceMixin:
             if not net:
                 net = start_pad.GetNetname() or end_pad.GetNetname() or ""
 
+            # Refuse a cross-net short (B4): if an endpoint pad carries a
+            # different net than the trace's net, connecting them bridges two
+            # nets — a hard short DRC will flag.  Distinct from the third-pad
+            # crossing gate below (SHORT_REFUSED); force=true overrides.  We
+            # forward `force` into the internal route_trace legs so this
+            # override reaches them too (route_trace independently re-checks).
+            if not force:
+                conflicts = endpoint_net_conflicts(
+                    self.board,
+                    [(start_pos.x, start_pos.y), (end_pos.x, end_pos.y)],
+                    net,
+                )
+                if conflicts:
+                    return _refuse_cross_net_short(net, conflicts)
+
             # Pick netclass-aware default width when caller didn't specify.
             # GetCurrentTrackWidth() returns whatever happens to be selected
             # in design settings, which is usually 0.2mm on a fresh board —
@@ -242,6 +262,10 @@ class TraceMixin:
                         "layer": start_layer,
                         "width": width,
                         "net": net,
+                        # Forward the cross-net override: route_pad_to_pad already
+                        # gated the endpoints above, so route_trace's own re-check
+                        # must not veto a forced insert.
+                        "force": force,
                     }
                 )
                 # Via connecting both layers
@@ -261,6 +285,7 @@ class TraceMixin:
                         "layer": end_layer,
                         "width": width,
                         "net": net,
+                        "force": force,
                     }
                 )
                 success = r1.get("success") and r2.get("success")
@@ -289,6 +314,7 @@ class TraceMixin:
                         "layer": layer if layer else start_layer,
                         "width": width,
                         "net": net,
+                        "force": force,
                     }
                 )
 
@@ -326,6 +352,28 @@ class TraceMixin:
                 "errorDetails": str(e),
             }
 
+    @staticmethod
+    def _trace_endpoint_nm(spec: Any, resolved_point: Any) -> Any:
+        """Endpoint coordinates in nm for the cross-net short check.
+
+        Prefers the raw ``{x, y, unit}`` spec (unit-aware, and free of
+        VECTOR2I internals so it is testable under a stub pcbnew); falls back
+        to the resolved VECTOR2I's ``.x``/``.y`` for the pad-reference form.
+        Returns ``(x_nm, y_nm)`` or ``None`` when neither is usable.
+        """
+        if isinstance(spec, dict) and "x" in spec and "y" in spec:
+            unit = str(spec.get("unit", "mm"))
+            scale = 1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
+            try:
+                return int(spec["x"] * scale), int(spec["y"] * scale)
+            except (TypeError, ValueError):
+                return None
+        try:
+            x, y = int(resolved_point.x), int(resolved_point.y)
+            return x, y
+        except (TypeError, ValueError, AttributeError):
+            return None
+
     def route_trace(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Route a trace between two points or pads"""
         try:
@@ -342,6 +390,7 @@ class TraceMixin:
             width = params.get("width")
             net = params.get("net")
             via = params.get("via", False)
+            force = bool(params.get("force", False))
 
             if not start or not end:
                 return {
@@ -371,6 +420,22 @@ class TraceMixin:
             # Get start point
             start_point = self._get_point(start)
             end_point = self._get_point(end)
+
+            # Refuse a cross-net short (B4): stamping this net onto a track
+            # whose endpoint lands inside a pad on a DIFFERENT net bridges the
+            # two nets.  Only checked when a net is being assigned; force=true
+            # (also forwarded from route_pad_to_pad) overrides.  Endpoint
+            # coordinates come from the raw start/end so the check does not
+            # depend on VECTOR2I internals.
+            if net and not force:
+                endpoints_nm = []
+                for spec, vec in ((start, start_point), (end, end_point)):
+                    nm = self._trace_endpoint_nm(spec, vec)
+                    if nm is not None:
+                        endpoints_nm.append(nm)
+                conflicts = endpoint_net_conflicts(self.board, endpoints_nm, net)
+                if conflicts:
+                    return _refuse_cross_net_short(net, conflicts)
 
             # Create track segment
             track = pcbnew.PCB_TRACK(self.board)

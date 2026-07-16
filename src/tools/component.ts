@@ -89,8 +89,14 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .string()
         .optional()
         .describe("Optional target layer (e.g., 'F.Cu', 'B.Cu') - flips component if needed"),
+      allowOffBoard: z
+        .boolean()
+        .optional()
+        .describe(
+          "Allow moving the component outside the board outline. Off-board targets are refused by default (errorCode POSITION_OFF_BOARD); set true to place a part off the board intentionally.",
+        ),
     },
-    async ({ reference, position, rotation, layer }) => {
+    async ({ reference, position, rotation, layer, allowOffBoard }) => {
       logger.debug(
         `Moving component: ${reference} to ${position.x},${position.y} ${position.unit}`,
       );
@@ -99,6 +105,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         position,
         rotation,
         layer,
+        allowOffBoard,
       });
 
       return formatKicadResult(result);
@@ -215,6 +222,63 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
 
       return formatKicadResult(result);
     },
+  );
+
+  // ------------------------------------------------------
+  // Add Component Annotation Tool
+  // ------------------------------------------------------
+  server.tool(
+    "add_component_annotation",
+    "Add a text annotation/comment near a PCB component: places a PCB_TEXT at the component's position (plus optional offset) on a silkscreen or comments layer. Use offset to sit the label beside the part instead of on top of it.",
+    {
+      reference: z.string().describe("Reference designator of the component to annotate (e.g., 'R5')"),
+      text: z.string().describe("Annotation / comment text"),
+      layer: z
+        .string()
+        .optional()
+        .describe(
+          "Target layer (default 'F.Silkscreen'); e.g. 'B.Silkscreen', 'User.Comments', 'F.Fab'. Legacy short names ('F.SilkS') are also accepted.",
+        ),
+      offset: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          unit: z.enum(["mm", "inch", "mil"]).optional(),
+        })
+        .optional()
+        .describe("Offset from the component origin (default {0,0} mm — text lands at the part)"),
+      size: z.number().optional().describe("Text height in mm (default 1.0)"),
+    },
+    passthrough("add_component_annotation"),
+  );
+
+  // ------------------------------------------------------
+  // Group Components Tool
+  // ------------------------------------------------------
+  server.tool(
+    "group_components",
+    "Group PCB components into a named PCB_GROUP for easier selection. Refuses (creating nothing) if any reference is unknown. A component already in another group is moved into the new one; a group left empty by that move is removed — both reported.",
+    {
+      references: z.array(z.string()).describe("Reference designators to group (e.g., ['R1','R2'])"),
+      groupName: z.string().describe("Name for the new group"),
+    },
+    passthrough("group_components"),
+  );
+
+  // ------------------------------------------------------
+  // Replace Component Tool (DESTRUCTIVE)
+  // ------------------------------------------------------
+  server.tool(
+    "replace_component",
+    "Swap a placed footprint for a different library footprint. DESTRUCTIVE: deletes the old part and adds the new one, preserving reference, position, rotation and board side, and transferring pad nets by pad number. Pads that don't match on either side are reported.",
+    {
+      reference: z.string().describe("Reference designator of the component to replace (e.g., 'U1')"),
+      newFootprint: z
+        .string()
+        .describe("New footprint library id ('Library:Footprint' or bare 'Footprint')"),
+      newValue: z.string().optional().describe("Optional new component value (defaults to the old value)"),
+    },
+    passthrough("replace_component"),
   );
 
   // ------------------------------------------------------
@@ -391,20 +455,33 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   // ------------------------------------------------------
   server.tool(
     "align_components",
-    "Align multiple PCB components horizontally, vertically or on a grid with optional spacing.",
+    "Align multiple PCB components onto a common line: 'horizontal' shares one Y, 'vertical' shares one X, 'edge' snaps to a board edge. With `spacing` the parts are also evenly spaced (no overlap); with `referenceComponent` that part stays fixed and both the shared axis and the spacing sequence are anchored to it.",
     {
       references: z.array(z.string()).describe("Array of component references to align"),
-      alignmentType: z.enum(["horizontal", "vertical", "grid"]).describe("Type of alignment"),
-      spacing: z.number().optional().describe("Spacing between components in mm"),
-      referenceComponent: z.string().optional().describe("Reference component for alignment"),
+      alignmentType: z
+        .enum(["horizontal", "vertical", "edge"])
+        .describe("Type of alignment: horizontal (shared Y), vertical (shared X), or edge"),
+      spacing: z
+        .number()
+        .optional()
+        .describe("Even spacing between adjacent components in mm (prevents overlap)"),
+      referenceComponent: z
+        .string()
+        .optional()
+        .describe("Anchor component: it stays fixed; the shared axis and spacing start from it"),
+      edge: z
+        .enum(["left", "right", "top", "bottom"])
+        .optional()
+        .describe("Board edge to align to (required when alignmentType is 'edge')"),
     },
-    async ({ references, alignmentType, spacing, referenceComponent }) => {
+    async ({ references, alignmentType, spacing, referenceComponent, edge }) => {
       logger.debug(`Aligning components: ${references.join(", ")}`);
       const result = await callKicadScript("align_components", {
         references,
         alignmentType,
         spacing,
         referenceComponent,
+        edge,
       });
 
       return formatKicadResult(result);

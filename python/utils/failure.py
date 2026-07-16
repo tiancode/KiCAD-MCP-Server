@@ -76,6 +76,25 @@ def classify_failure(
             "Ask the user to open the board in KiCAD's PCB editor, then retry.",
         )
 
+    # IPC backend required but unavailable.  A family of handlers — run_action,
+    # transactions, board metadata, shapes, selection — refuse with
+    # "… require(s) the IPC backend …" when no IPC connection exists.  This is a
+    # distinct, recoverable CLIENT state (the tool has no SWIG equivalent and,
+    # by policy, run_action will not auto-launch the heavyweight KiCad GUI as a
+    # side effect), so it must never fall through to INTERNAL_ERROR (the C8
+    # miscode; board_meta._ipc_unavailable emitted no code at all before this).
+    # Matches both "require the IPC backend" (plural-subject handlers) and
+    # "requires the IPC backend" (run_action) — the 's' means neither phrase is
+    # a substring of the other.
+    if "require the ipc backend" in text or "requires the ipc backend" in text:
+        return (
+            "IPC_REQUIRED",
+            "This tool needs the KiCAD IPC backend (no SWIG equivalent). Start "
+            "KiCAD with the IPC API server enabled — call "
+            "manage_kicad_ui(action=launch), or pass allowLaunch:true where the "
+            "tool supports it — then retry.",
+        )
+
     if "no such file" in text or ("not found" in text and (".kicad" in text or "file" in text)):
         return (
             "FILE_NOT_FOUND",

@@ -468,6 +468,150 @@ def test_run_erc_opt_out_of_auto_refresh(monkeypatch, tmp_path):
     assert "lib_symbols_refresh" not in out
 
 
+# ---------------------------------------------------------------------------
+# A13 — pre-refresh must NOT revert set_symbol_pin_types' embedded pin-type edit
+# ---------------------------------------------------------------------------
+# On-disk .kicad_sym: pins blanket ``unspecified`` (the easyeda import shape).
+# Sub-symbol uses the SHORT name exactly as extract_symbol_from_library emits.
+_LIB_UNSPEC = """\
+(kicad_symbol_lib
+  (version 20231120)
+  (generator kicad_symbol_editor)
+  (symbol "RDA5807M"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "RDA5807M" (at 0 0 0))
+    (property "Description" "FM radio" (at 0 0 0))
+    (symbol "RDA5807M_1_1"
+      (pin unspecified line (at -10 5 0) (length 5)
+        (name "VDD" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27)))))
+      (pin unspecified line (at -10 0 0) (length 5)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)
+"""
+
+# Embedded copy mirrors what inject_symbol_into_schematic writes: top-level name
+# is library-prefixed, sub-symbol keeps the short name.
+_SCH_EMBEDDED_UNSPEC = """\
+(kicad_sch
+  (version 20231120)
+  (generator eeschema)
+  (lib_symbols
+    (symbol "Device:RDA5807M"
+      (property "Reference" "U" (at 0 0 0))
+      (property "Value" "RDA5807M" (at 0 0 0))
+      (property "Description" "FM radio" (at 0 0 0))
+      (symbol "RDA5807M_1_1"
+        (pin unspecified line (at -10 5 0) (length 5)
+          (name "VDD" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin unspecified line (at -10 0 0) (length 5)
+          (name "GND" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
+  )
+  (symbol (lib_id "Device:RDA5807M") (at 100 80 0) (unit 1)
+    (property "Reference" "U1" (at 100 70 0))
+  )
+)
+"""
+
+
+def _embedded_pin_types(sch_path, lib_id):
+    import commands.easyeda_import as ee
+
+    content = sch_path.read_text(encoding="utf-8")
+    ls_start = content.find("(lib_symbols")
+    ls_end = ee._match_paren(content, ls_start)
+    span = ee._symbol_span(content[ls_start:ls_end], lib_id)
+    block = content[ls_start:ls_end][span[0] : span[1]]
+    out = {}
+    i = 0
+    while True:
+        p = block.find("(pin ", i)
+        if p == -1:
+            break
+        end = ee._match_paren(block, p)
+        pb = block[p:end]
+        hdr = ee._PIN_HEADER_RE.match(pb)
+        nm = ee._PIN_NAME_RE.search(pb)
+        if hdr and nm:
+            out[nm.group(1)] = hdr.group(1)
+        i = end
+    return out
+
+
+def test_refresh_preserves_pin_type_override(monkeypatch, tmp_path):
+    """A13: set_symbol_pin_types (schematic mode) retypes pins in the embedded
+    snapshot while the on-disk .kicad_sym still says ``unspecified``.  run_erc's
+    pre-refresh must NOT revert that deliberate edit — the marked pins stay
+    output/power_in instead of collapsing back to unspecified."""
+    import commands.symbol_pin_types as spt
+
+    lib_dir = tmp_path / "symbols"
+    lib_dir.mkdir()
+    (lib_dir / "Device.kicad_sym").write_text(_LIB_UNSPEC, encoding="utf-8")
+    sch_path = tmp_path / "demo.kicad_sch"
+    sch_path.write_text(_SCH_EMBEDDED_UNSPEC, encoding="utf-8")
+
+    spt.apply_to_schematic(
+        sch_path, "Device:RDA5807M", spt.normalize_mapping({"1": "output", "2": "power_in"})
+    )
+    assert _embedded_pin_types(sch_path, "Device:RDA5807M") == {
+        "VDD": "output",
+        "GND": "power_in",
+    }
+
+    loader = _make_loader(tmp_path, lib_dir, monkeypatch)
+    out = loader.refresh_embedded_lib_symbols(sch_path)
+
+    assert out["success"] is True
+    # The override survives the pre-refresh (no revert to unspecified).
+    assert _embedded_pin_types(sch_path, "Device:RDA5807M") == {
+        "VDD": "output",
+        "GND": "power_in",
+    }
+    # fresh + override == embedded ⇒ no spurious rewrite reported.
+    assert out["refreshed"] == []
+    assert out["unchanged"] == ["Device:RDA5807M"]
+
+
+def test_refresh_merges_override_into_genuine_library_drift(monkeypatch, tmp_path):
+    """The overridden pin types are preserved WHILE genuine library drift (a
+    changed Description on disk) still flows into the embedded copy."""
+    import commands.symbol_pin_types as spt
+
+    lib_dir = tmp_path / "symbols"
+    lib_dir.mkdir()
+    (lib_dir / "Device.kicad_sym").write_text(_LIB_UNSPEC, encoding="utf-8")
+    sch_path = tmp_path / "demo.kicad_sch"
+    sch_path.write_text(_SCH_EMBEDDED_UNSPEC, encoding="utf-8")
+
+    spt.apply_to_schematic(sch_path, "Device:RDA5807M", spt.normalize_mapping({"1": "output"}))
+
+    # Library genuinely drifts on disk.
+    (lib_dir / "Device.kicad_sym").write_text(
+        _LIB_UNSPEC.replace("FM radio", "FM radio receiver (rev B)"), encoding="utf-8"
+    )
+
+    loader = _make_loader(tmp_path, lib_dir, monkeypatch)
+    out = loader.refresh_embedded_lib_symbols(sch_path)
+
+    assert out["success"] is True
+    assert out["refreshed"] == ["Device:RDA5807M"]
+    content = sch_path.read_text(encoding="utf-8")
+    # Drift flowed in.
+    assert "FM radio receiver (rev B)" in content
+    # Override preserved; the un-overridden pin took the (still unspecified) disk value.
+    types = _embedded_pin_types(sch_path, "Device:RDA5807M")
+    assert types["VDD"] == "output"
+    assert types["GND"] == "unspecified"
+
+
 def test_run_erc_continues_when_pre_refresh_fails(monkeypatch, tmp_path):
     """Pre-refresh is best-effort — a failure (corrupted schematic,
     missing library, etc.) must NOT block ERC.  The failure status is

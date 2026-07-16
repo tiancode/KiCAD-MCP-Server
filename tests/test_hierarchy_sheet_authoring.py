@@ -334,6 +334,131 @@ class TestAddSheetPin:
         assert "side" in result["message"].lower()
 
 
+# Compact (single-line) parent — the pretty-printed _PARENT above hid A10 because
+# add_sheet's spliced (sheet block landed at the start of a line by luck. When the
+# parent is one compact line, the block was glued mid-line and the pin lookup
+# (line-anchored) never found it.
+_COMPACT_PARENT = (
+    '(kicad_sch (version 20250114) (generator "eeschema") '
+    f'(uuid "{_ROOT_UUID}") (paper "A4") (lib_symbols) '
+    '(sheet_instances (path "/" (page "1"))))'
+)
+
+
+@pytest.mark.unit
+class TestCompactParentSerialization:
+    """A10/A8: create_hierarchical_sheet + add_sheet_pin on a COMPACT parent."""
+
+    def _compact_parent(self, tmp_path: Path) -> Path:
+        sch = tmp_path / "compact.kicad_sch"
+        sch.write_text(_COMPACT_PARENT, encoding="utf-8")
+        return sch
+
+    def test_add_sheet_starts_block_on_own_line(self, tmp_path: Path) -> None:
+        sch = self._compact_parent(tmp_path)
+        result = create_hierarchical_sheet(
+            str(sch),
+            sheet_name="power",
+            child_filename="power_child.kicad_sch",
+            position=(180.0, 50.0),
+            size=(50.0, 40.0),
+        )
+        assert result["success"] is True, result
+        content = sch.read_text(encoding="utf-8")
+        # The (sheet opener must NOT be glued to the compact first line.
+        assert "(sheet\n" in content
+        import sexpdata
+
+        assert sexpdata.loads(content)[0] == sexpdata.Symbol("kicad_sch")
+
+    def test_create_then_add_pin_round_trip(self, tmp_path: Path) -> None:
+        sch = self._compact_parent(tmp_path)
+        created = create_hierarchical_sheet(
+            str(sch),
+            sheet_name="power",
+            child_filename="power_child.kicad_sch",
+            position=(180.0, 50.0),
+            size=(50.0, 40.0),
+        )
+        assert created["success"] is True, created
+
+        res = add_sheet_pin(
+            str(sch), sheet_name="power", pin_name="GND", shape="input", side="left"
+        )
+        assert res["success"] is True, res
+        content = sch.read_text(encoding="utf-8")
+        assert '(pin "GND" input' in content
+        assert content.count("(") == content.count(")")
+        # And the matching child hierarchical label was written.
+        child = (tmp_path / "power_child.kicad_sch").read_text(encoding="utf-8")
+        assert '(hierarchical_label "GND"' in child
+
+
+@pytest.mark.unit
+class TestInlinePinAuthoring:
+    """A8: the create_hierarchical_sheet handler reports success:false with
+    errorCode SHEET_PINS_FAILED when an inline pin could not be created, and
+    (with A10 fixed) inline pins succeed on a compact parent."""
+
+    def _iface(self):
+        from unittest.mock import patch
+
+        with patch("kicad_interface.USE_IPC_BACKEND", False):
+            from kicad_interface import KiCADInterface
+
+            return KiCADInterface.__new__(KiCADInterface)
+
+    def test_inline_pins_succeed_on_compact_parent(self, tmp_path: Path) -> None:
+        sch = tmp_path / "compact.kicad_sch"
+        sch.write_text(_COMPACT_PARENT, encoding="utf-8")
+        result = self._iface()._handle_create_hierarchical_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "power",
+                "childFilename": "power_child.kicad_sch",
+                "position": {"x": 180, "y": 50},
+                "size": {"width": 50, "height": 40},
+                "pins": [
+                    {"name": "VBUS", "shape": "input"},
+                    {"name": "OUT3V3", "shape": "output"},
+                ],
+            }
+        )
+        assert result["success"] is True, result
+        assert "pinErrors" not in result, result
+        assert len(result.get("pins", [])) == 2
+        content = sch.read_text(encoding="utf-8")
+        assert '(pin "VBUS" input' in content
+        assert '(pin "OUT3V3" output' in content
+        # Matching hierarchical labels landed in the child.
+        child = (tmp_path / "power_child.kicad_sch").read_text(encoding="utf-8")
+        assert '(hierarchical_label "VBUS"' in child
+        assert '(hierarchical_label "OUT3V3"' in child
+
+    def test_pin_failure_downgrades_success_with_errorcode(self, tmp_path: Path) -> None:
+        # Force a pin failure with an invalid shape → the sheet is still created,
+        # but the overall call must NOT report success (A8), and must carry a
+        # dedicated errorCode plus the partial info.
+        sch = tmp_path / "compact.kicad_sch"
+        sch.write_text(_COMPACT_PARENT, encoding="utf-8")
+        result = self._iface()._handle_create_hierarchical_sheet(
+            {
+                "schematicPath": str(sch),
+                "sheetName": "power",
+                "childFilename": "power_child.kicad_sch",
+                "position": {"x": 180, "y": 50},
+                "size": {"width": 50, "height": 40},
+                "pins": [{"name": "BAD", "shape": "not_a_shape"}],
+            }
+        )
+        assert result["success"] is False, result
+        assert result["errorCode"] == "SHEET_PINS_FAILED"
+        assert result["pinErrors"][0]["pin"] == "BAD"
+        assert "power" in result["message"]
+        # The sheet box itself was inserted (partial info preserved).
+        assert '(property "Sheetname" "power"' in sch.read_text(encoding="utf-8")
+
+
 @pytest.mark.unit
 class TestRoundTrip:
     def test_parent_still_single_root_and_untouched_content(self, tmp_path: Path) -> None:

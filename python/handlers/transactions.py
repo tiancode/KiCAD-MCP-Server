@@ -28,6 +28,40 @@ from handlers.ipc_gate import require_ipc
 logger = logging.getLogger(__name__)
 
 
+def _transaction_is_open(iface: "KiCADInterface") -> bool:
+    """True when an IPC transaction is currently open on ``iface``.
+
+    The open-transaction marker is the IPC board API's ``_current_commit``
+    handle (set by ``begin_transaction``, cleared by commit/rollback).  Read it
+    defensively — SWIG-only ifaces have no ``ipc_board_api``.
+    """
+    api = getattr(iface, "ipc_board_api", None)
+    if api is None:
+        return False
+    return getattr(api, "_current_commit", None) is not None
+
+
+def visibility_suffix(iface: "KiCADInterface") -> str:
+    """Parenthetical visibility note for a successful IPC mutation message (D3).
+
+    Outside a transaction a mutation is pushed to the live board immediately,
+    so it truly is ``(visible in KiCAD UI)``.  INSIDE an open transaction the
+    mutation is buffered in the pending commit and is NOT observable via ANY
+    read path (get_component_properties / find_component / manage_selection)
+    until ``commit_transaction`` pushes it — claiming it is already visible is
+    untruthful and leads a multi-step agent to think the step failed and retry
+    it (double-apply on commit).  Report it as pending instead.
+
+    Handlers that build a mutation success message currently hard-code the
+    literal ``(visible in KiCAD UI)``; they should append ``visibility_suffix``
+    instead so the note stays honest mid-transaction.  See the cross-package
+    dependency note in the P5b report for the list of call sites.
+    """
+    if _transaction_is_open(iface):
+        return "(pending in open transaction; visible after commit_transaction)"
+    return "(visible in KiCAD UI)"
+
+
 def _ipc_unavailable(reason: str = "") -> Dict[str, Any]:
     base = (
         "Transaction commands require the IPC backend. Launch KiCAD "

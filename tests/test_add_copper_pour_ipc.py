@@ -163,8 +163,14 @@ def test_omitted_outline_with_no_edge_cuts_returns_actionable_error(iface, monke
     iface.ipc_board_api.add_zone.assert_not_called()
 
 
-def test_short_outline_falls_back_to_board_when_possible(iface, monkeypatch):
-    """A 2-point ``outline`` is also too short — same fall-back applies."""
+def test_short_outline_is_refused_not_swapped_for_board(iface, monkeypatch):
+    """B9 (IPC parity with the SWIG path): a SUPPLIED-but-too-short (1-2 point)
+    outline is REFUSED, never silently swapped for the whole-board plane.
+
+    An Edge.Cuts rect IS made available here precisely to prove the short
+    outline still refuses rather than falling back to it — swapping a caller's
+    2-point outline for the entire board copper is a data-integrity hazard.
+    (This test previously locked in the buggy fall-back behaviour.)"""
     from handlers import ipc_fastpath
 
     monkeypatch.setattr(
@@ -178,9 +184,60 @@ def test_short_outline_falls_back_to_board_when_possible(iface, monkeypatch):
         {"layer": "B.Cu", "net": "GND", "outline": [{"x": 0, "y": 0}, {"x": 10, "y": 10}]},
     )
 
+    assert out["success"] is False
+    assert out["errorCode"] == "VALIDATION"
+    assert "at least 3 points" in out["message"]
+    iface.ipc_board_api.add_zone.assert_not_called()
+
+
+def test_omitted_outline_still_falls_back_to_board_rect(iface, monkeypatch):
+    """Companion to the refusal above: an OMITTED outline is the only case that
+    defaults to the board rectangle (matches the SWIG path and the docstring).
+    This is the honest counterpart — omission is intentional 'use the board',
+    a short outline is a mistake to surface, not paper over."""
+    from handlers import ipc_fastpath
+
+    monkeypatch.setattr(
+        ipc_fastpath._zones,
+        "_ipc_board_edge_rect",
+        lambda api: _square(60),
+    )
+
+    out = ipc_fastpath.handle_add_copper_pour(
+        iface,
+        {"layer": "B.Cu", "net": "GND"},  # no outline / points at all
+    )
+
     assert out["success"] is True
     call = iface.ipc_board_api.add_zone.call_args
-    assert len(call.kwargs["points"]) == 4
+    assert call.kwargs["points"] == _square(60)
+    assert out["pour"]["pointCount"] == 4
+
+
+def test_degenerate_colinear_outline_is_refused(iface, monkeypatch):
+    """B9: a >=3-point but colinear (zero-area) outline is refused too — it
+    would persist as a useless no-op zone. Mirrors the SWIG degenerate check."""
+    from handlers import ipc_fastpath
+
+    monkeypatch.setattr(
+        ipc_fastpath._zones,
+        "_ipc_board_edge_rect",
+        lambda api: _square(60),
+    )
+
+    out = ipc_fastpath.handle_add_copper_pour(
+        iface,
+        {
+            "layer": "B.Cu",
+            "net": "GND",
+            "outline": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 20, "y": 0}],
+        },
+    )
+
+    assert out["success"] is False
+    assert out["errorCode"] == "VALIDATION"
+    assert "degenerate" in out["message"].lower()
+    iface.ipc_board_api.add_zone.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
+from ..transactions import visibility_suffix
 from ._common import extract_xy, to_mm
 
 
@@ -66,7 +67,7 @@ def handle_place_component(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         return {
             "success": success,
             "message": (
-                f"Placed component {reference} (visible in KiCAD UI)"
+                f"Placed component {reference} {visibility_suffix(iface)}"
                 if success
                 else "Failed to place component"
             ),
@@ -96,6 +97,7 @@ def handle_move_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         x, y, unit = extract_xy(params)
         x, y = to_mm(x, unit), to_mm(y, unit)
         rotation = params.get("rotation")
+        allow_off_board = bool(params.get("allowOffBoard", False))
 
         # Board-awareness (P11): mirror the SWIG guard.  Reject a target so far
         # outside the Edge.Cuts outline it can only be a units error; flag a
@@ -109,8 +111,7 @@ def handle_move_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         # Only a well-formed numeric bbox counts; anything else (None, or a test
         # stub's MagicMock) means "no outline, can't judge".
         if isinstance(raw_outline, dict) and all(
-            isinstance(raw_outline.get(k), (int, float))
-            for k in ("x1", "y1", "x2", "y2")
+            isinstance(raw_outline.get(k), (int, float)) for k in ("x1", "y1", "x2", "y2")
         ):
             outline = raw_outline
             bbox = (outline["x1"], outline["y1"], outline["x2"], outline["y2"])
@@ -130,6 +131,23 @@ def handle_move_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
                 "boardOutline": outline,
             }
 
+        # Off-board refusal (B10): refuse a merely-off-board target by default
+        # (don't silently park a footprint off the board); allowOffBoard:true
+        # reinstates apply-with-warning.  Refuse BEFORE mutating.
+        if target_class == "off_board" and not allow_off_board:
+            return {
+                "success": False,
+                "message": (
+                    f"Target position ({x}, {y}) mm is outside the board outline "
+                    f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
+                    f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm). Refusing to move "
+                    f"{reference} off the board; pass allowOffBoard:true to place "
+                    f"it there intentionally."
+                ),
+                "errorCode": "POSITION_OFF_BOARD",
+                "boardOutline": outline,
+            }
+
         success = iface.ipc_board_api.move_component(
             reference=reference, x=x, y=y, rotation=rotation
         )
@@ -137,7 +155,7 @@ def handle_move_component(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         response: Dict[str, Any] = {
             "success": success,
             "message": (
-                f"Moved component {reference} (visible in KiCAD UI)"
+                f"Moved component {reference} {visibility_suffix(iface)}"
                 if success
                 else "Failed to move component"
             ),
@@ -168,7 +186,7 @@ def handle_delete_component(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         return {
             "success": success,
             "message": (
-                f"Deleted component {reference} (visible in KiCAD UI)"
+                f"Deleted component {reference} {visibility_suffix(iface)}"
                 if success
                 else "Failed to delete component"
             ),
@@ -231,7 +249,7 @@ def handle_rotate_component(iface: "KiCADInterface", params: Dict[str, Any]) -> 
         return {
             "success": success,
             "message": (
-                f"Rotated component {reference} by {angle}° (visible in KiCAD UI)"
+                f"Rotated component {reference} by {angle}° {visibility_suffix(iface)}"
                 if success
                 else "Failed to rotate component"
             ),

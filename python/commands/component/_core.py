@@ -10,6 +10,7 @@ from typing import Optional
 import pcbnew
 from commands.library import LibraryManager, get_library_manager
 
+from ._annotate_group_replace import AnnotateGroupReplaceMixin
 from ._arrays import ArrayMixin
 from ._courtyard import CourtyardMixin
 from ._pads import PadsMixin
@@ -17,7 +18,14 @@ from ._placement import PlacementMixin
 from ._query import QueryMixin
 
 
-class ComponentCommands(PlacementMixin, QueryMixin, PadsMixin, ArrayMixin, CourtyardMixin):
+class ComponentCommands(
+    PlacementMixin,
+    QueryMixin,
+    PadsMixin,
+    ArrayMixin,
+    CourtyardMixin,
+    AnnotateGroupReplaceMixin,
+):
     """Handles component-related KiCAD operations"""
 
     def __init__(

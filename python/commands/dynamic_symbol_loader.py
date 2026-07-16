@@ -552,6 +552,32 @@ class DynamicSymbolLoader:
                 missing.append(full_name)
                 continue
             old_block = content[start:end]
+
+            # A13: preserve deliberate pin-type overrides recorded by
+            # set_symbol_pin_types (schematic mode).  Without this the wholesale
+            # replace below reverts an embedded pin-type edit back to the
+            # library's types (and persists the revert).  Re-apply ONLY the
+            # marked pins onto the fresh copy — genuine library drift (pin
+            # positions, other pins, graphics, descriptions) still flows.
+            try:
+                from commands.symbol_pin_types import (
+                    read_pin_overrides,
+                    rewrite_pins_in_block,
+                    stamp_pin_overrides,
+                )
+
+                overrides = read_pin_overrides(old_block)
+                if overrides:
+                    fresh, _rec, _keys = rewrite_pins_in_block(fresh, overrides)
+                    fresh = stamp_pin_overrides(fresh, overrides)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    "pin-type override merge failed for %s (%s); "
+                    "refreshing without preserving overrides",
+                    full_name,
+                    e,
+                )
+
             # Strip every line so indentation differences (the embedded
             # copy carries the schematic's lib_symbols indent, the fresh
             # copy comes flat from the .kicad_sym) don't masquerade as

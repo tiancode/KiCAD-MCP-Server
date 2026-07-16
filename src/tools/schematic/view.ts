@@ -219,9 +219,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
     {
       schematicPath: z.string().describe("Path to the .kicad_sch file"),
       text: z.string().describe("Text content to display"),
-      position: xyPointSchema.describe(
-        `Position in schematic mm coordinates. ${XY_POINT_FORMS}`,
-      ),
+      position: xyPointSchema.describe(`Position in schematic mm coordinates. ${XY_POINT_FORMS}`),
       angle: z.number().optional().describe("Rotation angle in degrees (default: 0)"),
       fontSize: z.number().optional().describe("Font size in mm (default: 1.27)"),
       bold: z.boolean().optional().describe("Bold text (default: false)"),
@@ -365,9 +363,18 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
         .string()
         .describe("Sheet name as it appears in the Sheetname property (e.g. 'Storage')"),
       pinName: z.string().describe("Pin name"),
+      shape: z
+        .enum(["input", "output", "bidirectional", "tri_state", "passive"])
+        .optional()
+        .describe(
+          "Signal direction / pin shape — same field name as " +
+            "create_hierarchical_sheet.pins[].shape and add_schematic_hierarchical_label. " +
+            "Should match the sub-sheet hierarchical label shape (default bidirectional).",
+        ),
       pinType: z
-        .enum(["input", "output", "bidirectional"])
-        .describe("Signal direction (should match the sub-sheet hierarchical label shape)"),
+        .enum(["input", "output", "bidirectional", "tri_state", "passive"])
+        .optional()
+        .describe("Deprecated alias for `shape` — prefer `shape`."),
       position: xyPointSchema.describe(
         `Pin position in mm — must be on the sheet block boundary. ${XY_POINT_FORMS}`,
       ),
@@ -380,13 +387,17 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
       schematicPath: string;
       sheetName: string;
       pinName: string;
-      pinType: "input" | "output" | "bidirectional";
+      shape?: "input" | "output" | "bidirectional" | "tri_state" | "passive";
+      pinType?: "input" | "output" | "bidirectional" | "tri_state" | "passive";
       position: XyPointInput;
       orientation?: number;
     }) => {
+      // `shape` is canonical; `pinType` is the deprecated alias (A9).
+      const shape = args.shape ?? args.pinType ?? "bidirectional";
       // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
       const result = await callKicadScript("add_sheet_pin", {
         ...args,
+        shape,
         position: toXyTuple(args.position),
       });
       if (result.success) {

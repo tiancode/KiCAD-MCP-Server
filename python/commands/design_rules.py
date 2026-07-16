@@ -257,6 +257,75 @@ class DesignRuleCommands:
             logger.error("set_design_rules: failed to persist to project: %s", e)
             return {"persisted": False, "projectFile": project_file}
 
+    # Inverse of set_design_rules' rule_key_map (design_rules.py:209): a
+    # persisted board.design_settings.rules key -> the get_design_rules response
+    # field it authoritatively supplies. Only keys that actually live in the
+    # project JSON appear here; everything else keeps its in-memory value.
+    _PROJECT_RULE_TO_RESPONSE = {
+        "min_clearance": "clearance",
+        "min_track_width": "minTrackWidth",
+        "min_via_diameter": "minViaDiameter",
+        "min_through_hole_diameter": "minThroughDrill",
+        "min_microvia_diameter": "minMicroViaDiameter",
+        "min_microvia_drill": "minMicroViaDrill",
+        "min_hole_to_hole": "holeToHoleMin",
+        "min_hole_clearance": "holeClearance",
+        "min_copper_edge_clearance": "copperEdgeClearance",
+    }
+    # Default netclass field -> response field (the board's default track/via).
+    _DEFAULT_CLASS_TO_RESPONSE = {
+        "track_width": "trackWidth",
+        "via_diameter": "viaDiameter",
+        "via_drill": "viaDrill",
+    }
+
+    def _overlay_persisted_design_rules(self, rules: Dict[str, Any]) -> None:
+        """Overlay ``.kicad_pro`` design-rule values onto an in-memory read.
+
+        Mutates ``rules`` in place, replacing keys that the project JSON holds
+        (board.design_settings.rules + the Default netclass) with the persisted
+        values — the source of truth (C12 / D1). Never raises: a missing or
+        unreadable project file simply leaves the in-memory values untouched so
+        the read degrades gracefully rather than failing.
+        """
+        from utils import kicad_pro
+
+        try:
+            project_file = kicad_pro.project_path_for_board(self.board)
+            if not project_file or not os.path.exists(project_file):
+                return
+            data, _ = kicad_pro.load_kicad_pro(project_file)
+        except Exception as e:
+            logger.warning("get_design_rules: could not read persisted project rules: %s", e)
+            return
+
+        board = data.get("board")
+        design_settings = board.get("design_settings") if isinstance(board, dict) else None
+        pro_rules = design_settings.get("rules") if isinstance(design_settings, dict) else None
+        if isinstance(pro_rules, dict):
+            for project_key, response_key in self._PROJECT_RULE_TO_RESPONSE.items():
+                value = pro_rules.get(project_key)
+                if value is not None:
+                    rules[response_key] = value
+
+        default_cls = self._default_netclass(data)
+        if default_cls:
+            for class_key, response_key in self._DEFAULT_CLASS_TO_RESPONSE.items():
+                value = default_cls.get(class_key)
+                if value is not None:
+                    rules[response_key] = value
+
+    @staticmethod
+    def _default_netclass(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Return the ``Default`` net class dict from a loaded .kicad_pro, or None."""
+        net_settings = data.get("net_settings")
+        classes = net_settings.get("classes") if isinstance(net_settings, dict) else None
+        if isinstance(classes, list):
+            for cls in classes:
+                if isinstance(cls, dict) and cls.get("name") == "Default":
+                    return cls
+        return None
+
     def get_design_rules(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get current design rules - KiCAD 9.0 compatible"""
         try:
@@ -295,6 +364,17 @@ class DesignRuleCommands:
                 "copperEdgeClearance": design_settings.m_CopperEdgeClearance / scale,
                 "silkClearance": design_settings.m_SilkClearance / scale,
             }
+
+            # The in-memory BOARD_DESIGN_SETTINGS above is NOT authoritative: in
+            # KiCad 9/10 the design-rule minima live in
+            # board.design_settings.rules and the Default netclass track/via in
+            # the *project* JSON (.kicad_pro), not the .kicad_pcb the SWIG board
+            # mirrors. On both backends the live BDS can report pcbnew
+            # hard-defaults (clearance 0, minTrack 0.2, minVia 0.5, minDrill 0.3)
+            # while the saved project holds the real values (C12 / D1). Overlay
+            # the persisted project values as source of truth; keep the in-memory
+            # value only for keys the project JSON does not carry.
+            self._overlay_persisted_design_rules(rules)
 
             return {"success": True, "rules": rules}
 
@@ -434,9 +514,7 @@ class DesignRuleCommands:
                 # the existing violation fields stay unchanged.
                 unconnected_items = []
                 for uc in drc_data.get("unconnected_items", []):
-                    parsed, _uctype, _ucsev = _parse_drc_entry(
-                        uc, default_type="unconnected_items"
-                    )
+                    parsed, _uctype, _ucsev = _parse_drc_entry(uc, default_type="unconnected_items")
                     unconnected_items.append(parsed)
                 total_unconnected = len(unconnected_items)
 
@@ -513,8 +591,7 @@ class DesignRuleCommands:
                     # A separate, explicit signal — these are unrouted
                     # connections, not rule violations, and were invisible before.
                     message += (
-                        f" and {total_unconnected} unconnected "
-                        f"(missing-connection) item(s)"
+                        f" and {total_unconnected} unconnected " f"(missing-connection) item(s)"
                     )
 
                 return {

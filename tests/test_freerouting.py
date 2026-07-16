@@ -41,6 +41,11 @@ def reset_pcbnew_mock() -> Any:
     pcbnew_mock.ExportSpecctraDSN.return_value = MagicMock()
     pcbnew_mock.ImportSpecctraSES.side_effect = None
     pcbnew_mock.ImportSpecctraSES.return_value = MagicMock()
+    # B5: autoroute/import_ses now route a FRESH pcbnew.LoadBoard of the target
+    # file. Reset it here so a return_value set by one test can't leak into the
+    # next; tests that need LoadBoard to yield their own board set it locally.
+    pcbnew_mock.LoadBoard.side_effect = None
+    pcbnew_mock.LoadBoard.return_value = MagicMock()
     yield
 
 
@@ -226,6 +231,9 @@ class TestImportSes:
 
         pcbnew_mock.ImportSpecctraSES.return_value = True
         cmds.board.GetTracks.return_value = []
+        # B5: import_ses applies the SES to a fresh LoadBoard of the target
+        # file; route it back to our mock board.
+        pcbnew_mock.LoadBoard.return_value = cmds.board
 
         result = cmds.import_ses({"sesPath": str(ses_file)})
         assert result["success"] is True
@@ -312,6 +320,9 @@ class TestAutoroute:
         ses_file = board_dir / "test.ses"
 
         cmds.board.GetFileName.return_value = str(board_file)
+        # B5: the routed board is a fresh LoadBoard of the target file — point
+        # it back at our mock board so board_stats reflect the routed tracks.
+        pcbnew_mock.LoadBoard.return_value = cmds.board
 
         pcbnew_mock.ExportSpecctraDSN.side_effect = lambda b, p: (
             dsn_file.write_text("(pcb)"),
@@ -348,6 +359,7 @@ class TestAutoroute:
         ses_file = board_dir / "test.ses"
 
         cmds.board.GetFileName.return_value = str(board_file)
+        pcbnew_mock.LoadBoard.return_value = cmds.board
 
         pcbnew_mock.ExportSpecctraDSN.side_effect = lambda b, p: (
             dsn_file.write_text("(pcb)"),

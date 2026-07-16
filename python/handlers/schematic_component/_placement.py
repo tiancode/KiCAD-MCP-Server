@@ -147,7 +147,9 @@ def _unit_extents(pins: Dict[str, Any]) -> Dict[int, Tuple[float, float, float, 
     return {u: (b[0], b[1], b[2], b[3]) for u, b in boxes.items()}
 
 
-def _unit_offpage(pos: Dict[str, float], box: Tuple[float, float, float, float], page: Dict[str, Any]) -> bool:
+def _unit_offpage(
+    pos: Dict[str, float], box: Tuple[float, float, float, float], page: Dict[str, Any]
+) -> bool:
     """True when a unit placed at ``pos`` has pins outside the sheet.
 
     ``box`` is the library-coord extent ``(min_x, max_x, min_y, max_y)``.
@@ -381,7 +383,9 @@ def handle_rotate_schematic_component(
         normalized_angle = requested_angle % 360.0
         # Report a clean integer when the value is whole (it always is for
         # multiples of 90) so the response reads 270, not 270.0.
-        normalized_angle = int(normalized_angle) if normalized_angle.is_integer() else normalized_angle
+        normalized_angle = (
+            int(normalized_angle) if normalized_angle.is_integer() else normalized_angle
+        )
 
         with open(schematic_path, "r", encoding="utf-8") as f:
             sch_data = _sexpdata.loads(f.read())
@@ -546,6 +550,17 @@ def handle_move_schematic_component(
             for far_old, far_new in stub_far.items():
                 old_to_new.setdefault(far_old, far_new)
 
+            # A4: a moved pin whose OLD position coincided with a FOREIGN
+            # component's pin — while carrying its own connect_to_net stub — was
+            # only *accidentally* overlapping it (a symbol collision), not
+            # intentionally connected. Detach cleanly: don't synthesize a bridge
+            # that would keep the foreign pin shorted to the moved pin's new
+            # location, and warn naming the pin(s) that dropped off the net.
+            # Must run BEFORE drag_wires, while wires still sit at old coords.
+            detach_skip, detach_warnings = WireDragger.find_detached_foreign_pins(
+                sch_data, reference, pin_positions
+            )
+
             drag_summary = WireDragger.drag_wires(sch_data, old_to_new)
 
             # Move any net label sitting on a moved point — a pin the component
@@ -557,10 +572,13 @@ def handle_move_schematic_component(
 
             # Synthesize wires for touching-pin connections after dragging,
             # so drag_wires doesn't accidentally move and collapse the new wire.
+            # Pins flagged for clean detachment (A4) are excluded so no bridge
+            # re-shorts them to the foreign pin they only overlapped.
             wires_synthesized = WireDragger.synthesize_touching_pin_wires(
-                sch_data, reference, pin_positions
+                sch_data, reference, pin_positions, skip_old_positions=detach_skip
             )
             drag_summary["wires_synthesized"] = wires_synthesized
+            drag_summary["foreign_pin_detachments"] = detach_warnings
 
         # Update symbol position
         WireDragger.update_symbol_position(sch_data, reference, float(new_x), float(new_y))
@@ -585,6 +603,32 @@ def handle_move_schematic_component(
                 "gridMm": snap_params["snapGridMm"] or _SCHEMATIC_GRID_MM,
                 "requested": {"x": requested_new_x, "y": requested_new_y},
             }
+        # A4: report any foreign pin that a move detached from the moved
+        # component. The pin coincided with the moved component's pin only by
+        # symbol overlap; moving cleanly separates them and drops the foreign
+        # pin off the shared net. Naming it lets the caller re-add the
+        # connection if it was actually intended.
+        detachments = drag_summary.get("foreign_pin_detachments") or []
+        if detachments:
+            response["foreignPinDetachments"] = detachments
+            parts: List[str] = []
+            for d in detachments:
+                fpins = ", ".join(
+                    f"{f['reference']}/{f['pin']}"
+                    + (f" ({f['name']})" if f.get("name") and f["name"] not in ("~", "") else "")
+                    for f in d.get("foreign", [])
+                )
+                nets = ", ".join(n for n in (d.get("netLabels") or []) if n)
+                seg = f"pin {d.get('movedPin')} was coincident with {fpins}"
+                if nets:
+                    seg += f" on net(s) {nets}"
+                parts.append(seg)
+            response["detachWarning"] = (
+                f"{reference}: "
+                + "; ".join(parts)
+                + ". Moving detached them — the foreign pin(s) dropped off the "
+                "shared net. If a connection was intended, add it explicitly."
+            )
         # Off-page reporting (S9): the move succeeded (KiCad's canvas extends
         # past the sheet border) but flag it so the caller isn't surprised that
         # the symbol and its dragged wires now sit outside the printable area.
@@ -751,7 +795,9 @@ def handle_delete_schematic_component(
                     f"stub(s) and {removed_labels} net label(s)."
                 )
             else:
-                response["message"] = f"Removed {reference} (no attached wire stubs or labels found)."
+                response["message"] = (
+                    f"Removed {reference} (no attached wire stubs or labels found)."
+                )
         else:
             if dangling_wires or dangling_labels:
                 response["message"] = (
@@ -761,7 +807,9 @@ def handle_delete_schematic_component(
                     f"remove them."
                 )
             else:
-                response["message"] = f"Removed {reference} (no attached wire stubs or labels found)."
+                response["message"] = (
+                    f"Removed {reference} (no attached wire stubs or labels found)."
+                )
         return response
 
     except Exception as e:
@@ -828,6 +876,77 @@ def handle_add_schematic_component(
         lib_id = f"{library}:{comp_type}"
         grid_mm = float(snap_params.get("snapGridMm") or _SCHEMATIC_GRID_MM)
         snap_on = snap_params.get("snapToGrid") is not False
+
+        # Reference validation (A6/A11): a placed symbol must carry a non-empty,
+        # unique reference designator.  An empty or duplicate refdes is an
+        # invalid schematic (KiCad ERC flags "duplicate reference"), so refuse
+        # it by default with a structured errorCode.  An opt-in ``autoAssign``
+        # instead numbers the next free reference of the same prefix (mirroring
+        # duplicate_schematic_component).  Placing another UNIT of a multi-unit
+        # part already on the sheet legitimately reuses its reference, so that
+        # case is allowed through unchanged.
+        from ._duplicate import _collect_references, _next_free_reference
+
+        auto_assign = bool(component.get("autoAssign") or params.get("autoAssign"))
+        try:
+            existing_refs = _collect_references(schematic_file.read_text(encoding="utf-8"))
+        except OSError:
+            existing_refs = []
+        requested_reference = reference
+        ref_str = str(reference).strip()
+
+        def _ref_prefix(ref: str) -> str:
+            m = re.match(r"^([A-Za-z_]+)", ref)
+            if m:
+                return m.group(1)
+            # Empty/opaque ref: fall back to the component type's leading
+            # letters, then a generic "U".
+            tm = re.match(r"^([A-Za-z_]+)", str(comp_type))
+            return tm.group(1) if tm else "U"
+
+        if not ref_str:
+            if auto_assign:
+                reference = _next_free_reference(existing_refs, _ref_prefix(""))
+            else:
+                return {
+                    "success": False,
+                    "message": (
+                        "reference is empty. A placed symbol needs a non-empty "
+                        'reference designator (e.g. "R1", "U3"). Pass a '
+                        "reference, or set autoAssign=true to number the next "
+                        "free one automatically."
+                    ),
+                    "errorCode": "INVALID_REFERENCE",
+                }
+        elif ref_str in existing_refs:
+            legit_new_unit = False
+            if not place_all:
+                try:
+                    info = PinLocator().get_unit_placement(schematic_file, ref_str)
+                except Exception:
+                    info = None
+                if (
+                    info
+                    and info.get("lib_id") == lib_id
+                    and info.get("is_multi_unit")
+                    and unit not in (info.get("placed_units") or [])
+                ):
+                    legit_new_unit = True
+            if not legit_new_unit:
+                if auto_assign:
+                    reference = _next_free_reference(existing_refs, _ref_prefix(ref_str))
+                else:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"Reference '{ref_str}' is already used in this "
+                            f"schematic. Two symbols sharing a refdes is invalid "
+                            f"(KiCad ERC flags 'duplicate reference'). Choose "
+                            f"another reference, or set autoAssign=true to place "
+                            f"it as the next free '{_ref_prefix(ref_str)}<N>'."
+                        ),
+                        "errorCode": "REFERENCE_EXISTS",
+                    }
 
         # Page-awareness (S9): reject coordinates so far off the sheet they can
         # only be a units mistake (x=99999 mm ≈ 100 m); a merely off-page point
@@ -967,6 +1086,11 @@ def handle_add_schematic_component(
             "footprintSource": footprint_source,
             "pageSize": page,
         }
+        # A6/A11: surface an auto-assigned reference so the caller learns the
+        # refdes it actually got (its requested one was empty or taken).
+        if reference != requested_reference:
+            response["autoAssignedReference"] = True
+            response["requestedReference"] = requested_reference
 
         # Off-page reporting (S2/S9): the placement still succeeded, but flag
         # any unit that landed outside the sheet so the caller isn't surprised

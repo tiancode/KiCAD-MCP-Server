@@ -182,6 +182,78 @@ class PlatformHelper:
         return patterns
 
     @staticmethod
+    def kicad_footprint_search_roots() -> List[str]:
+        """Ordered candidate directories that contain ``.pretty`` footprint libraries.
+
+        Single source of truth for "where do KiCAD footprint libraries live" so
+        ``list_footprint_libraries`` (iterates every existing root) and
+        ``LibraryManager._locate_kicad_footprint_dir`` (takes the first existing
+        root, to resolve ``${KICAD*_FOOTPRINT_DIR}``) can no longer disagree —
+        the disagreement was the C6 bug (macOS + KiCad 10 roots present in one
+        finder, absent in the other, so ``list_footprint_libraries`` returned 0
+        on macOS).
+
+        Coverage: ``KICAD{10,9,8}_FOOTPRINT_DIR`` env overrides (highest
+        priority — non-standard installs / CI), Windows Program Files (KiCad
+        10/9/8, both arch dirs), Linux ``/usr/share`` + ``/usr/local/share``,
+        the macOS app bundle ``SharedSupport/footprints`` (system + user
+        Applications, both capitalizations), the per-user
+        ``~/Documents/KiCad/{10,9,8}/footprints`` tree on every platform, and the
+        Flatpak ``Library.Footprints`` runtime extension.  Not existence-filtered
+        (except the Flatpak glob, which only yields real matches) — callers
+        decide whether to take the first that exists or scan them all.
+        """
+        roots: List[str] = []
+
+        # 1. Env-var overrides win (most reliable on non-standard installs / CI).
+        for var in ("KICAD10_FOOTPRINT_DIR", "KICAD9_FOOTPRINT_DIR", "KICAD8_FOOTPRINT_DIR"):
+            val = os.environ.get(var)
+            if val:
+                roots.append(val)
+
+        # 2. Windows Program Files (newest version first, both arch dirs).
+        for pf in (r"C:\Program Files\KiCad", r"C:\Program Files (x86)\KiCad"):
+            for ver in ("10.0", "9.0", "8.0"):
+                roots.append(str(Path(pf) / ver / "share" / "kicad" / "footprints"))
+
+        # 3. Linux system installs.
+        roots.append("/usr/share/kicad/footprints")
+        roots.append("/usr/local/share/kicad/footprints")
+
+        # 4. macOS app bundle — stock libraries live under SharedSupport.
+        roots.append("/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints")
+        roots.append("/Applications/KiCAD/KiCad.app/Contents/SharedSupport/footprints")
+        roots.append(
+            str(
+                Path.home()
+                / "Applications"
+                / "KiCad"
+                / "KiCad.app"
+                / "Contents"
+                / "SharedSupport"
+                / "footprints"
+            )
+        )
+
+        # 5. Per-user Documents/KiCad tree (all platforms; downloaded / 3rd-party).
+        for ver in ("10.0", "9.0", "8.0"):
+            roots.append(str(Path.home() / "Documents" / "KiCad" / ver / "footprints"))
+
+        # 6. Flatpak Library.Footprints runtime extension (hash changes per release).
+        try:
+            flatpak = sorted(
+                Path("/var/lib/flatpak/runtime/org.kicad.KiCad.Library.Footprints").glob(
+                    "*/stable/*/files/footprints"
+                )
+            )
+            if flatpak:
+                roots.append(str(flatpak[-1]))
+        except OSError:
+            pass
+
+        return roots
+
+    @staticmethod
     def get_config_dir() -> Path:
         r"""
         Get appropriate configuration directory for current platform

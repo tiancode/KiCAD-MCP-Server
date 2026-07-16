@@ -9,18 +9,26 @@ import logging
 import os
 import platform
 import shutil
+import signal
 import stat
 import subprocess
 import time
 from ctypes import wintypes
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
 
 class KiCADProcessManager:
     """Manages KiCAD process detection and launching"""
+
+    # PIDs of KiCad GUI processes THIS server launched (class-level so the set
+    # survives across handler calls for the server's lifetime).  ``launch()``
+    # records here; ``terminate_launched`` only ever signals a PID from this
+    # set — never an externally started KiCad — and only when it is *currently*
+    # a running GUI binary, so a reused PID can't be killed by mistake (D6).
+    _launched_pids: "Set[int]" = set()
 
     @staticmethod
     def _windows_list_processes() -> List[dict]:
@@ -339,11 +347,7 @@ class KiCADProcessManager:
             # bundle gap that bit kicad-cli discovery.
             candidates = [
                 Path("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad"),
-                Path(
-                    os.path.expanduser(
-                        "~/Applications/KiCad/KiCad.app/Contents/MacOS/kicad"
-                    )
-                ),
+                Path(os.path.expanduser("~/Applications/KiCad/KiCad.app/Contents/MacOS/kicad")),
                 Path(
                     "/Applications/KiCad/KiCad.app/Contents/Applications/"
                     "pcbnew.app/Contents/MacOS/pcbnew"
@@ -566,7 +570,7 @@ class KiCADProcessManager:
             system = platform.system()
             if system == "Windows":
                 # Windows: Use CREATE_NEW_PROCESS_GROUP to detach
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                     stdout=subprocess.DEVNULL,
@@ -574,12 +578,17 @@ class KiCADProcessManager:
                 )
             else:
                 # Unix: Use nohup or start in background
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
+            # Track the PID we launched so manage_kicad_ui(action=quit) can
+            # terminate exactly this GUI later (D6).  The Popen child is the GUI
+            # frame itself (standalone pcbnew for a board, or the project
+            # manager otherwise), so its PID appears in get_process_info().
+            KiCADProcessManager._record_launched_pid(proc.pid)
 
             # Wait for process to start
             if wait_for_start:
@@ -645,6 +654,144 @@ class KiCADProcessManager:
             logger.error(f"Error getting process info: {e}")
 
         return processes
+
+    # ------------------------------------------------------------------
+    # Termination — quit the GUI the server launched (D6).
+    # ------------------------------------------------------------------
+    @classmethod
+    def _record_launched_pid(cls, pid: Optional[int]) -> None:
+        """Remember a PID launch() spawned so quit can target it later.
+
+        Only real positive ints are recorded — a mocked Popen in tests yields a
+        non-int ``.pid``, which is ignored rather than polluting the tracked set
+        (and, later, ``terminate_launched`` only ever signals a tracked PID that
+        is currently a live GUI, so a stray value could never be signalled).
+        """
+        if isinstance(pid, int) and pid > 0:
+            cls._launched_pids.add(pid)
+
+    @classmethod
+    def _running_gui_pids(cls) -> "Set[int]":
+        """PIDs of currently-running KiCad GUI processes (as ints).
+
+        Reuses ``get_process_info`` — the same strict, resolver-based detection
+        the rest of this module uses — so termination never falls back to a
+        ``pgrep``-by-name match (the machine gotcha) and can only ever see real
+        GUI frames.
+        """
+        out: "Set[int]" = set()
+        for proc in cls.get_process_info():
+            try:
+                out.add(int(proc.get("pid")))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    @staticmethod
+    def _signal_pid(pid: int, sig: int) -> bool:
+        """Send ``sig`` to ``pid``. Returns False if the process was already gone.
+
+        On Windows there are no POSIX signals: SIGTERM maps to a graceful
+        ``taskkill`` and SIGKILL to a forceful ``taskkill /F`` (both with ``/T``
+        to take the process tree).
+        """
+        if platform.system() == "Windows":
+            force = ["/F"] if sig == getattr(signal, "SIGKILL", 9) else []
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", *force],
+                    capture_output=True,
+                    check=False,
+                )
+                return True
+            except Exception as e:  # pragma: no cover - Windows-only path
+                logger.debug(f"taskkill for pid {pid} failed: {e}")
+                return False
+        try:
+            os.kill(pid, sig)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError as e:  # pragma: no cover - unusual
+            logger.warning(f"Not permitted to signal pid {pid}: {e}")
+            return False
+        except OSError as e:  # pragma: no cover - defensive
+            logger.debug(f"os.kill({pid}, {sig}) failed: {e}")
+            return False
+
+    @classmethod
+    def terminate_launched(cls, timeout_s: float = 5.0) -> dict:
+        """Terminate the KiCad GUI process(es) THIS server launched.
+
+        Only signals a PID that is BOTH tracked (recorded by ``launch()``) AND
+        currently a running KiCad GUI — so an externally started editor is left
+        alone and a reused PID can't be killed by mistake.  Escalation:
+        SIGTERM → bounded wait (``timeout_s``) → SIGKILL → short verify.
+
+        Returns a truthful status dict:
+          ``terminated``          PIDs we confirmed killed
+          ``forced``              subset that needed SIGKILL
+          ``survived``            tracked GUIs still alive after SIGKILL
+          ``alreadyExited``       tracked PIDs no longer running (pruned)
+          ``externalGuiPids``     running GUI PIDs we did NOT launch (untouched)
+          ``launchedGuiRunning``  was any GUI we launched running to begin with
+          ``externalGuiRunning``  is a GUI we did not launch still running
+        """
+        running = cls._running_gui_pids()
+        tracked = set(cls._launched_pids)
+        ours_running = sorted(tracked & running)
+        already_exited = sorted(tracked - running)
+        external_pids = sorted(running - tracked)
+
+        terminated: List[int] = []
+        forced: List[int] = []
+
+        sigterm = getattr(signal, "SIGTERM", 15)
+        sigkill = getattr(signal, "SIGKILL", 9)
+
+        # SIGTERM everyone first, then wait (bounded) for a graceful exit.
+        for pid in ours_running:
+            cls._signal_pid(pid, sigterm)
+
+        pending = set(ours_running)
+        deadline = time.monotonic() + timeout_s
+        while pending and time.monotonic() < deadline:
+            time.sleep(0.1)
+            still = cls._running_gui_pids()
+            gone = {p for p in pending if p not in still}
+            terminated.extend(gone)
+            pending -= gone
+
+        # SIGKILL any survivor, then a short verify pass.
+        if pending:
+            for pid in sorted(pending):
+                cls._signal_pid(pid, sigkill)
+            kill_deadline = time.monotonic() + min(timeout_s, 2.0)
+            while pending and time.monotonic() < kill_deadline:
+                time.sleep(0.1)
+                still = cls._running_gui_pids()
+                gone = {p for p in pending if p not in still}
+                for p in gone:
+                    terminated.append(p)
+                    forced.append(p)
+                pending -= gone
+
+        survived = sorted(pending)
+
+        # Prune what we confirmed gone (killed or already-exited) from tracking;
+        # keep survivors so a retry can target them again.
+        cls._launched_pids -= set(terminated)
+        cls._launched_pids -= set(already_exited)
+
+        return {
+            "terminated": sorted(terminated),
+            "forced": sorted(forced),
+            "survived": survived,
+            "alreadyExited": already_exited,
+            "externalGuiPids": external_pids,
+            "launchedGuiRunning": bool(ours_running),
+            "externalGuiRunning": bool(external_pids),
+        }
 
 
 def check_and_launch_kicad(project_path: Optional[Path] = None, auto_launch: bool = True) -> dict:

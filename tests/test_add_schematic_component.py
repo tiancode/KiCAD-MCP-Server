@@ -659,3 +659,126 @@ class TestSchematicGridSnap:
         assert captured["y"] == 80
         # No snap delta in the response when opt-out is honoured.
         assert "snap" not in out
+
+
+# ---------------------------------------------------------------------------
+# Reference validation (A6/A11): refuse empty / duplicate refdes by default;
+# opt-in autoAssign numbers the next free reference of the same prefix.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestReferenceValidation:
+    """add_schematic_component previously accepted an empty reference (A11) and
+    a DUPLICATE reference (A6), producing an invalid schematic (KiCad ERC flags
+    'duplicate reference').  It must now refuse both by default with a
+    structured errorCode, and honor an opt-in autoAssign that numbers the next
+    free reference of the same prefix instead."""
+
+    def _call(
+        self,
+        sch: Path,
+        reference: str,
+        *,
+        auto_assign: bool = False,
+        unit: int = 1,
+        x: float = 60,
+        y: float = 60,
+        value: str = "x",
+    ) -> dict:
+        from handlers.schematic_component import handle_add_schematic_component
+
+        params: dict = {
+            "schematicPath": str(sch),
+            "component": {
+                "library": "Device",
+                "type": "R",
+                "reference": reference,
+                "value": value,
+                "x": x,
+                "y": y,
+                "unit": unit,
+            },
+        }
+        if auto_assign:
+            params["autoAssign"] = True
+        return handle_add_schematic_component(iface=None, params=params)
+
+    def test_empty_reference_rejected(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        res = self._call(sch, "")
+        assert res["success"] is False
+        assert res["errorCode"] == "INVALID_REFERENCE"
+
+    def test_whitespace_reference_rejected(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        res = self._call(sch, "   ")
+        assert res["success"] is False
+        assert res["errorCode"] == "INVALID_REFERENCE"
+
+    def test_empty_reference_autoassigned(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        res = self._call(sch, "", auto_assign=True)
+        assert res["success"] is True
+        # Prefix derived from the component type (Device:R → "R").
+        assert res["component_reference"] == "R1"
+        assert res["autoAssignedReference"] is True
+
+    def test_duplicate_reference_rejected(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        assert self._call(sch, "R1", x=50, y=50)["success"] is True
+        res = self._call(sch, "R1", x=60, y=60, value="DUP")
+        assert res["success"] is False
+        assert res["errorCode"] == "REFERENCE_EXISTS"
+
+    def test_duplicate_reference_autoassigned(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        assert self._call(sch, "R1", x=50, y=50)["success"] is True
+        res = self._call(sch, "R1", x=60, y=60, auto_assign=True)
+        assert res["success"] is True
+        assert res["component_reference"] == "R2"
+        assert res["requestedReference"] == "R1"
+
+    def test_fresh_reference_still_succeeds(self, tmp_path: Any) -> None:
+        """A unique reference is unaffected by the new guard."""
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        res = self._call(sch, "R7", x=50, y=50)
+        assert res["success"] is True
+        assert res["component_reference"] == "R7"
+
+    def test_new_unit_of_existing_multiunit_reference_allowed(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        """Placing a further UNIT of a multi-unit part already on the sheet
+        legitimately reuses its reference and must NOT be rejected as a
+        duplicate (the F1 add-remaining-units workflow)."""
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        assert self._call(sch, "U1", x=50, y=50, unit=1)["success"] is True
+
+        from commands.pin_locator import PinLocator
+
+        # Simulate a genuine 2-unit part with unit 1 placed, unit 2 free.
+        monkeypatch.setattr(
+            PinLocator,
+            "get_unit_placement",
+            lambda self, p, r: {
+                "lib_id": "Device:R",
+                "defined_units": [1, 2],
+                "total_units": 2,
+                "placed_units": [1],
+                "unplaced_units": [2],
+                "is_multi_unit": True,
+            },
+        )
+        res = self._call(sch, "U1", x=60, y=60, unit=2)
+        assert res["success"] is True
+        # Reference kept — it's a legit second unit, not an auto-reassignment.
+        assert res["component_reference"] == "U1"
+        assert "autoAssignedReference" not in res

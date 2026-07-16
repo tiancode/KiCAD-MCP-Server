@@ -226,7 +226,37 @@ class SymbolCreator:
         scope : str         – "project" or "global"
         project_path : str  – .kicad_pro or directory (for scope=project)
         """
+        # Validate BEFORE touching any lib-table: a symbol library is an
+        # *existing* ``.kicad_sym`` FILE. Registering a nonexistent path or a
+        # wrong-type file (e.g. a .kicad_pcb passed as a symbol lib) writes a
+        # dangling sym-lib-table entry that KiCAD later fails to parse (C10) —
+        # refuse both up front.
         sym_path = Path(library_path)
+        if not str(library_path).strip():
+            return {
+                "success": False,
+                "errorCode": "LIBRARY_NOT_FOUND",
+                "error": "libraryPath is required for register_symbol_library.",
+            }
+        if not sym_path.exists():
+            return {
+                "success": False,
+                "errorCode": "LIBRARY_NOT_FOUND",
+                "error": (
+                    f"Symbol library not found: {sym_path}. Create the '.kicad_sym' "
+                    "file (e.g. via create_symbol) before registering it."
+                ),
+            }
+        if not (sym_path.is_file() and sym_path.suffix.lower() == ".kicad_sym"):
+            return {
+                "success": False,
+                "errorCode": "INVALID_LIBRARY_TYPE",
+                "error": (
+                    f"Not a symbol library: {sym_path}. A symbol library must be a "
+                    "'.kicad_sym' file."
+                ),
+            }
+
         name = library_name or sym_path.stem
         uri = str(sym_path).replace("\\", "/")
 
