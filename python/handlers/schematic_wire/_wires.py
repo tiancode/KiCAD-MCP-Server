@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from commands.connection_schematic import ConnectionManager
 
@@ -16,6 +16,55 @@ if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 logger = logging.getLogger("handlers.schematic_wire")
+
+
+def _resolve_snap_position(
+    schematic_path: str,
+    component_ref: Any,
+    pin_number: Any,
+    position: Any,
+) -> Tuple[Any, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Resolve the placement position for a no-connect flag.
+
+    When ``component_ref`` + ``pin_number`` are given, snaps to that pin's
+    endpoint; otherwise uses the caller-supplied ``position``. Returns
+    ``(position, snapped_to_pin, error)`` where ``error`` is a ready-to-return
+    failure dict (missing pin, or neither position nor ref/pin supplied) and is
+    None on success.
+    """
+    from commands.pin_locator import PinLocator
+
+    snapped_to_pin: Optional[Dict[str, Any]] = None
+    if component_ref and pin_number is not None:
+        locator = PinLocator()
+        pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
+        if pin_loc is None:
+            # S10: say whether the COMPONENT or the PIN is the missing one.
+            diag = locator.diagnose_missing_pin(
+                Path(schematic_path), component_ref, str(pin_number)
+            )
+            return (
+                position,
+                None,
+                {
+                    "success": False,
+                    "message": locator.format_missing_pin_error(
+                        component_ref, str(pin_number), diag
+                    ),
+                },
+            )
+        position = pin_loc
+        snapped_to_pin = {"component": component_ref, "pin": str(pin_number)}
+    elif position is None:
+        return (
+            position,
+            None,
+            {
+                "success": False,
+                "message": "Provide either position [x, y] or componentRef + pinNumber",
+            },
+        )
+    return position, snapped_to_pin, None
 
 
 def handle_delete_schematic_wire(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -182,7 +231,6 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
     """Add a no-connect flag (X marker) to an unconnected pin in the schematic."""
     logger.info("Adding no-connect flag to schematic")
     try:
-        from commands.pin_locator import PinLocator
         from commands.wire_manager import WireManager
 
         schematic_path = params.get("schematicPath")
@@ -194,28 +242,11 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
             return {"success": False, "message": "schematicPath is required"}
 
         # Snap to pin endpoint when componentRef + pinNumber are provided
-        snapped_to_pin = None
-        if component_ref and pin_number is not None:
-            locator = PinLocator()
-            pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
-            if pin_loc is None:
-                # S10: say whether the COMPONENT or the PIN is the missing one.
-                diag = locator.diagnose_missing_pin(
-                    Path(schematic_path), component_ref, str(pin_number)
-                )
-                return {
-                    "success": False,
-                    "message": locator.format_missing_pin_error(
-                        component_ref, str(pin_number), diag
-                    ),
-                }
-            position = pin_loc
-            snapped_to_pin = {"component": component_ref, "pin": str(pin_number)}
-        elif position is None:
-            return {
-                "success": False,
-                "message": "Provide either position [x, y] or componentRef + pinNumber",
-            }
+        position, snapped_to_pin, error = _resolve_snap_position(
+            schematic_path, component_ref, pin_number, position
+        )
+        if error is not None:
+            return error
 
         success = WireManager.add_no_connect(Path(schematic_path), position)
         if success:
@@ -250,7 +281,6 @@ def handle_delete_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) ->
     """
     logger.info("Deleting no-connect flag from schematic")
     try:
-        from commands.pin_locator import PinLocator
         from commands.wire_manager import WireManager
 
         schematic_path = params.get("schematicPath")
@@ -262,28 +292,11 @@ def handle_delete_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) ->
         if not schematic_path:
             return {"success": False, "message": "schematicPath is required"}
 
-        snapped_to_pin = None
-        if component_ref and pin_number is not None:
-            locator = PinLocator()
-            pin_loc = locator.get_pin_location(Path(schematic_path), component_ref, str(pin_number))
-            if pin_loc is None:
-                # S10: say whether the COMPONENT or the PIN is the missing one.
-                diag = locator.diagnose_missing_pin(
-                    Path(schematic_path), component_ref, str(pin_number)
-                )
-                return {
-                    "success": False,
-                    "message": locator.format_missing_pin_error(
-                        component_ref, str(pin_number), diag
-                    ),
-                }
-            position = pin_loc
-            snapped_to_pin = {"component": component_ref, "pin": str(pin_number)}
-        elif position is None:
-            return {
-                "success": False,
-                "message": "Provide either position [x, y] or componentRef + pinNumber",
-            }
+        position, snapped_to_pin, error = _resolve_snap_position(
+            schematic_path, component_ref, pin_number, position
+        )
+        if error is not None:
+            return error
 
         # Accept either [x, y] or {x, y}
         if isinstance(position, dict):

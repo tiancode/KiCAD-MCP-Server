@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from utils.sexpr import escape_sexpr_string
+from utils.sexpr import escape_sexpr_string, find_block_end
 
 logger = logging.getLogger("kicad_interface")
 
@@ -32,39 +32,6 @@ _LCSC_PROPERTY_NAMES = ("LCSC Part", "LCSC")
 # References we never treat as BOM parts: offscreen placement templates and
 # power/flag symbols (#PWR0x, #FLG0x, PWR_FLAG).
 _NON_BOM_REF_PREFIXES = ("_TEMPLATE", "#")
-
-
-def _match_paren(text: str, start: int) -> int:
-    """Index just past the ``)`` closing the ``(`` at ``start`` — quote/escape aware.
-
-    Skips parentheses inside double-quoted strings (honouring ``\\`` escapes), so a
-    property value with literal parens ("GigaDevice(兆易创新)", "GPO(OD)") — which
-    easyeda2kicad emits unescaped — can't unbalance the scan. Falls back to
-    len(text) if unbalanced.
-    """
-    depth = 0
-    in_str = False
-    i = start
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if in_str:
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-        else:
-            if c == '"':
-                in_str = True
-            elif c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-        i += 1
-    return n
 
 
 def _property_value(block: str, name: str) -> Optional[str]:
@@ -116,7 +83,7 @@ class DatasheetManager:
         start = content.find("(lib_symbols")
         if start == -1:
             return -1, -1
-        return start, _match_paren(content, start)
+        return start, find_block_end(content, start)
 
     @classmethod
     def _lib_symbol_datasheets(cls, content: str, lib_start: int, lib_end: int) -> Dict[str, str]:
@@ -137,7 +104,7 @@ class DatasheetManager:
             # sub-symbols ("Name_0_1") have no colon and no Datasheet.
             if ":" not in name:
                 continue
-            sym_block = body[m.start() : _match_paren(body, m.start())]
+            sym_block = body[m.start() : find_block_end(body, m.start())]
             ds = _property_value(sym_block, "Datasheet")
             if ds is not None and ds not in EMPTY_DATASHEET_VALUES:
                 out[name] = ds
@@ -159,7 +126,7 @@ class DatasheetManager:
             pos = m.start()
             if lib_start >= 0 and lib_start <= pos < lib_end:
                 continue
-            end = _match_paren(content, pos)
+            end = find_block_end(content, pos)
             blocks.append((pos, end))
         return blocks
 

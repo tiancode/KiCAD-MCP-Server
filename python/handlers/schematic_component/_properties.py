@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 from commands.schematic_locks import atomic_write_text, serialize_on_param
 
+from ._shared import find_placed_symbol_blocks, load_schematic_text
+
 if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
@@ -62,7 +64,6 @@ def handle_get_schematic_component(
     logger.info("Getting schematic component info")
     try:
         import re
-        from pathlib import Path
 
         schematic_path = params.get("schematicPath")
         reference = params.get("reference")
@@ -72,57 +73,18 @@ def handle_get_schematic_component(
         if not reference:
             return {"success": False, "message": "reference is required"}
 
-        sch_file = Path(schematic_path)
-        if not sch_file.exists():
-            return {
-                "success": False,
-                "message": f"Schematic not found: {schematic_path}",
-            }
+        sch_file, content, error = load_schematic_text(schematic_path)
+        if error is not None:
+            return error
+        assert content is not None
 
-        with open(sch_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # Skip lib_symbols section
-        lib_sym_pos = content.find("(lib_symbols")
-        lib_sym_end = iface._find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
-
-        # Find the placed symbol block for this reference. KiCAD may emit
-        # the children of (symbol ...) in different orders — most commonly
-        # `(symbol (lib_id "..."))`, but symbols whose library entry has
-        # been rescued / customised carry an extra `(lib_name "...")` first
-        # (`(symbol (lib_name "...") (lib_id "..."))`). Match `(symbol\s+(`
-        # — any opening paren — to handle both. The lib_symbols range check
-        # below excludes library-definition symbols, which use the
-        # `(symbol "name" ...)` form (quoted string, not paren).
-        block_start = block_end = None
-        search_start = 0
-        pattern = re.compile(r"\(symbol\s+\(")
-        while True:
-            m = pattern.search(content, search_start)
-            if not m:
-                break
-            pos = m.start()
-            if lib_sym_pos >= 0 and lib_sym_pos <= pos <= lib_sym_end:
-                search_start = lib_sym_end + 1
-                continue
-            end = iface._find_matching_paren(content, pos)
-            if end < 0:
-                search_start = pos + 1
-                continue
-            block_text = content[pos : end + 1]
-            if re.search(
-                r'\(property\s+"Reference"\s+"' + re.escape(reference) + r'"',
-                block_text,
-            ):
-                block_start, block_end = pos, end
-                break
-            search_start = end + 1
-
-        if block_start is None or block_end is None:
+        blocks = find_placed_symbol_blocks(iface, content, reference)
+        if not blocks:
             return {
                 "success": False,
                 "message": f"Component '{reference}' not found in schematic",
             }
+        block_start, block_end = blocks[0]
 
         block_text = content[block_start : block_end + 1]
 
@@ -297,58 +259,18 @@ def handle_edit_schematic_component(
                     ),
                 }
 
-        sch_file = Path(schematic_path)
-        if not sch_file.exists():
-            return {
-                "success": False,
-                "message": f"Schematic not found: {schematic_path}",
-            }
+        sch_file, content, error = load_schematic_text(schematic_path)
+        if error is not None:
+            return error
+        assert content is not None
 
-        with open(sch_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # Skip lib_symbols section
-        lib_sym_pos = content.find("(lib_symbols")
-        lib_sym_end = iface._find_matching_paren(content, lib_sym_pos) if lib_sym_pos >= 0 else -1
-
-        # Find placed symbol blocks that match the reference. KiCAD may
-        # serialise the children of (symbol ...) in different orders —
-        # `(symbol (lib_id "..."))` is the common case but rescued or
-        # locally-customised symbols carry an extra `(lib_name "...")`
-        # before the lib_id: `(symbol (lib_name "...") (lib_id "..."))`.
-        # Match any opening paren after `(symbol`; the lib_symbols range
-        # check below excludes library-definition symbols, which use the
-        # `(symbol "name" ...)` form (quoted string, not paren).
-        block_start = block_end = None
-        search_start = 0
-        pattern = re.compile(r"\(symbol\s+\(")
-        while True:
-            m = pattern.search(content, search_start)
-            if not m:
-                break
-            pos = m.start()
-            # Skip if inside lib_symbols section
-            if lib_sym_pos >= 0 and lib_sym_pos <= pos <= lib_sym_end:
-                search_start = lib_sym_end + 1
-                continue
-            end = iface._find_matching_paren(content, pos)
-            if end < 0:
-                search_start = pos + 1
-                continue
-            block_text = content[pos : end + 1]
-            if re.search(
-                r'\(property\s+"Reference"\s+"' + re.escape(reference) + r'"',
-                block_text,
-            ):
-                block_start, block_end = pos, end
-                break
-            search_start = end + 1
-
-        if block_start is None or block_end is None:
+        blocks = find_placed_symbol_blocks(iface, content, reference)
+        if not blocks:
             return {
                 "success": False,
                 "message": f"Component '{reference}' not found in schematic",
             }
+        block_start, block_end = blocks[0]
 
         # B1: refuse a footprint lib-id that resolves to no real footprint —
         # a silent, well-formed-but-bogus footprint is the exact input that

@@ -9,6 +9,8 @@ from typing import Any, Dict
 import pcbnew
 from utils.responses import failed, no_board_loaded
 
+from ._shared import bbox_to_dict, resolve_footprint
+
 logger = logging.getLogger("kicad_interface")
 
 
@@ -19,22 +21,9 @@ class QueryMixin:
             if not self.board:
                 return no_board_loaded()
 
-            reference = params.get("reference")
-            if not reference:
-                return {
-                    "success": False,
-                    "message": "Missing reference",
-                    "errorDetails": "reference parameter is required",
-                }
-
-            # Find the component
-            module = self.board.FindFootprintByReference(reference)
-            if not module:
-                return {
-                    "success": False,
-                    "message": "Component not found",
-                    "errorDetails": f"Could not find component: {reference}",
-                }
+            module, err = resolve_footprint(self.board, params)
+            if err:
+                return err
 
             # Get position in mm
             pos = module.GetPosition()
@@ -42,16 +31,7 @@ class QueryMixin:
             y_mm = pos.y / 1000000
 
             # Get bounding box
-            bbox = module.GetBoundingBox()
-            bbox_data = {
-                "min_x": bbox.GetLeft() / 1000000,
-                "min_y": bbox.GetTop() / 1000000,
-                "max_x": bbox.GetRight() / 1000000,
-                "max_y": bbox.GetBottom() / 1000000,
-                "width": (bbox.GetRight() - bbox.GetLeft()) / 1000000,
-                "height": (bbox.GetBottom() - bbox.GetTop()) / 1000000,
-                "unit": "mm",
-            }
+            bbox_data = bbox_to_dict(module.GetBoundingBox())
 
             # Try to get courtyard bounds (preferred for placement clearance)
             courtyard_data = None
@@ -59,16 +39,7 @@ class QueryMixin:
                 for layer_id in [pcbnew.F_CrtYd, pcbnew.B_CrtYd]:
                     courtyard = module.GetCourtyard(layer_id)
                     if courtyard and courtyard.OutlineCount() > 0:
-                        cbox = courtyard.BBox()
-                        courtyard_data = {
-                            "min_x": cbox.GetLeft() / 1000000,
-                            "min_y": cbox.GetTop() / 1000000,
-                            "max_x": cbox.GetRight() / 1000000,
-                            "max_y": cbox.GetBottom() / 1000000,
-                            "width": (cbox.GetRight() - cbox.GetLeft()) / 1000000,
-                            "height": (cbox.GetBottom() - cbox.GetTop()) / 1000000,
-                            "unit": "mm",
-                        }
+                        courtyard_data = bbox_to_dict(courtyard.BBox())
                         break
             except (AttributeError, RuntimeError):
                 # best-effort: courtyard may not exist on this footprint, or
@@ -118,16 +89,7 @@ class QueryMixin:
                 x_mm = pos.x / 1000000
                 y_mm = pos.y / 1000000
 
-                bbox = module.GetBoundingBox()
-                bbox_data = {
-                    "min_x": bbox.GetLeft() / 1000000,
-                    "min_y": bbox.GetTop() / 1000000,
-                    "max_x": bbox.GetRight() / 1000000,
-                    "max_y": bbox.GetBottom() / 1000000,
-                    "width": (bbox.GetRight() - bbox.GetLeft()) / 1000000,
-                    "height": (bbox.GetBottom() - bbox.GetTop()) / 1000000,
-                    "unit": "mm",
-                }
+                bbox_data = bbox_to_dict(module.GetBoundingBox())
 
                 reference = module.GetReference()
                 fpid = module.GetFPIDAsString()

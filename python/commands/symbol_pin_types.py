@@ -39,9 +39,9 @@ import sexpdata
 from commands.easyeda_import import (
     _PIN_HEADER_RE,
     _PIN_NAME_RE,
-    _match_paren,
     _symbol_span,
 )
+from utils.sexpr import find_block_end, rewrite_pin_blocks
 
 logger = logging.getLogger("kicad_interface")
 
@@ -173,45 +173,21 @@ def rewrite_pins_in_block(
 ) -> Tuple[str, List[Dict[str, Any]], set]:
     """Retype every matched pin inside a symbol block.
 
-    Walks the text quote-aware so ``(pin `` only matches real s-expression
-    openings, never a substring inside a quoted value. Returns
-    (new_block, records, matched_keys).
+    Delegates the quote-aware ``(pin …)`` walk to ``sexpr.rewrite_pin_blocks``
+    so ``(pin `` only matches real s-expression openings, never a substring
+    inside a quoted value. Returns (new_block, records, matched_keys).
     """
-    out: List[str] = []
     records: List[Dict[str, Any]] = []
     matched_keys: set = set()
-    i = 0
-    n = len(block)
-    in_str = False
-    while i < n:
-        c = block[i]
-        if in_str:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(block[i + 1])
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-            i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        if c == "(" and block.startswith("(pin ", i):
-            end = _match_paren(block, i)
-            new_pin, record = _retype_pin(block[i:end], lookup)
-            out.append(new_pin)
-            if record is not None:
-                records.append(record)
-                matched_keys.add(record["key"])
-            i = end
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out), records, matched_keys
+
+    def _transform(pin_block: str) -> str:
+        new_pin, record = _retype_pin(pin_block, lookup)
+        if record is not None:
+            records.append(record)
+            matched_keys.add(record["key"])
+        return new_pin
+
+    return rewrite_pin_blocks(block, _transform), records, matched_keys
 
 
 def serialize_pin_overrides(overrides: Dict[str, str]) -> str:
@@ -244,7 +220,7 @@ def _find_override_marker_span(block: str) -> Optional[Tuple[int, int]]:
     idx = block.find(_OVERRIDE_MARKER_FIND)
     if idx == -1:
         return None
-    return idx, _match_paren(block, idx)
+    return idx, find_block_end(block, idx)
 
 
 def read_pin_overrides(block: str) -> Dict[str, str]:
@@ -376,7 +352,7 @@ def _lib_symbols_span(content: str) -> Optional[Tuple[int, int]]:
     start = content.find("(lib_symbols")
     if start == -1:
         return None
-    return start, _match_paren(content, start)
+    return start, find_block_end(content, start)
 
 
 def find_reference_lib_id(content: str, reference: str) -> Optional[str]:
@@ -386,7 +362,7 @@ def find_reference_lib_id(content: str, reference: str) -> Optional[str]:
     "<ref>" …))`` and returns the lib_id of the one whose Reference matches.
     """
     for m in _INSTANCE_RE.finditer(content):
-        end = _match_paren(content, m.start())
+        end = find_block_end(content, m.start())
         block = content[m.start() : end]
         ref_m = _REF_PROP_RE.search(block)
         if ref_m and ref_m.group(1) == reference:

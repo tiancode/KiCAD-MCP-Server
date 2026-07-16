@@ -11,6 +11,8 @@ import pcbnew
 from utils.responses import failed, no_board_loaded
 from utils.units import unit_to_nm_scale
 
+from ._shared import resolve_footprint
+
 logger = logging.getLogger("kicad_interface")
 
 
@@ -472,22 +474,10 @@ class PlacementMixin:
             if not self.board:
                 return no_board_loaded()
 
+            module, err = resolve_footprint(self.board, params)
+            if err:
+                return err
             reference = params.get("reference")
-            if not reference:
-                return {
-                    "success": False,
-                    "message": "Missing reference",
-                    "errorDetails": "reference parameter is required",
-                }
-
-            # Find the component
-            module = self.board.FindFootprintByReference(reference)
-            if not module:
-                return {
-                    "success": False,
-                    "message": "Component not found",
-                    "errorDetails": f"Could not find component: {reference}",
-                }
 
             # Delete (not Remove): Remove() leaks the detached C++ FOOTPRINT on
             # the KiCAD 10 SWIG bindings and can corrupt the SWIG object table;

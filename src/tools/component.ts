@@ -5,7 +5,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { paginationParams } from "./pagination-params.js";
+import { boundingBoxFilter, paginationParams } from "./pagination-params.js";
 import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
 
 /**
@@ -231,7 +231,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     "add_component_annotation",
     "Add a text annotation/comment near a PCB component: places a PCB_TEXT at the component's position (plus optional offset) on a silkscreen or comments layer. Use offset to sit the label beside the part instead of on top of it.",
     {
-      reference: z.string().describe("Reference designator of the component to annotate (e.g., 'R5')"),
+      reference: z
+        .string()
+        .describe("Reference designator of the component to annotate (e.g., 'R5')"),
       text: z.string().describe("Annotation / comment text"),
       layer: z
         .string()
@@ -259,7 +261,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     "group_components",
     "Group PCB components into a named PCB_GROUP for easier selection. Refuses (creating nothing) if any reference is unknown. A component already in another group is moved into the new one; a group left empty by that move is removed — both reported.",
     {
-      references: z.array(z.string()).describe("Reference designators to group (e.g., ['R1','R2'])"),
+      references: z
+        .array(z.string())
+        .describe("Reference designators to group (e.g., ['R1','R2'])"),
       groupName: z.string().describe("Name for the new group"),
     },
     passthrough("group_components"),
@@ -272,11 +276,16 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     "replace_component",
     "Swap a placed footprint for a different library footprint. DESTRUCTIVE: deletes the old part and adds the new one, preserving reference, position, rotation and board side, and transferring pad nets by pad number. Pads that don't match on either side are reported.",
     {
-      reference: z.string().describe("Reference designator of the component to replace (e.g., 'U1')"),
+      reference: z
+        .string()
+        .describe("Reference designator of the component to replace (e.g., 'U1')"),
       newFootprint: z
         .string()
         .describe("New footprint library id ('Library:Footprint' or bare 'Footprint')"),
-      newValue: z.string().optional().describe("Optional new component value (defaults to the old value)"),
+      newValue: z
+        .string()
+        .optional()
+        .describe("Optional new component value (defaults to the old value)"),
     },
     passthrough("replace_component"),
   );
@@ -369,16 +378,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     "Return a list of all components on the PCB, optionally filtered by layer or bounding box region.",
     {
       layer: z.string().optional().describe("Filter by layer (e.g., 'F.Cu', 'B.Cu')"),
-      boundingBox: z
-        .object({
-          x1: z.number(),
-          y1: z.number(),
-          x2: z.number(),
-          y2: z.number(),
-          unit: z.enum(["mm", "inch", "mil"]).optional(),
-        })
-        .optional()
-        .describe("Filter by bounding box region"),
+      boundingBox: boundingBoxFilter,
       unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit for coordinates (default: mm)"),
       ...paginationParams,
     },

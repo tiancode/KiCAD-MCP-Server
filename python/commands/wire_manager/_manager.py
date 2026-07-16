@@ -742,6 +742,30 @@ class WireManager:
             return False
 
     @staticmethod
+    def _at_within_tolerance(item: list, position: List[float], tolerance: float) -> bool:
+        """True if item's first ``(at x y …)`` sub-expr lies within ``tolerance``
+        (mm) of ``position``. False when there is no ``(at …)``."""
+        at_entry = next(
+            (p for p in item[1:] if isinstance(p, list) and len(p) >= 3 and p[0] == _SYM_AT),
+            None,
+        )
+        if at_entry is None:
+            return False
+        lx, ly = float(at_entry[1]), float(at_entry[2])
+        return abs(lx - position[0]) < tolerance and abs(ly - position[1]) < tolerance
+
+    @staticmethod
+    def _delete_item_and_save(
+        sch_data: list, index: int, schematic_path: Path, log_msg: str
+    ) -> bool:
+        """Delete ``sch_data[index]``, serialize-validate, write, log and return True."""
+        del sch_data[index]
+        output = _serialize_validated(sch_data)
+        atomic_write_text(schematic_path, output)
+        logger.info(log_msg)
+        return True
+
+    @staticmethod
     @serialize_on_path(0)
     def delete_no_connect(
         schematic_path: Path,
@@ -773,25 +797,12 @@ class WireManager:
             for i, item in enumerate(sch_data):
                 if not (isinstance(item, list) and len(item) > 0 and item[0] == _SYM_NO_CONNECT):
                     continue
-                at_entry = next(
-                    (
-                        p
-                        for p in item[1:]
-                        if isinstance(p, list) and len(p) >= 3 and p[0] == _SYM_AT
-                    ),
-                    None,
-                )
-                if at_entry is None:
-                    continue
-                lx, ly = float(at_entry[1]), float(at_entry[2])
-                if not (abs(lx - position[0]) < tolerance and abs(ly - position[1]) < tolerance):
+                if not WireManager._at_within_tolerance(item, position, tolerance):
                     continue
 
-                del sch_data[i]
-                output = _serialize_validated(sch_data)
-                atomic_write_text(schematic_path, output)
-                logger.info(f"Deleted no-connect at {position}")
-                return True
+                return WireManager._delete_item_and_save(
+                    sch_data, i, schematic_path, f"Deleted no-connect at {position}"
+                )
 
             logger.warning(f"No matching no-connect flag found near {position}")
             return False
@@ -958,29 +969,14 @@ class WireManager:
                 if len(item) < 2 or item[1] != net_name:
                     continue
 
-                if position is not None:
-                    # Find (at x y ...) sub-expression and check coordinates
-                    at_entry = next(
-                        (
-                            p
-                            for p in item[1:]
-                            if isinstance(p, list) and len(p) >= 3 and p[0] == _SYM_AT
-                        ),
-                        None,
-                    )
-                    if at_entry is None:
-                        continue
-                    lx, ly = float(at_entry[1]), float(at_entry[2])
-                    if not (
-                        abs(lx - position[0]) < tolerance and abs(ly - position[1]) < tolerance
-                    ):
-                        continue
+                if position is not None and not WireManager._at_within_tolerance(
+                    item, position, tolerance
+                ):
+                    continue
 
-                del sch_data[i]
-                output = _serialize_validated(sch_data)
-                atomic_write_text(schematic_path, output)
-                logger.info(f"Deleted label '{net_name}'")
-                return True
+                return WireManager._delete_item_and_save(
+                    sch_data, i, schematic_path, f"Deleted label '{net_name}'"
+                )
 
             logger.warning(f"No matching label found for '{net_name}'")
             return False

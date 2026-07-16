@@ -7,7 +7,8 @@ All methods operate on in-memory sexpdata lists (no disk I/O).
 import logging
 import math
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from collections import Counter
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from sexpdata import Symbol
 
@@ -54,6 +55,16 @@ def _coords_match(ax: float, ay: float, bx: float, by: float, eps: float = EPS) 
     return abs(ax - bx) < eps and abs(ay - by) < eps
 
 
+def _reference_of(item: Any) -> Optional[str]:
+    """Return the ``Reference`` property value of a ``(symbol …)`` item, else None."""
+    prop_k = _K["property"]
+    for sub in item[1:]:
+        if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
+            if str(sub[1]).strip('"') == "Reference":
+                return str(sub[2]).strip('"')
+    return None
+
+
 class WireDragger:
     """Pure-logic helpers for wire-endpoint dragging during component moves."""
 
@@ -72,7 +83,6 @@ class WireDragger:
         physical instance owns a given pin.
         """
         sym_k = _K["symbol"]
-        prop_k = _K["property"]
         at_k = _K["at"]
         lib_id_k = _K["lib_id"]
         mirror_k = _K["mirror"]
@@ -85,12 +95,7 @@ class WireDragger:
         # kicad-skip may write a trailing "_" on references (e.g. "R1_") when
         # cloning symbols; strip it so callers passing the canonical "R1"
         # still find the symbol. Mirrors the rstrip in PinLocator.get_pin_location.
-        ref_val = None
-        for sub in item[1:]:
-            if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
-                if str(sub[1]).strip('"') == "Reference":
-                    ref_val = str(sub[2]).strip('"')
-                    break
+        ref_val = _reference_of(item)
         if ref_val is None or ref_val.rstrip("_") != reference:
             return None
 
@@ -462,6 +467,23 @@ class WireDragger:
         ]
 
     @staticmethod
+    def _iter_symbol_pin_world_positions(
+        sch_data: list, reference: str
+    ) -> Iterator[Tuple[Tuple[float, float], Any, Dict]]:
+        """Yield ``(world_xy_key, pin_num, pin_def)`` for each pin of the named
+        placed symbol. Empty when the reference is not found."""
+        found = WireDragger.find_symbol(sch_data, reference)
+        if found is None:
+            return
+        _, sx, sy, rotation, lib_id, mirror_x, mirror_y = found
+        pins = WireDragger.get_pin_defs(sch_data, lib_id)
+        for pin_num, pin in pins.items():
+            wx, wy = WireDragger.pin_world_xy(
+                pin["x"], pin["y"], sx, sy, rotation, mirror_x, mirror_y
+            )
+            yield (round(wx, 6), round(wy, 6)), pin_num, pin
+
+    @staticmethod
     def get_all_stationary_pin_positions(
         sch_data: list,
         moved_reference: str,
@@ -474,35 +496,17 @@ class WireDragger:
         with pins of the moved component (touching-pin connections).
         """
         sym_k = _K["symbol"]
-        prop_k = _K["property"]
         result: Dict[Tuple[float, float], str] = {}
 
         for item in sch_data:
             if not (isinstance(item, list) and item and item[0] == sym_k):
                 continue
-            # Determine reference
-            ref_val = None
-            for sub in item[1:]:
-                if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
-                    if str(sub[1]).strip('"') == "Reference":
-                        ref_val = str(sub[2]).strip('"')
-                        break
+            ref_val = _reference_of(item)
             if ref_val is None or ref_val == moved_reference:
                 continue
-            # Skip template / power symbols whose references start with special chars
-            # but we still want to handle them — no filtering needed here.
-
-            # Find lib_id and position for this symbol
-            found = WireDragger.find_symbol(sch_data, ref_val)
-            if found is None:
-                continue
-            _, sx, sy, rotation, lib_id, mirror_x, mirror_y = found
-            pins = WireDragger.get_pin_defs(sch_data, lib_id)
-            for pin_num, pin in pins.items():
-                wx, wy = WireDragger.pin_world_xy(
-                    pin["x"], pin["y"], sx, sy, rotation, mirror_x, mirror_y
-                )
-                key = (round(wx, 6), round(wy, 6))
+            for key, _pin_num, _pin in WireDragger._iter_symbol_pin_world_positions(
+                sch_data, ref_val
+            ):
                 result[key] = ref_val
 
         return result
@@ -522,32 +526,19 @@ class WireDragger:
         needs the full identity.
         """
         sym_k = _K["symbol"]
-        prop_k = _K["property"]
         result: Dict[Tuple[float, float], List[Tuple[str, str, str]]] = {}
 
         seen_refs: set = set()
         for item in sch_data:
             if not (isinstance(item, list) and item and item[0] == sym_k):
                 continue
-            ref_val = None
-            for sub in item[1:]:
-                if isinstance(sub, list) and len(sub) >= 3 and sub[0] == prop_k:
-                    if str(sub[1]).strip('"') == "Reference":
-                        ref_val = str(sub[2]).strip('"')
-                        break
+            ref_val = _reference_of(item)
             if ref_val is None or ref_val == moved_reference or ref_val in seen_refs:
                 continue
             seen_refs.add(ref_val)
-            found = WireDragger.find_symbol(sch_data, ref_val)
-            if found is None:
-                continue
-            _, sx, sy, rotation, lib_id, mirror_x, mirror_y = found
-            pins = WireDragger.get_pin_defs(sch_data, lib_id)
-            for pin_num, pin in pins.items():
-                wx, wy = WireDragger.pin_world_xy(
-                    pin["x"], pin["y"], sx, sy, rotation, mirror_x, mirror_y
-                )
-                key = (round(wx, 6), round(wy, 6))
+            for key, pin_num, pin in WireDragger._iter_symbol_pin_world_positions(
+                sch_data, ref_val
+            ):
                 result.setdefault(key, []).append((ref_val, str(pin_num), str(pin.get("name", ""))))
 
         return result
@@ -602,8 +593,6 @@ class WireDragger:
                "foreign": [{"reference", "pin", "name"}, ...],
                "netLabels": [str, ...]}
         """
-        from collections import Counter
-
         skip: set = set()
         warnings: List[Dict[str, Any]] = []
         if not pin_positions:
@@ -618,22 +607,8 @@ class WireDragger:
             return skip, warnings
         stationary_keys = set(foreign.keys())
 
-        endpoint_count: Counter = Counter()
-        wires: List[List[Tuple[float, float]]] = []
-        for item in sch_data:
-            eps_pts = WireDragger._wire_endpoints(item)
-            if len(eps_pts) >= 2:
-                wires.append(eps_pts)
-                for ep in (eps_pts[0], eps_pts[-1]):
-                    endpoint_count[(round(ep[0], 6), round(ep[1], 6))] += 1
-
-        junction_keys: set = set()
-        for item in sch_data:
-            if isinstance(item, list) and item and item[0] == _K["junction"]:
-                for sub in item[1:]:
-                    if isinstance(sub, list) and sub and sub[0] == _K["at"] and len(sub) >= 3:
-                        junction_keys.add((round(float(sub[1]), 6), round(float(sub[2]), 6)))
-                        break
+        endpoint_count, wires = WireDragger._wire_endpoint_index(sch_data)
+        junction_keys = WireDragger._junction_keys(sch_data)
 
         labels = WireDragger._label_positions(sch_data)
 
@@ -770,6 +745,38 @@ class WireDragger:
         return [(float(p[1]), float(p[2])) for p in xy_items]
 
     @staticmethod
+    def _wire_endpoint_index(
+        sch_data: list,
+    ) -> Tuple[Counter, List[List[Tuple[float, float]]]]:
+        """Index every 2+-point wire once.
+
+        Returns ``(endpoint_count, wires)`` where ``endpoint_count`` counts how
+        many wire ends land on each rounded point (a point shared by >1 wire is
+        anchored) and ``wires`` is each wire's endpoint list.
+        """
+        endpoint_count: Counter = Counter()
+        wires: List[List[Tuple[float, float]]] = []
+        for item in sch_data:
+            eps_pts = WireDragger._wire_endpoints(item)
+            if len(eps_pts) >= 2:
+                wires.append(eps_pts)
+                for ep in (eps_pts[0], eps_pts[-1]):
+                    endpoint_count[(round(ep[0], 6), round(ep[1], 6))] += 1
+        return endpoint_count, wires
+
+    @staticmethod
+    def _junction_keys(sch_data: list) -> set:
+        """Return the set of rounded ``(junction (at x y))`` positions."""
+        junction_keys: set = set()
+        for item in sch_data:
+            if isinstance(item, list) and item and item[0] == _K["junction"]:
+                for sub in item[1:]:
+                    if isinstance(sub, list) and sub and sub[0] == _K["at"] and len(sub) >= 3:
+                        junction_keys.add((round(float(sub[1]), 6), round(float(sub[2]), 6)))
+                        break
+        return junction_keys
+
+    @staticmethod
     def collect_stub_far_endpoints(
         sch_data: list,
         moved_reference: str,
@@ -796,8 +803,6 @@ class WireDragger:
         :meth:`drag_wires`; a label at ``far_old_xy`` is moved by
         :meth:`move_labels_at_points` with that same map.
         """
-        from collections import Counter
-
         if not pin_positions:
             return {}
 
@@ -811,24 +816,10 @@ class WireDragger:
         )
 
         # Count wire endpoints (a far end shared with another wire is anchored)
-        # and gather each wire's endpoints once.
-        endpoint_count: Counter = Counter()
-        wires: List[List[Tuple[float, float]]] = []
-        for item in sch_data:
-            eps_pts = WireDragger._wire_endpoints(item)
-            if len(eps_pts) >= 2:
-                wires.append(eps_pts)
-                for ep in (eps_pts[0], eps_pts[-1]):
-                    endpoint_count[(round(ep[0], 6), round(ep[1], 6))] += 1
-
-        # Junction positions mean real connectivity — not a free end.
-        junction_keys: set = set()
-        for item in sch_data:
-            if isinstance(item, list) and item and item[0] == _K["junction"]:
-                for sub in item[1:]:
-                    if isinstance(sub, list) and sub and sub[0] == _K["at"] and len(sub) >= 3:
-                        junction_keys.add((round(float(sub[1]), 6), round(float(sub[2]), 6)))
-                        break
+        # and gather each wire's endpoints once. Junction positions mean real
+        # connectivity — not a free end.
+        endpoint_count, wires = WireDragger._wire_endpoint_index(sch_data)
+        junction_keys = WireDragger._junction_keys(sch_data)
 
         far_map: Dict[Tuple[float, float], Tuple[float, float]] = {}
         for eps_pts in wires:

@@ -16,6 +16,22 @@ export const paginationParams = {
     .describe("Items to skip before returning (default 0), for paging"),
 };
 
+/**
+ * Bounding-box region filter shared by list/query tools (get_component_list,
+ * query_copper): x1/y1/x2/y2 in the given unit (default mm). Extracted so the
+ * two identical tool schemas can't drift apart.
+ */
+export const boundingBoxFilter = z
+  .object({
+    x1: z.number(),
+    y1: z.number(),
+    x2: z.number(),
+    y2: z.number(),
+    unit: z.enum(["mm", "inch", "mil"]).optional(),
+  })
+  .optional()
+  .describe("Filter by bounding box region");
+
 /** Just `offset` — for tools that already declare their own `limit`. */
 export const offsetParam = {
   offset: z
