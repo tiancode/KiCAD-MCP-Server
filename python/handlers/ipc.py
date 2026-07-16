@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from kicad_interface import KiCADInterface
 
 from handlers.ipc_gate import require_ipc
+from handlers.transactions import visibility_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ def handle_ipc_add_track(iface: "KiCADInterface", params: Dict[str, Any]) -> Dic
         )
         return {
             "success": success,
-            "message": ("Track added (visible in KiCAD UI)" if success else "Failed to add track"),
+            "message": (
+                f"Track added {visibility_suffix(iface)}" if success else "Failed to add track"
+            ),
             "realtime": True,
         }
     except Exception as e:
@@ -87,7 +90,9 @@ def handle_ipc_add_via(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
         )
         return {
             "success": success,
-            "message": ("Via added (visible in KiCAD UI)" if success else "Failed to add via"),
+            "message": (
+                f"Via added {visibility_suffix(iface)}" if success else "Failed to add via"
+            ),
             "realtime": True,
         }
     except Exception as e:
@@ -111,7 +116,9 @@ def handle_ipc_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
         )
         return {
             "success": success,
-            "message": ("Text added (visible in KiCAD UI)" if success else "Failed to add text"),
+            "message": (
+                f"Text added {visibility_suffix(iface)}" if success else "Failed to add text"
+            ),
             "realtime": True,
         }
     except Exception as e:

@@ -14,7 +14,63 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
+from ..transactions import visibility_suffix
 from ._common import _TO_MM_SCALE, extract_xy, swig_fallback_mutation, to_mm
+
+_NM_PER_MM = 1_000_000.0
+
+
+def _ipc_pad_boxes_mm(iface: "KiCADInterface") -> list:
+    """``(ref, pad_num, net, (left, top, right, bottom))`` in mm for every pad
+    on the live IPC board — input for the shared cross-net short check (B4).
+
+    Best-effort: returns ``[]`` on any failure so the guard degrades to the
+    pre-guard behaviour (route allowed) rather than breaking a legitimate
+    route when the kipy pad geometry can't be read.
+    """
+    boxes: list = []
+    try:
+        board = iface.ipc_board_api._get_board()  # noqa: SLF001 — our wrapper's accessor
+        footprints = board.get_footprints()
+    except Exception:
+        return boxes
+    for fp in footprints:
+        try:
+            ref = fp.reference_field.text.value
+        except Exception:
+            ref = "?"
+        try:
+            definition = getattr(fp, "definition", None)
+            pads = (
+                list(definition.pads) if definition is not None else list(getattr(fp, "pads", []))
+            )
+        except Exception:
+            continue
+        for pad in pads:
+            try:
+                pad_net = pad.net.name if getattr(pad, "net", None) else ""
+            except Exception:
+                pad_net = ""
+            if not pad_net:
+                continue
+            try:
+                num = str(pad.number)
+            except Exception:
+                num = ""
+            try:
+                pos = pad.position
+                cx, cy = pos.x / _NM_PER_MM, pos.y / _NM_PER_MM
+            except Exception:
+                continue
+            half_x = half_y = 0.0
+            try:
+                size = pad.padstack.copper_layers[0].size
+                half_x = (size.x / _NM_PER_MM) / 2.0
+                half_y = (size.y / _NM_PER_MM) / 2.0
+            except Exception:
+                pass
+            boxes.append((ref, num, pad_net, (cx - half_x, cy - half_y, cx + half_x, cy + half_y)))
+    return boxes
 
 
 def handle_route_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -33,6 +89,25 @@ def handle_route_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
         layer = params.get("layer", "F.Cu")
         width = params.get("width", 0.25)
         net = params.get("net")
+        force = bool(params.get("force", False))
+
+        # Refuse a cross-net short (B4, IPC parity): if a trace endpoint lands
+        # on a pad belonging to a DIFFERENT net, stamping this net onto it
+        # bridges the two nets.  Best-effort over the live IPC pads; force=true
+        # overrides.  Shares the pure conflict core with the SWIG path.
+        if net and not force:
+            from commands.routing._helpers import (
+                _endpoint_conflict_messages,
+                _refuse_cross_net_short,
+            )
+
+            conflicts = _endpoint_conflict_messages(
+                [(start_x, start_y), (end_x, end_y)],
+                net,
+                _ipc_pad_boxes_mm(iface),
+            )
+            if conflicts:
+                return _refuse_cross_net_short(net, conflicts)
 
         success = iface.ipc_board_api.add_track(
             start_x=start_x,
@@ -46,7 +121,9 @@ def handle_route_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[
 
         return {
             "success": success,
-            "message": ("Added trace (visible in KiCAD UI)" if success else "Failed to add trace"),
+            "message": (
+                f"Added trace {visibility_suffix(iface)}" if success else "Failed to add trace"
+            ),
             "trace": {
                 "start": {"x": start_x, "y": start_y, "unit": "mm"},
                 "end": {"x": end_x, "y": end_y, "unit": "mm"},
@@ -102,7 +179,9 @@ def handle_route_arc_trace(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         return {
             "success": success,
             "message": (
-                "Added arc trace (visible in KiCAD UI)" if success else "Failed to add arc trace"
+                f"Added arc trace {visibility_suffix(iface)}"
+                if success
+                else "Failed to add arc trace"
             ),
             "arc": {
                 "start": {"x": start_x, "y": start_y, "unit": "mm"},
@@ -137,7 +216,9 @@ def handle_add_via(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str,
 
         return {
             "success": success,
-            "message": ("Added via (visible in KiCAD UI)" if success else "Failed to add via"),
+            "message": (
+                f"Added via {visibility_suffix(iface)}" if success else "Failed to add via"
+            ),
             "via": {
                 "position": {"x": x, "y": y, "unit": "mm"},
                 "size": size,
@@ -270,10 +351,20 @@ def handle_query_traces(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
                 }
             )
 
+        # Pagination parity with the SWIG query_traces (D2): honour
+        # limit/offset and emit the IDENTICAL total/count/offset/limit/truncated
+        # metadata.  The SWIG path paginates ONLY traces (vias are returned in
+        # full), so match that exactly — `traceCount` becomes the full total and
+        # `traces` the current page.  Filtering already happened above, so the
+        # slice is over the matching traces just like SWIG.
+        from utils.pagination import paginate
+
+        traces, page = paginate(traces, params)
         result: Dict[str, Any] = {
             "success": True,
-            "traceCount": len(traces),
+            "traceCount": page["total"],
             "traces": traces,
+            **page,
             **net_annotations,
         }
 

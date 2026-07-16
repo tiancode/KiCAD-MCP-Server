@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
+from ..transactions import visibility_suffix
 from ._common import extract_xy, swig_fallback_mutation
 
 
@@ -42,7 +43,9 @@ def handle_add_text(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str
         return {
             "success": success,
             "message": (
-                f"Added text '{text}' (visible in KiCAD UI)" if success else "Failed to add text"
+                f"Added text '{text}' {visibility_suffix(iface)}"
+                if success
+                else "Failed to add text"
             ),
             "mirror": mirror,
             "mirrorAuto": mirror_auto and is_back_layer,
@@ -64,7 +67,7 @@ def handle_set_board_size(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         return {
             "success": success,
             "message": (
-                f"Board size set to {width}x{height} {unit} (visible in KiCAD UI)"
+                f"Board size set to {width}x{height} {unit} {visibility_suffix(iface)}"
                 if success
                 else "Failed to set board size"
             ),
@@ -192,7 +195,9 @@ def handle_add_board_outline(iface: "KiCADInterface", params: Dict[str, Any]) ->
 
         return {
             "success": True,
-            "message": f"Added board outline with {lines_created} segments (visible in KiCAD UI)",
+            "message": (
+                f"Added board outline with {lines_created} segments {visibility_suffix(iface)}"
+            ),
             "segments": lines_created,
         }
     except Exception as e:

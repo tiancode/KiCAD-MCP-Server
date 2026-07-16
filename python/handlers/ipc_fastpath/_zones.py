@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("handlers.ipc_fastpath")
 
+from ..transactions import visibility_suffix
 from ._common import _TO_MM_SCALE
 
 
@@ -97,7 +98,7 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
     rejected every call that used the documented ``outline`` name.
     """
     try:
-        from commands.routing._zones import resolve_net_name
+        from commands.routing._zones import _outline_is_degenerate, resolve_net_name
 
         layer = params.get("layer", "F.Cu")
         net = params.get("net")
@@ -113,9 +114,13 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         fill_type = params.get("fillType", "solid")
         name = params.get("name", "")
 
-        # If no outline given, derive from Edge.Cuts (matches SWIG behaviour
-        # and the public docstring).
-        if not points or len(points) < 3:
+        # Outline handling (Bug B9 — IPC parity with commands/routing/_zones.py):
+        # ONLY an omitted outline defaults to the board rectangle.  A
+        # supplied-but-too-short (1-2 point) or degenerate (colinear / zero-area)
+        # outline is REFUSED — silently swapping it for the whole-board plane, or
+        # persisting a zero-area no-op zone, are both data-integrity hazards.
+        # Same 3-way split (and messages / errorCodes) as the SWIG path.
+        if not points:
             derived = _ipc_board_edge_rect(iface.ipc_board_api)
             if derived is not None:
                 points = derived
@@ -127,7 +132,30 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
                         "least 3 {x, y} points, or add a board outline "
                         "(Edge.Cuts) first so the pour can default to it."
                     ),
+                    "errorCode": "VALIDATION",
                 }
+        elif len(points) < 3:
+            return {
+                "success": False,
+                "message": "outline needs at least 3 points",
+                "errorDetails": (
+                    "A copper pour polygon needs >=3 non-colinear points; a "
+                    "1-2 point outline cannot bound an area. Omit the outline "
+                    "to default to the board rectangle."
+                ),
+                "errorCode": "VALIDATION",
+            }
+        elif _outline_is_degenerate(points):
+            return {
+                "success": False,
+                "message": "outline is degenerate (zero area / colinear points)",
+                "errorDetails": (
+                    "The outline points are colinear, so the polygon encloses "
+                    "zero area — the zone would be a useless no-op. Provide "
+                    ">=3 non-colinear points."
+                ),
+                "errorCode": "VALIDATION",
+            }
 
         # Coordinate unit handling.  The IPC ``add_zone`` API expects mm.
         # ``add_copper_pour`` callers conventionally pass mm without a unit;
@@ -211,7 +239,7 @@ def handle_add_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -> D
         response: Dict[str, Any] = {
             "success": success,
             "message": (
-                "Added copper pour (visible in KiCAD UI)"
+                f"Added copper pour {visibility_suffix(iface)}"
                 if success
                 else "Failed to add copper pour"
             ),
@@ -389,7 +417,9 @@ def handle_refill_zones(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
         return {
             "success": success,
             "message": (
-                "Zones refilled (visible in KiCAD UI)" if success else "Failed to refill zones"
+                f"Zones refilled {visibility_suffix(iface)}"
+                if success
+                else "Failed to refill zones"
             ),
         }
     except Exception as e:
@@ -510,7 +540,7 @@ def handle_delete_copper_pour(iface: "KiCADInterface", params: Dict[str, Any]) -
             return {"success": False, "message": "Failed to delete copper pour via IPC"}
         return {
             "success": True,
-            "message": f"Deleted {len(deleted)} copper pour(s) (visible in KiCAD UI)",
+            "message": f"Deleted {len(deleted)} copper pour(s) {visibility_suffix(iface)}",
             "deleted": deleted,
         }
     except Exception as e:
