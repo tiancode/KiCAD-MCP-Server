@@ -10,6 +10,7 @@ import fnmatch
 import logging
 import math
 from typing import Any, Dict, List, Optional
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -113,11 +114,7 @@ class LengthMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             import pcbnew
 
@@ -160,8 +157,4 @@ class LengthMixin:
             }
         except Exception as e:  # API boundary; bucket: catch + return
             logger.error(f"Error reporting net lengths: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to report net lengths",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to report net lengths", e)

@@ -18,6 +18,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -924,11 +925,7 @@ class FreeroutingCommands:
             }
 
         if not self.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         requested_jar = params.get("freeroutingJar", DEFAULT_FREEROUTING_JAR)
         # Resolve versioned filenames (e.g. ``freerouting-2.2.4.jar``) so the
@@ -1037,11 +1034,7 @@ class FreeroutingCommands:
             # file-write path.  Returning {success: False, ...} is the
             # caller-friendly shape; log the traceback so it's debuggable.
             logger.exception(f"ExportSpecctraDSN crashed: {e}")
-            return {
-                "success": False,
-                "message": "DSN export failed",
-                "errorDetails": str(e),
-            }
+            return failed("DSN export failed", e)
 
         if not os.path.isfile(dsn_path):
             return {
@@ -1380,11 +1373,7 @@ class FreeroutingCommands:
             }
 
         if not self.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         requested = params.get("boardPath")
         loaded_path = self.board.GetFileName()
@@ -1432,11 +1421,7 @@ class FreeroutingCommands:
                 }
         except Exception as e:
             logger.exception(f"ExportSpecctraDSN crashed: {e}")
-            return {
-                "success": False,
-                "message": "DSN export failed",
-                "errorDetails": str(e),
-            }
+            return failed("DSN export failed", e)
 
         file_size = os.path.getsize(output_path) if os.path.isfile(output_path) else 0
         return {
@@ -1469,11 +1454,7 @@ class FreeroutingCommands:
             }
 
         if not self.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         ses_path = params.get("sesPath")
         if not ses_path:

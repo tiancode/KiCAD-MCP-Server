@@ -19,6 +19,7 @@ from ._helpers import (
 logger = logging.getLogger("kicad_interface")
 
 from ._board_core import IPCBoardAPI
+from utils.responses import failed
 
 
 class IPCBackend(KiCADBackend):
@@ -290,7 +291,7 @@ class IPCBackend(KiCADBackend):
 
         except Exception as e:
             logger.error(f"Failed to check project: {e}")
-            return {"success": False, "message": "Failed to check project", "errorDetails": str(e)}
+            return failed("Failed to check project", e)
 
     def save_project(self, path: Optional[Path] = None) -> Dict[str, Any]:
         """Save current project via IPC."""
@@ -309,7 +310,7 @@ class IPCBackend(KiCADBackend):
             return {"success": True, "message": "Project saved successfully"}
         except Exception as e:
             logger.error(f"Failed to save project: {e}")
-            return {"success": False, "message": "Failed to save project", "errorDetails": str(e)}
+            return failed("Failed to save project", e)
 
     def close_project(self) -> None:
         """Close current project (not supported via IPC)."""

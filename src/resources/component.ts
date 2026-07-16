@@ -7,7 +7,7 @@
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-import { jsonResource, resourceError } from "./resource-utils.js";
+import { jsonResource, resourceFailure } from "./resource-utils.js";
 import { CommandFunction } from "../tools/tool-response.js";
 
 /**
@@ -33,8 +33,7 @@ export function registerComponentResources(
     const result = await callKicadScript("get_component_list", { limit: 0 });
 
     if (!result.success) {
-      logger.error(`Failed to retrieve component list: ${result.errorDetails}`);
-      return resourceError(uri, "Failed to retrieve component list", result.errorDetails);
+      return resourceFailure(uri, "Failed to retrieve component list", result);
     }
 
     logger.debug(`Successfully retrieved ${result.components?.length || 0} components`);
@@ -57,11 +56,11 @@ export function registerComponentResources(
       });
 
       if (!result.success) {
-        logger.error(`Failed to retrieve component details: ${result.errorDetails}`);
-        return resourceError(
+        return resourceFailure(
           uri,
           `Failed to retrieve details for component ${reference}`,
-          result.errorDetails,
+          result,
+          "Failed to retrieve component details",
         );
       }
 

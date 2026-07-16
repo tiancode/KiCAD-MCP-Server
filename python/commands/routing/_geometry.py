@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pcbnew
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -130,11 +131,7 @@ class GeometryMixin:
     def _get_point(self, point_spec: Dict[str, Any]) -> pcbnew.VECTOR2I:
         """Convert point specification to KiCAD point"""
         if "x" in point_spec and "y" in point_spec:
-            scale = (
-                1000000
-                if point_spec.get("unit", "mm") == "mm"
-                else (25400 if point_spec.get("unit", "mm") == "mil" else 25400000)
-            )
+            scale = unit_to_nm_scale(point_spec.get("unit", "mm"))
             x_nm = int(point_spec["x"] * scale)
             y_nm = int(point_spec["y"] * scale)
             return pcbnew.VECTOR2I(x_nm, y_nm)

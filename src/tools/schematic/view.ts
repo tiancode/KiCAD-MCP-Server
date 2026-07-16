@@ -7,7 +7,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   CommandFunction,
+  failureResult,
   formatKicadResult,
+  textResult,
   toXyObject,
   toXyTuple,
   XY_POINT_FORMS,
@@ -69,15 +71,7 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
           ],
         };
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to get schematic view: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to get schematic view", result);
     },
   );
 
@@ -131,12 +125,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
             lines.push(`  "${l.name}" [${l.type}] @ (${l.position.x}, ${l.position.y})`);
           });
         }
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return textResult(lines.join("\n"));
       }
-      return {
-        content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
-        isError: true,
-      };
+      return failureResult("Failed", result);
     },
   );
 
@@ -163,12 +154,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
     async (args: { schematicPath: string; gridSize?: number; elements?: string[] }) => {
       const result = await callKicadScript("snap_to_grid", args);
       if (result.success) {
-        return { content: [{ type: "text", text: result.message }] };
+        return textResult(result.message);
       }
-      return {
-        content: [{ type: "text", text: `Failed: ${result.message || "Unknown error"}` }],
-        isError: true,
-      };
+      return failureResult("Failed", result);
     },
   );
 
@@ -186,27 +174,13 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
         const netName = result.net_name ?? null;
         const source = result.source ?? null;
         const pos = result.position;
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `Net at (${pos?.x ?? args.x}, ${pos?.y ?? args.y}): ` +
-                (netName !== null ? netName : "(none)") +
-                (source ? ` [source: ${source}]` : ""),
-            },
-          ],
-        };
+        return textResult(
+          `Net at (${pos?.x ?? args.x}, ${pos?.y ?? args.y}): ` +
+            (netName !== null ? netName : "(none)") +
+            (source ? ` [source: ${source}]` : ""),
+        );
       } else {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to get net at point: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to get net at point", result);
       }
     },
   );
@@ -245,24 +219,9 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
         position: toXyTuple(args.position),
       });
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: result.message || "Text annotation added successfully",
-            },
-          ],
-        };
+        return textResult(result.message || "Text annotation added successfully");
       } else {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Failed to add text annotation: ${result.message || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
+        return failureResult("Failed to add text annotation", result);
       }
     },
   );
@@ -401,25 +360,11 @@ export function registerSchematicViewTools(server: McpServer, callKicadScript: C
         position: toXyTuple(args.position),
       });
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                result.message || `Added sheet pin '${args.pinName}' to sheet '${args.sheetName}'`,
-            },
-          ],
-        };
+        return textResult(
+          result.message || `Added sheet pin '${args.pinName}' to sheet '${args.sheetName}'`,
+        );
       }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Failed to add sheet pin: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to add sheet pin", result);
     },
   );
 }

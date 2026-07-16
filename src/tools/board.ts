@@ -7,7 +7,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-response.js";
+import {
+  CommandFunction,
+  failureResult,
+  formatKicadResult,
+  makePassthrough,
+  textResult,
+} from "./tool-response.js";
 
 /**
  * Register board management tools with the MCP server
@@ -300,11 +306,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
       };
       if (r?.success && typeof r.imageData === "string" && r.imageData.length > 0) {
         if (r.format === "svg") {
-          return {
-            content: [
-              { type: "text" as const, text: Buffer.from(r.imageData, "base64").toString("utf8") },
-            ],
-          };
+          return textResult(Buffer.from(r.imageData, "base64").toString("utf8"));
         }
         return {
           content: [
@@ -351,26 +353,16 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     }) => {
       const result = await callKicadScript("import_svg_logo", args);
       if (result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                result.message,
-                `Polygons: ${result.polygon_count}`,
-                `Size: ${result.logo_width_mm?.toFixed(2)} × ${result.logo_height_mm?.toFixed(2)} mm`,
-                `Layer: ${result.layer}`,
-              ].join("\n"),
-            },
-          ],
-        };
+        return textResult(
+          [
+            result.message,
+            `Polygons: ${result.polygon_count}`,
+            `Size: ${result.logo_width_mm?.toFixed(2)} × ${result.logo_height_mm?.toFixed(2)} mm`,
+            `Layer: ${result.layer}`,
+          ].join("\n"),
+        );
       } else {
-        return {
-          content: [
-            { type: "text", text: `SVG import failed: ${result.message || "Unknown error"}` },
-          ],
-          isError: true,
-        };
+        return failureResult("SVG import failed", result);
       }
     },
   );

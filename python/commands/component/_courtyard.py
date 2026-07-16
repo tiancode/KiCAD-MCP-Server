@@ -8,6 +8,7 @@ import math
 from typing import Any, Dict
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -57,11 +58,7 @@ class CourtyardMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             ref_filter = params.get("refs")
             if ref_filter is not None:
@@ -200,11 +197,7 @@ class CourtyardMixin:
             }
         except Exception as e:
             logger.error(f"check_courtyard_overlaps failed: {e}", exc_info=True)
-            return {
-                "success": False,
-                "message": "check_courtyard_overlaps failed",
-                "errorDetails": str(e),
-            }
+            return failed("check_courtyard_overlaps failed", e)
 
     # --- helpers for check_courtyard_overlaps ----------------------------
 

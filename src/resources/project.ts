@@ -7,7 +7,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { logger } from "../logger.js";
-import { countComponentTypes, jsonResource, resourceError } from "./resource-utils.js";
+import { boardSummary, componentSummary, jsonResource, resourceFailure } from "./resource-utils.js";
 import { CommandFunction } from "../tools/tool-response.js";
 
 /**
@@ -30,8 +30,7 @@ export function registerProjectResources(
     const result = await callKicadScript("get_project_info", {});
 
     if (!result.success) {
-      logger.error(`Failed to retrieve project information: ${result.errorDetails}`);
-      return resourceError(uri, "Failed to retrieve project information", result.errorDetails);
+      return resourceFailure(uri, "Failed to retrieve project information", result);
     }
 
     logger.debug("Successfully retrieved project information");
@@ -52,40 +51,41 @@ export function registerProjectResources(
     // Get project info
     const infoResult = await callKicadScript("get_project_info", {});
     if (!infoResult.success) {
-      logger.error(`Failed to retrieve project information: ${infoResult.errorDetails}`);
-      return resourceError(uri, "Failed to generate project summary", infoResult.errorDetails);
+      return resourceFailure(
+        uri,
+        "Failed to generate project summary",
+        infoResult,
+        "Failed to retrieve project information",
+      );
     }
 
     // Get board info
     const boardResult = await callKicadScript("get_board_info", {});
     if (!boardResult.success) {
-      logger.error(`Failed to retrieve board information: ${boardResult.errorDetails}`);
-      return resourceError(uri, "Failed to generate project summary", boardResult.errorDetails);
+      return resourceFailure(
+        uri,
+        "Failed to generate project summary",
+        boardResult,
+        "Failed to retrieve board information",
+      );
     }
 
     // Get component list (limit:0 = uncapped; resources carry full data)
     const componentsResult = await callKicadScript("get_component_list", { limit: 0 });
     if (!componentsResult.success) {
-      logger.error(`Failed to retrieve component list: ${componentsResult.errorDetails}`);
-      return resourceError(
+      return resourceFailure(
         uri,
         "Failed to generate project summary",
-        componentsResult.errorDetails,
+        componentsResult,
+        "Failed to retrieve component list",
       );
     }
 
     // Combine all information into a summary
     const summary = {
       project: infoResult.project,
-      board: {
-        size: boardResult.size,
-        layers: boardResult.layers?.length || 0,
-        title: boardResult.title,
-      },
-      components: {
-        count: componentsResult.components?.length || 0,
-        types: countComponentTypes(componentsResult.components || []),
-      },
+      board: boardSummary(boardResult),
+      components: componentSummary(componentsResult),
     };
 
     logger.debug("Successfully generated project summary");

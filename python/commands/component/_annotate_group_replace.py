@@ -25,17 +25,10 @@ from typing import Any, Dict, List, Optional
 
 import pcbnew
 
-from ._placement import _unit_scale
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
-
-
-def _no_board() -> Dict[str, Any]:
-    return {
-        "success": False,
-        "message": "No board is loaded",
-        "errorDetails": "Load or create a board first",
-    }
 
 
 # KiCad 6+ renamed several technical layers; the canonical KiCad 10 names are
@@ -90,7 +83,7 @@ class AnnotateGroupReplaceMixin:
         """
         try:
             if not self.board:
-                return _no_board()
+                return no_board_loaded()
 
             reference = params.get("reference")
             # `text` is the new name; `annotation` is the pre-removal name.
@@ -140,7 +133,7 @@ class AnnotateGroupReplaceMixin:
             base = module.GetPosition()
             dx_nm = dy_nm = 0
             if offset is not None:
-                oscale = _unit_scale(offset.get("unit", "mm"))
+                oscale = unit_to_nm_scale(offset.get("unit", "mm"))
                 dx_nm = int(float(offset.get("x", 0)) * oscale)
                 dy_nm = int(float(offset.get("y", 0)) * oscale)
             x_nm = int(base.x) + dx_nm
@@ -177,11 +170,7 @@ class AnnotateGroupReplaceMixin:
 
         except Exception as e:
             logger.error(f"Error adding component annotation: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add component annotation",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add component annotation", e)
 
     # ------------------------------------------------------------------ #
     # group_components
@@ -200,7 +189,7 @@ class AnnotateGroupReplaceMixin:
         """
         try:
             if not self.board:
-                return _no_board()
+                return no_board_loaded()
 
             references = params.get("references")
             group_name = params.get("groupName")
@@ -305,11 +294,7 @@ class AnnotateGroupReplaceMixin:
 
         except Exception as e:
             logger.error(f"Error grouping components: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to group components",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to group components", e)
 
     # ------------------------------------------------------------------ #
     # replace_component
@@ -331,7 +316,7 @@ class AnnotateGroupReplaceMixin:
         """
         try:
             if not self.board:
-                return _no_board()
+                return no_board_loaded()
 
             reference = params.get("reference")
             # Preferred name is newFootprint; newComponentId is the pre-removal
@@ -499,8 +484,4 @@ class AnnotateGroupReplaceMixin:
 
         except Exception as e:
             logger.error(f"Error replacing component: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to replace component",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to replace component", e)

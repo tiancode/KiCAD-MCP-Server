@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Protocol, Tuple, TypeVar
+from utils.responses import failed
 
 logger = logging.getLogger("kicad_interface")
 
@@ -606,11 +607,7 @@ class LibraryCommands:
             return {"success": True, "libraries": libraries, "count": len(libraries)}
         except (OSError, ValueError) as e:
             logger.exception(f"Error listing libraries: {e}")
-            return {
-                "success": False,
-                "message": "Failed to list libraries",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to list libraries", e)
 
     def search_footprints(self, params: Dict) -> Dict:
         """Search for footprints by pattern"""
@@ -639,11 +636,7 @@ class LibraryCommands:
             }
         except (OSError, ValueError) as e:
             logger.exception(f"Error searching footprints: {e}")
-            return {
-                "success": False,
-                "message": "Failed to search footprints",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to search footprints", e)
 
     def list_library_footprints(self, params: Dict) -> Dict:
         """List all footprints in a specific library"""
@@ -665,11 +658,7 @@ class LibraryCommands:
             }
         except (OSError, ValueError) as e:
             logger.exception(f"Error listing library footprints: {e}")
-            return {
-                "success": False,
-                "message": "Failed to list library footprints",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to list library footprints", e)
 
     def get_footprint_info(self, params: Dict) -> Dict:
         """Get information about a specific footprint"""
@@ -739,8 +728,4 @@ class LibraryCommands:
 
         except (OSError, ValueError) as e:
             logger.exception(f"Error getting footprint info: {e}")
-            return {
-                "success": False,
-                "message": "Failed to get footprint info",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get footprint info", e)

@@ -6,6 +6,8 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -203,11 +205,7 @@ class ZoneMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             net_name = params.get("net")
             layer = params.get("layer")
@@ -314,21 +312,13 @@ class ZoneMixin:
 
         except Exception as e:
             logger.error(f"Error querying zones: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to query zones",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to query zones", e)
 
     def add_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Add a copper pour (zone) to the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             layer = params.get("layer", "F.Cu")
             net = params.get("net")
@@ -487,11 +477,7 @@ class ZoneMixin:
 
             # Add points to outline
             for point in points:
-                scale = (
-                    1000000
-                    if point.get("unit", "mm") == "mm"
-                    else (25400 if point.get("unit", "mm") == "mil" else 25400000)
-                )
+                scale = unit_to_nm_scale(point.get("unit", "mm"))
                 x_nm = int(point["x"] * scale)
                 y_nm = int(point["y"] * scale)
                 outline.Append(pcbnew.VECTOR2I(x_nm, y_nm))
@@ -530,11 +516,7 @@ class ZoneMixin:
 
         except Exception as e:
             logger.error(f"Error adding copper pour: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add copper pour",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add copper pour", e)
 
     # ------------------------------------------------------------------
     # Zone selection shared by edit_copper_pour / delete_copper_pour
@@ -561,11 +543,7 @@ class ZoneMixin:
         Returns (matches, error_response). error_response is None on success.
         """
         if not self.board:
-            return [], {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return [], no_board_loaded()
 
         zones = list(self.board.Zones())
         if uuid:
@@ -725,11 +703,7 @@ class ZoneMixin:
                 outline.RemoveAllContours()
                 outline.NewOutline()
                 for point in points:
-                    unit_scale = (
-                        1000000
-                        if point.get("unit", "mm") == "mm"
-                        else (25400 if point.get("unit") == "mil" else 25400000)
-                    )
+                    unit_scale = unit_to_nm_scale(point.get("unit", "mm"))
                     outline.Append(
                         pcbnew.VECTOR2I(int(point["x"] * unit_scale), int(point["y"] * unit_scale))
                     )
@@ -775,11 +749,7 @@ class ZoneMixin:
 
         except Exception as e:
             logger.error(f"Error editing copper pour: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to edit copper pour",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to edit copper pour", e)
 
     def delete_copper_pour(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Delete copper pour(s).
@@ -820,8 +790,4 @@ class ZoneMixin:
 
         except Exception as e:
             logger.error(f"Error deleting copper pour: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to delete copper pour",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to delete copper pour", e)

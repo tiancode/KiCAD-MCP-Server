@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, List, Tuple
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -87,11 +88,7 @@ class FabricationMixin:
         """Export Gerber files"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             output_dir = params.get("outputDir")
             layers = params.get("layers", [])
@@ -329,11 +326,7 @@ class FabricationMixin:
 
         except Exception as e:
             logger.error(f"Error exporting Gerber files: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to export Gerber files",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to export Gerber files", e)
 
     def export_3d(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export 3D model files using kicad-cli (KiCAD 9.0 compatible)"""
@@ -341,11 +334,7 @@ class FabricationMixin:
 
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             output_path = params.get("outputPath")
             format = params.get("format", "STEP")
@@ -493,11 +482,7 @@ class FabricationMixin:
             }
         except Exception as e:
             logger.error(f"Error exporting 3D model: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to export 3D model",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to export 3D model", e)
 
     def export_position_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Export a component placement / pick-and-place file via kicad-cli.
@@ -509,11 +494,7 @@ class FabricationMixin:
 
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             output_path = params.get("outputPath")
             fmt = str(params.get("format", "CSV")).lower()
@@ -614,8 +595,4 @@ class FabricationMixin:
             }
         except Exception as e:
             logger.error(f"Error exporting position file: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to export position file",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to export position file", e)

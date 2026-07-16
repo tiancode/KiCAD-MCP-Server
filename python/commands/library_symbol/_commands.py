@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from ._core import SymbolLibraryManager, get_symbol_library_manager
 from ._models import SymbolInfo  # noqa: F401
+from utils.responses import failed
 
 logger = logging.getLogger("kicad_interface")
 
@@ -116,11 +117,7 @@ class SymbolLibraryCommands:
             return result
         except (OSError, ValueError) as e:
             logger.exception(f"Error refreshing symbol libraries: {e}")
-            return {
-                "success": False,
-                "message": "Failed to refresh symbol libraries",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to refresh symbol libraries", e)
 
     def list_symbol_libraries(self, params: Dict) -> Dict:
         """List all available symbol libraries"""
@@ -333,11 +330,7 @@ class SymbolLibraryCommands:
 
         except (OSError, ValueError) as e:
             logger.exception(f"Error getting symbol info: {e}")
-            return {
-                "success": False,
-                "message": "Failed to get symbol info",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get symbol info", e)
 
 
 if __name__ == "__main__":

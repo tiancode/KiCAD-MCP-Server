@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ._helpers import _refuse_cross_net_short, _track_width_error, endpoint_net_conflicts
 from ._nets import netclass_property, resolve_netclass_name
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -33,11 +34,7 @@ class SmartRouteMixin:
         """
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             from ._astar import obstacles_from_board_items, route_grid_astar
 
@@ -161,11 +158,7 @@ class SmartRouteMixin:
             }
         except Exception as e:  # API boundary; bucket: catch + return
             logger.error(f"Error in route_smart: {str(e)}", exc_info=True)
-            return {
-                "success": False,
-                "message": "Failed to route with route_smart",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to route with route_smart", e)
 
     # -- helpers -----------------------------------------------------------
 

@@ -7,7 +7,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { CommandFunction, formatKicadResult } from "./tool-response.js";
+import { CommandFunction, failureResult, formatKicadResult, textResult } from "./tool-response.js";
 
 export function registerDatasheetTools(server: McpServer, callKicadScript: CommandFunction) {
   // ── enrich_datasheets ──────────────────────────────────────────────────────
@@ -54,17 +54,9 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
           lines.push("\nNo changes needed – all LCSC components already have a Datasheet URL.");
         }
 
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return textResult(lines.join("\n"));
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to enrich datasheets: ${result.message || "Unknown error"}`,
-          },
-        ],
-        isError: true,
-      };
+      return failureResult("Failed to enrich datasheets", result);
     },
   );
 

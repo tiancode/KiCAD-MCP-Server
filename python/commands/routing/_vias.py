@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 import pcbnew
 
 from ._helpers import _point_to_segment_distance_nm
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -17,11 +19,7 @@ class ViaMixin:
         """Add a via at the specified location"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             position = params.get("position")
             size = params.get("size")
@@ -42,9 +40,7 @@ class ViaMixin:
 
             # Set position — the MCP schema marks unit optional, so default mm
             unit = position.get("unit", "mm")
-            scale = (
-                1000000 if unit == "mm" else (25400 if unit == "mil" else 25400000)
-            )  # mm, mil, or inch to nm
+            scale = unit_to_nm_scale(unit)
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             via.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
@@ -95,11 +91,7 @@ class ViaMixin:
 
         except Exception as e:
             logger.error(f"Error adding via: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to add via",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to add via", e)
 
     # -----------------------------------------------------------------------
     # add_gnd_stitching_vias
@@ -167,11 +159,7 @@ class ViaMixin:
                 "summary": {...}}``
         """
         if not self.board:
-            return {
-                "success": False,
-                "message": "No board is loaded",
-                "errorDetails": "Load or create a board first",
-            }
+            return no_board_loaded()
 
         try:
             return self._do_add_gnd_stitching(params)
@@ -179,11 +167,7 @@ class ViaMixin:
             import traceback
 
             logger.error(f"add_gnd_stitching_vias failed: {e}\n{traceback.format_exc()}")
-            return {
-                "success": False,
-                "message": "add_gnd_stitching_vias failed",
-                "errorDetails": str(e),
-            }
+            return failed("add_gnd_stitching_vias failed", e)
 
     def _do_add_gnd_stitching(self, params: Dict[str, Any]) -> Dict[str, Any]:
         # --- Parse params ---

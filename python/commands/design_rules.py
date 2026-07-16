@@ -7,6 +7,7 @@ import os
 from typing import Any, Dict, Optional
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
@@ -78,11 +79,7 @@ class DesignRuleCommands:
         """Set design rules for the PCB"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             design_settings = self.board.GetDesignSettings()
 
@@ -180,11 +177,7 @@ class DesignRuleCommands:
 
         except Exception as e:
             logger.error(f"Error setting design rules: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to set design rules",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to set design rules", e)
 
     def _persist_design_rules_to_project(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Write design-rule minimums to the sibling .kicad_pro JSON.
@@ -330,11 +323,7 @@ class DesignRuleCommands:
         """Get current design rules - KiCAD 9.0 compatible"""
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             design_settings = self.board.GetDesignSettings()
             scale = 1000000  # nm to mm
@@ -380,11 +369,7 @@ class DesignRuleCommands:
 
         except Exception as e:
             logger.error(f"Error getting design rules: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get design rules",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get design rules", e)
 
     def run_drc(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Run Design Rule Check using kicad-cli"""
@@ -396,11 +381,7 @@ class DesignRuleCommands:
 
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             report_path = params.get("reportPath")
             # Caller-overridable timeout (seconds). Defaults to 600s for big boards
@@ -634,11 +615,7 @@ class DesignRuleCommands:
             }
         except Exception as e:
             logger.error(f"Error running DRC: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to run DRC",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to run DRC", e)
 
     def _find_kicad_cli(self) -> Optional[str]:
         """Find kicad-cli executable (see utils.kicad_cli.find_kicad_cli)."""
@@ -660,11 +637,7 @@ class DesignRuleCommands:
 
         try:
             if not self.board:
-                return {
-                    "success": False,
-                    "message": "No board is loaded",
-                    "errorDetails": "Load or create a board first",
-                }
+                return no_board_loaded()
 
             severity = params.get("severity", "all")
 
@@ -707,8 +680,4 @@ class DesignRuleCommands:
 
         except Exception as e:
             logger.error(f"Error getting DRC violations: {str(e)}")
-            return {
-                "success": False,
-                "message": "Failed to get DRC violations",
-                "errorDetails": str(e),
-            }
+            return failed("Failed to get DRC violations", e)
