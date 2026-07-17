@@ -91,10 +91,13 @@ def _power_ref_template(ref: str, comp_type: str, library: str) -> str | None:
 
 
 def _next_free_power_reference(references: List[str], template: str) -> str:
-    """Next free power-symbol ref, numbered like the KiCad GUI (#FLG?01, …)."""
+    """Next free power-symbol ref, numbered like the KiCad GUI (#FLG?01, …).
+
+    Always numbered: a bare ``#FLG?`` ends in '?', which KiCad's annotation
+    treats as *unannotated* (the GUI's annotate would renumber it), so
+    auto-assign never hands one out even when the template itself is free.
+    """
     used = set(references)
-    if template not in used:
-        return template
     n = 1
     while f"{template}{n:02d}" in used:
         n += 1

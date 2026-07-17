@@ -845,14 +845,15 @@ class TestPowerSymbolAutoAssign:
         shutil.copy(EMPTY_SCH, sch)
         res = self._call(sch, "", auto_assign=True)
         assert res["success"] is True
-        assert res["component_reference"] == "#FLG?"
+        # Always numbered: a bare "#FLG?" ends in '?' = unannotated to KiCad.
+        assert res["component_reference"] == "#FLG?01"
 
     def test_empty_power_ref_non_flag_symbol(self, tmp_path: Any) -> None:
         sch = tmp_path / "t.kicad_sch"
         shutil.copy(EMPTY_SCH, sch)
         res = self._call(sch, "", comp_type="GND", auto_assign=True)
         assert res["success"] is True
-        assert res["component_reference"] == "#PWR?"
+        assert res["component_reference"] == "#PWR?01"
 
     def test_duplicate_power_ref_rejection_hint_mentions_hash(self, tmp_path: Any) -> None:
         sch = tmp_path / "t.kicad_sch"
