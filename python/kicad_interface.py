@@ -1367,7 +1367,11 @@ class KiCADInterface(BoardPersistenceMixin):
             return False
 
         deadline = time.monotonic() + max(1.0, timeout_s)
-        reselect_next = 0.0
+        # Grace period before the first reselect: the file-open was JUST
+        # forwarded, so give the current instance a couple of poll ticks to
+        # load the board before churning the connection (a mid-load KiCad may
+        # not even answer the reconnect ping).
+        reselect_next = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             self._try_enable_ipc_backend(force=True)
             if self._ipc_has_open_board_document():
