@@ -11,9 +11,10 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+from utils.responses import failed, no_board_loaded
+
 from ._helpers import _refuse_cross_net_short, _track_width_error, endpoint_net_conflicts
 from ._nets import netclass_property, resolve_netclass_name
-from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 

@@ -5,14 +5,6 @@ Re-exports every analysis function so existing
 the split from one module into this package.
 """
 
-from ._parsing import (
-    _extract_lib_symbols,
-    _load_sexp,
-    _parse_labels,
-    _parse_lib_symbol_graphics,
-    _parse_symbols,
-    _parse_wires,
-)
 from ._geometry import (
     _aabb_overlap,
     _compute_pin_positions_direct,
@@ -22,6 +14,14 @@ from ._geometry import (
     _point_in_rect,
     _transform_local_point,
     compute_symbol_bbox,
+)
+from ._parsing import (
+    _extract_lib_symbols,
+    _load_sexp,
+    _parse_labels,
+    _parse_lib_symbol_graphics,
+    _parse_symbols,
+    _parse_wires,
 )
 from ._queries import (
     _check_wire_overlap,

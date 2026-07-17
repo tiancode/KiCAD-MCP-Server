@@ -9,6 +9,12 @@ Re-exports every handler and helper so the dispatcher and existing
 # is global, so the per-area submodules see the patch.
 from commands.schematic import SchematicManager
 
+from ._duplicate import (
+    handle_duplicate_schematic_component,
+)
+from ._lib import (
+    handle_refresh_schematic_lib_symbols,
+)
 from ._placement import (
     _SCHEMATIC_GRID_MM,
     _apply_grid_snap,
@@ -24,12 +30,6 @@ from ._properties import (
     handle_get_schematic_component,
     handle_remove_schematic_component_property,
     handle_set_schematic_component_property,
-)
-from ._duplicate import (
-    handle_duplicate_schematic_component,
-)
-from ._lib import (
-    handle_refresh_schematic_lib_symbols,
 )
 
 __all__ = [

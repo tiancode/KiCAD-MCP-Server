@@ -17,6 +17,7 @@ import subprocess
 import sys
 import textwrap
 from typing import TYPE_CHECKING, Any, Dict
+
 from utils.responses import no_board_loaded
 
 if TYPE_CHECKING:

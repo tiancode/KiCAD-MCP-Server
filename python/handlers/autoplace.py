@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List
+
 from utils.responses import no_board_loaded
 
 if TYPE_CHECKING:

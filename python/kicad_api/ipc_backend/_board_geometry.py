@@ -6,7 +6,6 @@ Split out of the former monolithic kicad_api/ipc_backend.py.
 import logging
 from typing import Any, Dict, List, Optional
 
-
 from ._helpers import (
     INCH_TO_NM,
 )

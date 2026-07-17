@@ -114,7 +114,7 @@ export function registerSymbolLibraryTools(server: McpServer, callKicadScript: C
       pinTypes: z
         .record(z.string(), pinElectricalType)
         .describe(
-          "Map of pin NUMBER or NAME to electrical type, e.g. {\"1\":\"power_in\",\"PA0\":\"bidirectional\",\"NC\":\"no_connect\"}. A key matches a pin's number first, then its name (case-insensitive); one key can retype several pins (e.g. every 'NC').",
+          'Map of pin NUMBER or NAME to electrical type, e.g. {"1":"power_in","PA0":"bidirectional","NC":"no_connect"}. A key matches a pin\'s number first, then its name (case-insensitive); one key can retype several pins (e.g. every \'NC\').',
         ),
       symbolId: z
         .string()
