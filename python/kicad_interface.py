@@ -300,7 +300,6 @@ try:
         LibraryCommands,
         get_library_manager,
     )
-    from commands.library_schematic import LibraryManager as SchematicLibraryManager
     from commands.library_symbol import SymbolLibraryCommands, SymbolLibraryManager
     from commands.project import ProjectCommands
     from commands.routing import RoutingCommands

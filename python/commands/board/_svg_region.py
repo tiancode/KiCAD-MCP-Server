@@ -53,7 +53,7 @@ def crop_svg_to_region(
         return None
     try:
         vb = [float(v) for v in view_box.replace(",", " ").split()]
-        vb_x, vb_y, vb_w, vb_h = vb
+        vb_x, vb_y, vb_w, _vb_h = vb
     except (ValueError, IndexError):
         return None
     if vb_w <= 0 or width_mm <= 0:

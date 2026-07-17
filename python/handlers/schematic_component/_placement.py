@@ -986,7 +986,6 @@ def handle_add_schematic_component(
                 {int(p["unit"]) for p in pins.values() if p.get("unit") not in (None, 0)}
             ) or [1]
 
-            page_w = float(page["width"])
             page_h = float(page["height"])
             gap = _UNIT_STACK_GAP_MM
 
