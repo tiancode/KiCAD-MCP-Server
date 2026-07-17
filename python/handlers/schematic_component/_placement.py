@@ -273,7 +273,6 @@ def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -
             if ref.startswith("_TEMPLATE"):
                 continue
 
-            # Split reference into prefix and number
             match = re.match(r"^([A-Za-z_]+)(\d+)$", ref)
             if match:
                 prefix = match.group(1)
@@ -308,7 +307,6 @@ def handle_annotate_schematic(iface: "KiCADInterface", params: Dict[str, Any]) -
             if prefix not in existing_refs:
                 existing_refs[prefix] = set()
 
-            # Find next available number
             next_num = 1
             while next_num in existing_refs[prefix]:
                 next_num += 1
@@ -582,7 +580,6 @@ def handle_move_schematic_component(
             drag_summary["wires_synthesized"] = wires_synthesized
             drag_summary["foreign_pin_detachments"] = detach_warnings
 
-        # Update symbol position
         WireDragger.update_symbol_position(sch_data, reference, float(new_x), float(new_y))
 
         WireManager.sync_junctions(sch_data)

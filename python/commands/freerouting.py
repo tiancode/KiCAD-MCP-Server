@@ -18,11 +18,11 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
 from utils.responses import failed, no_board_loaded
 
 logger = logging.getLogger("kicad_interface")
 
-# Default Freerouting JAR location
 DEFAULT_FREEROUTING_JAR = os.environ.get(
     "FREEROUTING_JAR",
     os.path.join(os.path.expanduser("~"), ".kicad-mcp", "freerouting.jar"),
@@ -982,7 +982,6 @@ class FreeroutingCommands:
                 ),
             }
 
-        # Determine execution mode
         exec_mode = self._resolve_execution_mode(jar_path)
         if exec_mode["mode"] == "error":
             return {
@@ -1011,7 +1010,6 @@ class FreeroutingCommands:
         # traces" (the B4 crash).
         pre_routed_nets = self._board_routed_nets(route_board)
 
-        # Set up file paths
         board_dir = os.path.dirname(board_path)
         board_stem = Path(board_path).stem
         dsn_path = os.path.join(board_dir, f"{board_stem}.dsn")
@@ -1173,7 +1171,6 @@ class FreeroutingCommands:
                 (proc.stdout or "") + "\n" + (proc.stderr or "")
             )
 
-            # Score this attempt
             with open(ses_path, "r", encoding="utf-8", errors="replace") as fh:
                 ses_text = fh.read()
             score_info = _score_ses(ses_text, target_nets)
@@ -1511,7 +1508,6 @@ class FreeroutingCommands:
         resolved_jar = _resolve_freerouting_jar(requested_jar)
         jar_path = resolved_jar or requested_jar
 
-        # Check local Java
         java_exe = _find_java()
         java_version = None
         java_21_ok = False
@@ -1531,7 +1527,6 @@ class FreeroutingCommands:
                 # diagnostic payload.
                 pass
 
-        # Check Docker/Podman
         docker_exe = _find_docker()
         has_docker = _docker_available()
 

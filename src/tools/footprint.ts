@@ -66,7 +66,6 @@ const RectSchema = z.object({
 
 export function registerFootprintTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
-  // ── create_footprint ──────────────────────────────────────────────────── //
   server.tool(
     "create_footprint",
     "Create a new KiCAD footprint (.kicad_mod) inside a .pretty library directory. " +
@@ -102,7 +101,6 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
     passthrough("create_footprint"),
   );
 
-  // ── edit_footprint_pad ────────────────────────────────────────────────── //
   server.tool(
     "edit_footprint_pad",
     "Edit one pad in a .kicad_mod footprint file (size/position/drill/shape) without recreating the footprint.",
@@ -123,7 +121,6 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
     passthrough("edit_footprint_pad"),
   );
 
-  // ── list_footprint_libraries ─────────────────────────────────────────── //
   server.tool(
     "list_footprint_libraries",
     "Scan the filesystem for .pretty footprint libraries (previews first 20 footprints each). Use when libraries may be missing from the fp-lib-table; for registered names use list_libraries (type=footprint), for one library's full contents use list_library_contents (type=footprint).",

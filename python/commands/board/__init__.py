@@ -9,8 +9,6 @@ import pcbnew
 
 from .layers import BoardLayerCommands
 from .outline import BoardOutlineCommands
-
-# Import specialized modules
 from .size import BoardSizeCommands
 from .view import BoardViewCommands
 
@@ -24,7 +22,6 @@ class BoardCommands:
         """Initialize with optional board instance"""
         self.board = board
 
-        # Initialize specialized command classes
         self.size_commands = BoardSizeCommands(board)
         self.layer_commands = BoardLayerCommands(board)
         self.outline_commands = BoardOutlineCommands(board)

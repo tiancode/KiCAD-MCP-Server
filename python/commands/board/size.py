@@ -75,8 +75,8 @@ class BoardSizeCommands:
             result = outline_commands.add_board_outline(
                 {
                     "shape": "rectangle",
-                    "centerX": width / 2,  # Center X
-                    "centerY": height / 2,  # Center Y
+                    "centerX": width / 2,
+                    "centerY": height / 2,
                     "width": width,
                     "height": height,
                     "unit": unit,

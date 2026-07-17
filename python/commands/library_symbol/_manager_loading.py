@@ -62,11 +62,13 @@ class LoadingMixin:
     def _warm_cache(self) -> None:
         """Pre-parse all symbol libraries so the first search is instant.
 
-        Opt-in via KICAD_MCP_EAGER_SYMBOL_CACHE=1.  Without it, libraries are
-        parsed lazily as ``list_symbols(nickname)`` is called.  Even with the
-        flag set the disk cache short-circuits most parses, so the price
-        ranges from "near-zero (cache hit)" to "30-120 s (cold disk, no
-        cache)".  See the module docstring for the cache file location.
+        Called from ``__init__`` when KICAD_MCP_EAGER_SYMBOL_CACHE=1 (blocking
+        eager warm) and from the default background warm thread
+        (``start_background_symbol_warm`` in ``_core.py``); otherwise libraries
+        are parsed lazily as ``list_symbols(nickname)`` is called.  The disk
+        cache short-circuits most parses, so the price ranges from "near-zero
+        (cache hit)" to "30-120 s (cold disk, no cache)".  See the module
+        docstring for the cache file location.
         """
         for nickname in list(self.libraries.keys()):
             try:
@@ -224,7 +226,6 @@ class LoadingMixin:
         # when it's missing, so creating one later triggers a rebuild.
         self._table_paths: List[Path] = []
 
-        # Load global libraries
         global_table = self._get_global_sym_lib_table()
         if global_table:
             self._table_paths.append(global_table)
@@ -234,7 +235,6 @@ class LoadingMixin:
         else:
             logger.warning(f"Global sym-lib-table not found at: {global_table}")
 
-        # Load project-specific libraries if project path provided
         if self.project_path:
             project_table = self.project_path / "sym-lib-table"
             self._table_paths.append(project_table)
@@ -401,7 +401,6 @@ class LoadingMixin:
             str(Path.home() / "Documents" / "KiCad" / "8.0" / "3rdparty"),
         ]
 
-        # Check environment variable
         if "KICAD10_3RD_PARTY" in os.environ:
             possible_paths.insert(0, os.environ["KICAD10_3RD_PARTY"])
         if "KICAD9_3RD_PARTY" in os.environ:

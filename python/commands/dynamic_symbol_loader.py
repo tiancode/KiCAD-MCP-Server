@@ -641,12 +641,10 @@ class DynamicSymbolLoader:
         with open(schematic_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Check if symbol already exists
         if f'(symbol "{full_name}"' in content:
             logger.info(f"Symbol {full_name} already exists in schematic")
             return True
 
-        # Extract symbol from library
         symbol_block = self.extract_symbol_from_library(library_name, symbol_name)
         if not symbol_block:
             raise ValueError(f"Symbol '{symbol_name}' not found in library '{library_name}'")

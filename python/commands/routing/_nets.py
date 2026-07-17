@@ -161,7 +161,6 @@ class NetMixin:
             if not self.board:
                 return no_board_loaded()
 
-            # Get filter parameters
             net_name = params.get("net")
             layer = params.get("layer")
             bbox = params.get("boundingBox")  # {x1, y1, x2, y2, unit}
@@ -189,10 +188,8 @@ class NetMixin:
             traces = []
             vias = []
 
-            # Process tracks
             for track in list(self.board.Tracks()):
                 try:
-                    # Check if it's a via
                     is_via = track.Type() == pcbnew.PCB_VIA_T
 
                     if is_via and not include_vias:
@@ -208,7 +205,6 @@ class NetMixin:
                         if track.GetLayer() != layer_id:
                             continue
 
-                    # Filter by bounding box
                     if bbox:
                         bbox_unit = bbox.get("unit", "mm")
                         bbox_scale = unit_to_nm_scale(bbox_unit)
@@ -351,7 +347,6 @@ class NetMixin:
             else:
                 netclass = existing
 
-            # Set properties
             scale = 1000000  # mm to nm
 
             # Defensive setters — KiCad 10's NETCLASS dropped some legacy mutators.

@@ -6,10 +6,8 @@ import { existsSync, mkdirSync, appendFileSync } from "fs";
 import { join } from "path";
 import * as os from "os";
 
-// Log levels
 type LogLevel = "error" | "warn" | "info" | "debug";
 
-// Default log directory
 const DEFAULT_LOG_DIR = join(os.homedir(), ".kicad-mcp", "logs");
 
 /**
@@ -34,7 +32,6 @@ class Logger {
   setLogDir(dir: string): void {
     this.logDir = dir;
 
-    // Ensure log directory exists
     if (!existsSync(this.logDir)) {
       mkdirSync(this.logDir, { recursive: true });
     }
@@ -94,9 +91,7 @@ class Logger {
     // All log levels go to stderr to avoid corrupting STDIO MCP transport
     console.error(formattedMessage);
 
-    // Log to file
     try {
-      // Ensure log directory exists
       if (!existsSync(this.logDir)) {
         mkdirSync(this.logDir, { recursive: true });
       }
@@ -109,5 +104,4 @@ class Logger {
   }
 }
 
-// Create and export logger instance
 export const logger = new Logger();

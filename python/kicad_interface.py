@@ -102,7 +102,6 @@ logger = logging.getLogger("kicad_interface")
 # ERROR so real skip failures still surface.
 logging.getLogger("skip").setLevel(logging.ERROR)
 
-# Log Python environment details
 logger.info(f"Python version: {sys.version}")
 logger.info(f"Python executable: {sys.executable}")
 logger.info(f"Platform: {sys.platform}")
@@ -114,14 +113,12 @@ if sys.platform == "win32":
     logger.info(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'NOT SET')}")
     logger.info(f"PATH: {os.environ.get('PATH', 'NOT SET')[:200]}...")  # Truncate PATH
 
-    # Check for common KiCAD installations
     common_kicad_paths = [r"C:\Program Files\KiCad", r"C:\Program Files (x86)\KiCad"]
 
     found_kicad = False
     for base_path in common_kicad_paths:
         if os.path.exists(base_path):
             logger.info(f"Found KiCAD installation at: {base_path}")
-            # List versions
             try:
                 versions = [
                     d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))
@@ -177,12 +174,10 @@ else:
 
 logger.info(f"Current Python path: {sys.path}")
 
-# Check if auto-launch is enabled
 AUTO_LAUNCH_KICAD = os.environ.get("KICAD_AUTO_LAUNCH", "false").lower() == "true"
 if AUTO_LAUNCH_KICAD:
     logger.info("KiCAD auto-launch enabled")
 
-# Check which backend to use
 # KICAD_BACKEND can be: 'auto', 'ipc', or 'swig'
 KICAD_BACKEND = os.environ.get("KICAD_BACKEND", "auto").lower()
 logger.info(f"KiCAD backend preference: {KICAD_BACKEND}")
@@ -196,7 +191,6 @@ if KICAD_BACKEND in ("auto", "ipc"):
         logger.info("Checking IPC backend availability...")
         from kicad_api.ipc_backend import IPCBackend
 
-        # Try to connect to running KiCAD
         ipc_backend = IPCBackend()
         if ipc_backend.connect():
             USE_IPC_BACKEND = True
@@ -534,7 +528,6 @@ class KiCADInterface(BoardPersistenceMixin):
         # Initialize footprint library manager (process-wide cached instance)
         self.footprint_library = get_library_manager()
 
-        # Initialize command handlers
         self.project_commands = ProjectCommands(self.board)
         self.board_commands = BoardCommands(self.board)
         self.component_commands = ComponentCommands(self.board, self.footprint_library)
@@ -787,7 +780,6 @@ class KiCADInterface(BoardPersistenceMixin):
         "get_component_properties": "_ipc_get_component_properties",
         "get_component_pads": "_ipc_get_component_pads",
         "get_pad_position": "_ipc_get_pad_position",
-        # Save command
         "save_project": "_ipc_save_project",
     }
 
@@ -1837,7 +1829,6 @@ class KiCADInterface(BoardPersistenceMixin):
                     f"IPC handler not available for {command}, falling back to SWIG (deprecated)"
                 )
 
-            # Get the handler for the command
             handler = self.command_routes.get(command)
 
             # Cross-backend conflict for SWIG mutations: refuse when IPC has
@@ -1883,7 +1874,6 @@ class KiCADInterface(BoardPersistenceMixin):
                 swig_reload_info = self._reload_swig_board_if_disk_changed()
 
             if handler:
-                # Execute the command
                 result = handler(params)
                 logger.debug(f"Command result: {result}")
 
@@ -2037,7 +2027,6 @@ class KiCADInterface(BoardPersistenceMixin):
                 }
 
         except Exception as e:
-            # Get the full traceback
             traceback_str = traceback.format_exc()
             logger.error(f"Error handling command {command}: {str(e)}\n{traceback_str}")
             code, hint = classify_failure(str(e), traceback_str, exc=e)
@@ -3512,14 +3501,11 @@ def main() -> None:
 
     try:
         logger.info("Processing commands from stdin...")
-        # Process commands from stdin
         for line in sys.stdin:
             try:
-                # Parse command
                 logger.debug(f"Received input: {line.strip()}")
                 command_data = json.loads(line)
 
-                # Check if this is JSON-RPC 2.0 format
                 if "jsonrpc" in command_data and command_data["jsonrpc"] == "2.0":
                     logger.info("Detected JSON-RPC 2.0 format message")
                     method = command_data.get("method")
@@ -3550,7 +3536,6 @@ def main() -> None:
                         )
                     elif method == "tools/list":
                         logger.info("Handling MCP tools/list")
-                        # Return list of available tools with proper schemas
                         tools = []
                         for cmd_name in interface.command_routes.keys():
                             # The TypeScript MCP server owns the authoritative tool
@@ -3580,7 +3565,6 @@ def main() -> None:
                         tool_name = params.get("name")
                         tool_params = params.get("arguments", {})
 
-                        # Execute the command
                         result = interface.handle_command(tool_name, tool_params)
 
                         response = _rpc_result(
@@ -3593,7 +3577,6 @@ def main() -> None:
                         )
                     elif method == "resources/list":
                         logger.info("Handling MCP resources/list")
-                        # Return list of available resources
                         response = _rpc_result(request_id, {"resources": RESOURCE_DEFINITIONS})
                     elif method == "resources/read":
                         logger.info("Handling MCP resources/read")
@@ -3604,7 +3587,6 @@ def main() -> None:
                                 request_id, -32602, "Missing required parameter: uri"
                             )
                         else:
-                            # Read the resource
                             resource_data = handle_resource_read(resource_uri, interface)
 
                             response = _rpc_result(request_id, resource_data)
@@ -3626,7 +3608,6 @@ def main() -> None:
                             "errorDetails": "The command field is required",
                         }
                     else:
-                        # Handle command
                         response = interface.handle_command(command, params)
 
                     # Echo the correlation id back when the client supplied one,

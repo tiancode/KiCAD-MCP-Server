@@ -66,16 +66,13 @@ class BoardViewCommands:
             if not self.board:
                 return no_board_loaded()
 
-            # Get board dimensions
             board_box = self.board.GetBoardEdgesBoundingBox()
             width_nm = board_box.GetWidth()
             height_nm = board_box.GetHeight()
 
-            # Convert to mm
             width_mm = width_nm / 1000000
             height_mm = height_nm / 1000000
 
-            # Get layer information
             layers = []
             for layer_id in range(pcbnew.PCB_LAYER_ID_COUNT):
                 if self.board.IsLayerEnabled(layer_id):
@@ -114,7 +111,6 @@ class BoardViewCommands:
             if not self.board:
                 return no_board_loaded()
 
-            # Get parameters
             width = params.get("width", 800)
             height = params.get("height", 600)
             # Whether the caller explicitly asked for a size. In crop-to-board
@@ -135,10 +131,8 @@ class BoardViewCommands:
             # works for svg/png/jpg alike and supersedes the alpha auto-crop.
             region = params.get("region")
 
-            # Create plot controller
             plotter = pcbnew.PLOT_CONTROLLER(self.board)
 
-            # Set up plot options
             plot_opts = plotter.GetPlotOptions()
             plot_opts.SetOutputDirectory(os.path.dirname(self.board.GetFileName()))
             plot_opts.SetScale(1)
@@ -338,11 +332,9 @@ class BoardViewCommands:
             if not self.board:
                 return no_board_loaded()
 
-            # Get unit preference (default to mm)
             unit = params.get("unit", "mm")
             scale = unit_to_nm_scale(unit)
 
-            # Get board bounding box
             board_box = self.board.GetBoardEdgesBoundingBox()
 
             # Extract bounds in nanometers, then convert
@@ -353,7 +345,6 @@ class BoardViewCommands:
             width = board_box.GetWidth() / scale
             height = board_box.GetHeight() / scale
 
-            # Get center point
             center_x = board_box.GetCenter().x / scale
             center_y = board_box.GetCenter().y / scale
 

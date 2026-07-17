@@ -64,7 +64,6 @@ class JLCPCBPartsManager:
 
         cursor = self.conn.cursor()
 
-        # Create components table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS components (
                 lcsc TEXT PRIMARY KEY,
@@ -695,7 +694,6 @@ class JLCPCBPartsManager:
             "QFN-32": ["Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm"],
         }
 
-        # Normalize package name
         package_normalized = package.strip().upper()
 
         for key, footprints in mappings.items():
@@ -771,7 +769,6 @@ class JLCPCBPartsManager:
         if not alternatives:
             alternatives = self.search_parts(package=package, in_stock=True, limit=limit * 3)
 
-        # Filter out the original part
         alternatives = [p for p in alternatives if p["lcsc"] != lcsc_number]
 
         # Sort by: Basic first, then by price, then by stock
@@ -893,7 +890,6 @@ if __name__ == "__main__":
 
     manager = JLCPCBPartsManager()
 
-    # Get stats
     stats = manager.get_database_stats()
     print(f"\nDatabase Statistics:")
     print(f"  Total parts: {stats['total_parts']}")

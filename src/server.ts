@@ -55,7 +55,6 @@ const LONG_RUNNING_COMMANDS = new Set([
   "auto_place_components",
 ]);
 
-// Import tool registration functions
 import { registerProjectTools } from "./tools/project.js";
 import { registerBoardTools } from "./tools/board.js";
 import { registerComponentTools } from "./tools/component.js";
@@ -76,12 +75,10 @@ import { registerTransactionTools } from "./tools/transactions.js";
 import { withToolAnnotations } from "./tools/annotations.js";
 import { slimToolsList } from "./tools/schema-slim.js";
 
-// Import resource registration functions
 import { registerProjectResources } from "./resources/project.js";
 import { registerBoardResources } from "./resources/board.js";
 import { registerComponentResources } from "./resources/component.js";
 
-// Import prompt registration functions
 import { registerComponentPrompts } from "./prompts/component.js";
 import { registerRoutingPrompts } from "./prompts/routing.js";
 import { registerDesignPrompts } from "./prompts/design.js";
@@ -131,10 +128,8 @@ export class KiCADMcpServer {
    * @param logLevel Log level for the server
    */
   constructor(kicadScriptPath: string, logLevel: "error" | "warn" | "info" | "debug" = "info") {
-    // Set up the logger
     logger.setLogLevel(logLevel);
 
-    // Check if KiCAD script exists
     this.kicadScriptPath = kicadScriptPath;
     if (!existsSync(this.kicadScriptPath)) {
       throw new Error(`KiCAD interface script not found: ${this.kicadScriptPath}`);
@@ -175,11 +170,9 @@ export class KiCADMcpServer {
       this.resolveReady = resolve;
     });
 
-    // Initialize STDIO transport
     this.stdioTransport = new StdioServerTransport();
     logger.info("Using STDIO transport for local communication");
 
-    // Register tools, resources, and prompts
     this.registerAll();
   }
 
@@ -276,7 +269,6 @@ export class KiCADMcpServer {
       }
     }
 
-    // Check if kicad_interface.py exists
     if (!existsSync(this.kicadScriptPath)) {
       errors.push(`KiCAD interface script not found: ${this.kicadScriptPath}`);
     }
@@ -381,7 +373,6 @@ export class KiCADMcpServer {
       }
     }
 
-    // Log all errors
     if (errors.length > 0) {
       logger.error("=".repeat(70));
       logger.error("STARTUP VALIDATION FAILED");
@@ -498,7 +489,6 @@ export class KiCADMcpServer {
       env: process.env,
     });
 
-    // Listen for process exit
     this.pythonProcess.on("exit", (code, signal) => {
       logger.warn(`Python process exited with code ${code} and signal ${signal}`);
       this.pythonProcess = null;
@@ -513,12 +503,10 @@ export class KiCADMcpServer {
       );
     });
 
-    // Listen for process errors
     this.pythonProcess.on("error", (err) => {
       logger.error(`Python process error: ${err.message}`);
     });
 
-    // Set up error logging for stderr
     if (this.pythonProcess.stderr) {
       this.pythonProcess.stderr.on("data", (data: Buffer) => {
         logger.error(`Python stderr: ${data.toString()}`);
@@ -635,7 +623,6 @@ export class KiCADMcpServer {
   async stop(): Promise<void> {
     logger.info("Stopping KiCAD MCP server...");
 
-    // Kill the Python process if it's running
     if (this.pythonProcess) {
       this.pythonProcess.kill();
       this.pythonProcess = null;
@@ -785,14 +772,12 @@ export class KiCADMcpServer {
         logger.info(`Using extended timeout (${commandTimeout / 1000}s) for command: ${command}`);
       }
 
-      // Add request to queue with timeout info
       this.requestQueue.push({
         request: { command, params, timeout: commandTimeout },
         resolve,
         reject,
       });
 
-      // Process the queue if not already processing
       if (!this.processingRequest) {
         this.processNextRequest();
       }
@@ -927,7 +912,6 @@ export class KiCADMcpServer {
     // Get the handler before clearing
     const handler = this.currentRequestHandler;
 
-    // Clear state
     this.responseBuffer = "";
     this.currentRequestHandler = null;
     this.processingRequest = false;
@@ -938,10 +922,8 @@ export class KiCADMcpServer {
       delete result.id;
     }
 
-    // Resolve the promise with the result
     handler.resolve(result);
 
-    // Process next request if any
     setTimeout(() => this.processNextRequest(), 0);
   }
 
@@ -949,15 +931,12 @@ export class KiCADMcpServer {
    * Process the next request in the queue
    */
   private processNextRequest(): void {
-    // If no more requests or already processing, return
     if (this.requestQueue.length === 0 || this.processingRequest) {
       return;
     }
 
-    // Set processing flag
     this.processingRequest = true;
 
-    // Get the next request
     const { request, resolve, reject } = this.requestQueue.shift()!;
 
     // Declared outside the try so the catch can disarm it: once the timeout
@@ -974,13 +953,10 @@ export class KiCADMcpServer {
       // handed to this request (see tryParseResponse).
       const requestId = this.nextRequestId++;
 
-      // Format the command and parameters as JSON
       const requestStr = JSON.stringify({ ...request, id: requestId });
 
-      // Clear response buffer for new request
       this.responseBuffer = "";
 
-      // Set a timeout (use command-specific timeout or default)
       const timeoutDuration = request.timeout || 30000;
       timeoutHandle = setTimeout(() => {
         logger.error(`Command timeout after ${timeoutDuration / 1000}s: ${request.command}`);
@@ -1011,10 +987,8 @@ export class KiCADMcpServer {
         this.killPythonForTimeout();
       }, timeoutDuration);
 
-      // Store the current request handler
       this.currentRequestHandler = { resolve, reject, timeoutHandle, id: requestId };
 
-      // Write the request to the Python process
       logger.debug(`Sending request: ${requestStr}`);
       this.pythonProcess?.stdin?.write(requestStr + "\n");
     } catch (error) {
@@ -1026,14 +1000,11 @@ export class KiCADMcpServer {
         clearTimeout(timeoutHandle);
       }
 
-      // Reset processing flag
       this.processingRequest = false;
       this.currentRequestHandler = null;
 
-      // Process next request
       setTimeout(() => this.processNextRequest(), 0);
 
-      // Reject the promise
       reject(error);
     }
   }

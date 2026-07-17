@@ -86,19 +86,16 @@ class DesignRuleCommands:
             # Convert mm to nanometers for KiCAD internal units
             scale = 1000000  # mm to nm
 
-            # Set clearance
             if "clearance" in params:
                 design_settings.m_MinClearance = int(params["clearance"] * scale)
 
             # KiCAD 9.0: Use SetCustom* methods instead of SetCurrent* (which were removed)
-            # Track if we set any custom track/via values
             custom_values_set = False
 
             if "trackWidth" in params:
                 design_settings.SetCustomTrackWidth(int(params["trackWidth"] * scale))
                 custom_values_set = True
 
-            # Via settings
             if "viaDiameter" in params:
                 design_settings.SetCustomViaSize(int(params["viaDiameter"] * scale))
                 custom_values_set = True
@@ -116,7 +113,6 @@ class DesignRuleCommands:
             if "microViaDrill" in params:
                 design_settings.m_MicroViasMinDrill = int(params["microViaDrill"] * scale)
 
-            # Set minimum values
             if "minTrackWidth" in params:
                 design_settings.m_TrackMinWidth = int(params["minTrackWidth"] * scale)
             if "minViaDiameter" in params:
@@ -402,7 +398,6 @@ class DesignRuleCommands:
             if max_violations <= 0:
                 max_violations = 0
 
-            # Get the board file path
             board_file = self.board.GetFileName()
             if not board_file or not os.path.exists(board_file):
                 return {
@@ -411,7 +406,6 @@ class DesignRuleCommands:
                     "errorDetails": "Cannot run DRC without a saved board file",
                 }
 
-            # Find kicad-cli executable
             kicad_cli = self._find_kicad_cli()
             if not kicad_cli:
                 return {
@@ -420,12 +414,10 @@ class DesignRuleCommands:
                     "errorDetails": "KiCAD CLI tool not found in system. Install KiCAD 8.0+ or set PATH.",
                 }
 
-            # Create temporary JSON output file
             with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
                 json_output = tmp.name
 
             try:
-                # Build command
                 cmd = [
                     kicad_cli,
                     "pcb",
@@ -464,7 +456,6 @@ class DesignRuleCommands:
                         "errorDetails": result.stderr,
                     }
 
-                # Read JSON output
                 with open(json_output, "r", encoding="utf-8") as f:
                     drc_data = json.load(f)
 
@@ -479,10 +470,8 @@ class DesignRuleCommands:
                     parsed, vtype, vseverity = _parse_drc_entry(violation)
                     violations.append(parsed)
 
-                    # Count violations by type
                     violation_counts[vtype] = violation_counts.get(vtype, 0) + 1
 
-                    # Count by severity
                     if vseverity in severity_counts:
                         severity_counts[vseverity] += 1
 
@@ -499,7 +488,6 @@ class DesignRuleCommands:
                     unconnected_items.append(parsed)
                 total_unconnected = len(unconnected_items)
 
-                # Determine where to save the violations file
                 board_dir = os.path.dirname(board_file)
                 board_name = os.path.splitext(os.path.basename(board_file))[0]
                 violations_file = os.path.join(board_dir, f"{board_name}_drc_violations.json")
@@ -523,7 +511,6 @@ class DesignRuleCommands:
                         indent=2,
                     )
 
-                # Save text report if requested
                 if report_path:
                     report_path = os.path.abspath(os.path.expanduser(report_path))
                     cmd_report = [
@@ -599,7 +586,6 @@ class DesignRuleCommands:
                 }
 
             finally:
-                # Clean up temp JSON file
                 if os.path.exists(json_output):
                     os.unlink(json_output)
 
@@ -645,7 +631,7 @@ class DesignRuleCommands:
             drc_result = self.run_drc({})
 
             if not drc_result.get("success"):
-                return drc_result  # Return the error from run_drc
+                return drc_result
 
             # Read violations from the saved JSON file
             violations_file = drc_result.get("violationsFile")
@@ -656,13 +642,11 @@ class DesignRuleCommands:
                     "errorDetails": "run_drc did not create violations file",
                 }
 
-            # Load violations from file
             with open(violations_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             all_violations = data.get("violations", [])
 
-            # Filter by severity if specified
             if severity != "all":
                 filtered_violations = [v for v in all_violations if v.get("severity") == severity]
             else:
@@ -674,7 +658,7 @@ class DesignRuleCommands:
             return {
                 "success": True,
                 "violations": filtered_violations,
-                "violationsFile": violations_file,  # Include file path for reference
+                "violationsFile": violations_file,
                 **page,
             }
 

@@ -25,12 +25,10 @@ class QueryMixin:
             if err:
                 return err
 
-            # Get position in mm
             pos = module.GetPosition()
             x_mm = pos.x / 1000000
             y_mm = pos.y / 1000000
 
-            # Get bounding box
             bbox_data = bbox_to_dict(module.GetBoundingBox())
 
             # Try to get courtyard bounds (preferred for placement clearance)

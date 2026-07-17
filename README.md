@@ -840,14 +840,15 @@ Export Gerber files to the 'fabrication' folder.
 
 Resources provide read-only access to project state:
 
-- `kicad://project/current/info` - Project metadata
-- `kicad://project/current/board` - Board properties
-- `kicad://project/current/components` - Component list (JSON)
-- `kicad://project/current/nets` - Electrical nets
-- `kicad://project/current/layers` - Layer stack configuration
-- `kicad://project/current/design-rules` - Current DRC settings
-- `kicad://project/current/drc-report` - Design rule violations
-- `kicad://board/preview.png` - Board visualization (PNG)
+- `kicad://project/info` - Project metadata
+- `kicad://project/summary` - Human-readable project summary
+- `kicad://components` - Component list (JSON)
+- `kicad://component/{reference}/details` - Single component details
+- `kicad://board/info` - Board properties
+- `kicad://board/layers` - Layer stack configuration
+- `kicad://board/extents/{unit?}` - Board bounding box (mm/inch)
+- `kicad://board/statistics` - Component/net/track statistics
+- `kicad://board/2d-view/{format?}` - Board visualization (png/jpg/svg)
 
 ```text
 Show me the current component list.

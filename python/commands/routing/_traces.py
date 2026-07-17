@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any, Dict
 
 import pcbnew
+from utils.responses import failed, no_board_loaded
+from utils.units import unit_to_nm_scale
 
 from ._helpers import (
     _refuse_cross_net_short,
@@ -15,8 +17,6 @@ from ._helpers import (
     _track_width_error,
     endpoint_net_conflicts,
 )
-from utils.responses import failed, no_board_loaded
-from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
 
@@ -41,7 +41,6 @@ class TraceMixin:
                     "errorDetails": "name parameter is required",
                 }
 
-            # Create new net
             netinfo = self.board.GetNetInfo()
             nets_map = netinfo.NetsByName()
             if nets_map.has_key(name):
@@ -115,7 +114,6 @@ class TraceMixin:
 
             scale = 1000000  # nm to mm
 
-            # Find pads
             footprints = {fp.GetReference(): fp for fp in self.board.GetFootprints()}
 
             for ref in [from_ref, to_ref]:
@@ -389,7 +387,6 @@ class TraceMixin:
             if width_err is not None:
                 return width_err
 
-            # Get layer ID
             layer_id = self.board.GetLayerID(layer)
             if layer_id < 0:
                 return {
@@ -399,7 +396,6 @@ class TraceMixin:
                     "errorCode": "VALIDATION",
                 }
 
-            # Get start point
             start_point = self._get_point(start)
             end_point = self._get_point(end)
 
@@ -419,7 +415,6 @@ class TraceMixin:
                 if conflicts:
                     return _refuse_cross_net_short(net, conflicts)
 
-            # Create track segment
             track = pcbnew.PCB_TRACK(self.board)
             track.SetStart(start_point)
             track.SetEnd(end_point)
@@ -431,7 +426,6 @@ class TraceMixin:
             else:
                 track.SetWidth(self.board.GetDesignSettings().GetCurrentTrackWidth())
 
-            # Set net if provided
             if net:
                 netinfo = self.board.GetNetInfo()
                 nets_map = netinfo.NetsByName()
@@ -439,10 +433,8 @@ class TraceMixin:
                     net_obj = nets_map[net]
                     track.SetNet(net_obj)
 
-            # Add track to board
             self.board.Add(track)
 
-            # Add via if requested and net is specified
             if via and net:
                 via_point = end_point
                 self.add_via(
@@ -835,7 +827,6 @@ class TraceMixin:
 
             scale = 1000000  # nm to mm conversion
 
-            # Get footprints
             footprints = {fp.GetReference(): fp for fp in self.board.GetFootprints()}
 
             # Validate all references exist
@@ -932,7 +923,6 @@ class TraceMixin:
                 start = track.GetStart()
                 end = track.GetEnd()
 
-                # Create new track
                 new_track = pcbnew.PCB_TRACK(self.board)
                 new_track.SetStart(pcbnew.VECTOR2I(start.x + offset_x, start.y + offset_y))
                 new_track.SetEnd(pcbnew.VECTOR2I(end.x + offset_x, end.y + offset_y))
@@ -953,7 +943,6 @@ class TraceMixin:
             for via in vias_to_copy:
                 pos = via.GetPosition()
 
-                # Create new via
                 new_via = pcbnew.PCB_VIA(self.board)
                 new_via.SetPosition(pcbnew.VECTOR2I(pos.x + offset_x, pos.y + offset_y))
                 new_via.SetWidth(via.GetWidth(pcbnew.F_Cu))
@@ -1001,7 +990,6 @@ class TraceMixin:
                     "errorDetails": "startPos, endPos, netPos, and netNeg are required",
                 }
 
-            # Get layer ID
             layer_id = self.board.GetLayerID(layer)
             if layer_id < 0:
                 return {
@@ -1010,7 +998,6 @@ class TraceMixin:
                     "errorDetails": f"Layer '{layer}' does not exist",
                 }
 
-            # Get nets
             netinfo = self.board.GetNetInfo()
             nets_map = netinfo.NetsByName()
 
@@ -1024,7 +1011,6 @@ class TraceMixin:
                     "errorDetails": "One or both nets specified for the differential pair do not exist",
                 }
 
-            # Get start and end points
             start_point = self._get_point(start_pos)
             end_point = self._get_point(end_pos)
 
@@ -1070,14 +1056,12 @@ class TraceMixin:
             )
             neg_end = pcbnew.VECTOR2I(int(end_point.x - offset_x), int(end_point.y - offset_y))
 
-            # Create positive trace
             pos_track = pcbnew.PCB_TRACK(self.board)
             pos_track.SetStart(pos_start)
             pos_track.SetEnd(pos_end)
             pos_track.SetLayer(layer_id)
             pos_track.SetNet(net_pos_obj)
 
-            # Create negative trace
             neg_track = pcbnew.PCB_TRACK(self.board)
             neg_track.SetStart(neg_start)
             neg_track.SetEnd(neg_end)
@@ -1095,7 +1079,6 @@ class TraceMixin:
                 pos_track.SetWidth(trace_width)
                 neg_track.SetWidth(trace_width)
 
-            # Add tracks to board
             self.board.Add(pos_track)
             self.board.Add(neg_track)
 

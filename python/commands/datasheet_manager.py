@@ -67,7 +67,6 @@ class DatasheetManager:
         lcsc = lcsc.strip()
         if not lcsc:
             return None
-        # Remove leading C/c
         without_prefix = lcsc.lstrip("Cc")
         if without_prefix.isdigit():
             return f"C{without_prefix}"

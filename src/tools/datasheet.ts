@@ -10,7 +10,6 @@ import { z } from "zod";
 import { CommandFunction, failureResult, formatKicadResult, textResult } from "./tool-response.js";
 
 export function registerDatasheetTools(server: McpServer, callKicadScript: CommandFunction) {
-  // ── enrich_datasheets ──────────────────────────────────────────────────────
   server.tool(
     "enrich_datasheets",
     "Fill in missing Datasheet URLs: every symbol with an LCSC property and an empty/'~' Datasheet field gets " +
@@ -60,7 +59,6 @@ export function registerDatasheetTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ── get_datasheet_url ──────────────────────────────────────────────────────
   server.tool(
     "get_datasheet_url",
     "Return the canonical LCSC datasheet + product URLs for an LCSC part number " +

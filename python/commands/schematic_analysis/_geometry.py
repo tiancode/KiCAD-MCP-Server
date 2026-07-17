@@ -13,11 +13,6 @@ from commands.pin_locator import PinLocator
 logger = logging.getLogger("kicad_interface")
 
 
-# ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
-
-
 def compute_symbol_bbox(
     schematic_path: Path,
     reference: str,

@@ -33,14 +33,11 @@ class DocumentMixin:
                     "errorDetails": "outputPath parameter is required",
                 }
 
-            # Create output directory if it doesn't exist
             output_path = os.path.abspath(os.path.expanduser(output_path))
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            # Create plot controller
             plotter = pcbnew.PLOT_CONTROLLER(self.board)
 
-            # Set up plot options
             plot_opts = plotter.GetPlotOptions()
             plot_opts.SetOutputDirectory(os.path.dirname(output_path))
             plot_opts.SetFormat(pcbnew.PLOT_FORMAT_PDF)
@@ -66,13 +63,11 @@ class DocumentMixin:
                     f"Page size '{page_size}' requested, but KiCAD 9.0 only supports A4 explicitly. Using auto-scale instead."
                 )
 
-            # Open plot for writing
             # Note: For PDF, all layers are combined into a single file
             # KiCAD prepends the board filename to the plot file name
             base_name = os.path.basename(output_path).replace(".pdf", "")
             plotter.OpenPlotfile(base_name, pcbnew.PLOT_FORMAT_PDF, "")
 
-            # Plot specified layers or all enabled layers
             plotted_layers = []
             if layers:
                 for layer_name in layers:

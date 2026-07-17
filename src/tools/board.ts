@@ -24,9 +24,6 @@ import {
 export function registerBoardTools(server: McpServer, callKicadScript: CommandFunction): void {
   logger.info("Registering board management tools");
 
-  // ------------------------------------------------------
-  // Set Board Size Tool
-  // ------------------------------------------------------
   server.tool(
     "set_board_size",
     "Set the PCB board dimensions by drawing a rectangular Edge.Cuts outline.",
@@ -54,9 +51,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     },
   );
 
-  // ------------------------------------------------------
-  // Add Layer Tool
-  // ------------------------------------------------------
   server.tool(
     "add_layer",
     "Add a new copper or technical layer to the PCB stackup.",
@@ -79,9 +73,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     },
   );
 
-  // ------------------------------------------------------
-  // Set Active Layer Tool
-  // ------------------------------------------------------
   server.tool(
     "set_active_layer",
     "Set the currently active PCB layer by name (e.g. F.Cu, B.Cu).",
@@ -118,9 +109,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     },
   );
 
-  // ------------------------------------------------------
-  // Add Board Outline Tool
-  // ------------------------------------------------------
   server.tool(
     "add_board_outline",
     "Draw the PCB board outline (Edge.Cuts layer) as a rectangle, rounded rectangle, circle or polygon. params.unit defaults to mm; params.x/y default to 0 (top-left).",
@@ -172,9 +160,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     },
   );
 
-  // ------------------------------------------------------
-  // Add Mounting Hole Tool
-  // ------------------------------------------------------
   server.tool(
     "add_mounting_hole",
     "Place a mounting hole (NPTH or PTH) at the specified position on the PCB.",
@@ -201,9 +186,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     },
   );
 
-  // ------------------------------------------------------
-  // Add Text Tool
-  // ------------------------------------------------------
   server.tool(
     "add_board_text",
     "Add a text label to a PCB layer (e.g. silkscreen, fab, courtyard). Placed text is managed via list_shapes / edit_shape / delete_shape (kind=text). Text on a back (B.*) layer is auto-mirrored by default (KiCad convention — un-mirrored back text fails DRC); pass mirror to override.",
@@ -245,12 +227,6 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     },
   );
 
-  // ------------------------------------------------------
-  // Get Board Extents Tool
-  // ------------------------------------------------------
-  // ------------------------------------------------------
-  // Get Board 2D View Tool
-  // ------------------------------------------------------
   server.tool(
     "get_board_2d_view",
     "Render a 2D image of the current PCB and return it as PNG, JPG or SVG, inline or as a file on disk.",

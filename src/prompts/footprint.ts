@@ -12,9 +12,6 @@ import { logger } from "../logger.js";
 export function registerFootprintPrompts(server: McpServer): void {
   logger.info("Registering footprint prompts");
 
-  // ------------------------------------------------------
-  // Create Footprint Prompt
-  // ------------------------------------------------------
   server.prompt(
     "create_footprint_guide",
     {
@@ -98,9 +95,6 @@ Now create the footprint for: {{component}}`,
     }),
   );
 
-  // ------------------------------------------------------
-  // Footprint IPC Checklist Prompt
-  // ------------------------------------------------------
   server.prompt(
     "footprint_ipc_checklist",
     {

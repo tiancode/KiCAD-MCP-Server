@@ -9,7 +9,6 @@ import { CommandFunction, formatKicadResult, makePassthrough } from "./tool-resp
 
 export function registerRoutingTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
-  // Add net tool
   server.tool(
     "add_net",
     "Create a new net on the PCB",
@@ -70,7 +69,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // Add via tool
   server.tool(
     "add_via",
     "Add a via to the PCB",
@@ -176,7 +174,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // Delete trace tool
   server.tool(
     "delete_trace",
     "Delete traces from the PCB. Can delete by UUID, position, or bulk-delete all traces on a net.",
@@ -289,7 +286,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("add_gnd_stitching_vias"),
   );
 
-  // Get nets list tool
   server.tool(
     "get_nets_list",
     "Get a list of all nets in the PCB with optional statistics.",
@@ -304,7 +300,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("get_nets_list"),
   );
 
-  // Modify trace tool
   server.tool(
     "modify_trace",
     "Modify an existing trace (change width, layer, or net).",
@@ -317,7 +312,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("modify_trace"),
   );
 
-  // Create netclass tool
   server.tool(
     "create_netclass",
     "Create or update a net class with custom design rules, persisted to the .kicad_pro (KiCad 9/10 store net classes in project JSON, not the board). Optionally assign nets by name or wildcard pattern.",
@@ -344,7 +338,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("create_netclass"),
   );
 
-  // Assign netclass pattern tool
   server.tool(
     "assign_netclass_pattern",
     "Append a wildcard pattern -> net-class rule to the .kicad_pro (netclass_patterns). '*' = any, '?' = one char; matches the full hierarchical net name, so a leading '*' is often needed.",
@@ -355,7 +348,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("assign_netclass_pattern"),
   );
 
-  // Route differential pair tool
   server.tool(
     "route_differential_pair",
     "Route a differential pair between two sets of points.",
@@ -470,7 +462,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // Net length report tool
   server.tool(
     "report_net_lengths",
     "Report routed copper length per net (mm), segment/via counts, layers, and max skew across the selected group — " +
@@ -489,7 +480,6 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
     passthrough("report_net_lengths"),
   );
 
-  // Copy routing pattern tool
   server.tool(
     "copy_routing_pattern",
     "Copy routing (traces and vias) from a group of source components to a matching target group; offset is auto-computed from the first source/target pair. For replicating identical circuit blocks.",

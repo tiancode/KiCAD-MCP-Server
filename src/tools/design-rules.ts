@@ -54,9 +54,6 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
     },
   );
 
-  // ------------------------------------------------------
-  // Run DRC Tool
-  // ------------------------------------------------------
   server.tool(
     "run_drc",
     "Run KiCAD Design Rule Check (DRC) on the current PCB and return violations with per-item offender locations (description + x/y mm). Returns the first maxViolations inline; the full list is written to the violations file.",
@@ -76,9 +73,6 @@ export function registerDesignRuleTools(server: McpServer, callKicadScript: Comm
     },
   );
 
-  // ------------------------------------------------------
-  // Assign Net to Class Tool
-  // ------------------------------------------------------
   server.tool(
     "assign_net_to_class",
     "Assign a net to an existing net class to apply its specific design rules.",

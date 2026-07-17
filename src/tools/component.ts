@@ -18,9 +18,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   const passthrough = makePassthrough(callKicadScript);
   logger.info("Registering component management tools");
 
-  // ------------------------------------------------------
-  // Place Component Tool
-  // ------------------------------------------------------
   const placeComponentSchema = {
     componentId: z
       .string()
@@ -69,9 +66,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     placeComponentHandler,
   );
 
-  // ------------------------------------------------------
-  // Move Component Tool
-  // ------------------------------------------------------
   server.tool(
     "move_component",
     "Move a PCB component to a new position. Optionally update rotation or flip to a different copper layer.",
@@ -112,9 +106,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Rotate Component Tool
-  // ------------------------------------------------------
   server.tool(
     "rotate_component",
     "Rotate a PCB component to an absolute angle in degrees.",
@@ -133,9 +124,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Delete Component Tool
-  // ------------------------------------------------------
   server.tool(
     "delete_component",
     "Remove a component from the PCB by its reference designator.",
@@ -152,9 +140,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Edit Component Properties Tool
-  // ------------------------------------------------------
   server.tool(
     "edit_component",
     "Edit properties of an existing PCB component (reference, value, footprint).",
@@ -177,9 +162,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Find Component Tool
-  // ------------------------------------------------------
   server.tool(
     "find_component",
     "Search components on the loaded PCB (board, not schematic). `query` is a case-insensitive substring matched across reference, value AND footprint-id; the targeted filters narrow further. All supplied criteria combine with AND. Returns position and properties.",
@@ -205,9 +187,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Get Component Properties Tool
-  // ------------------------------------------------------
   server.tool(
     "get_component_properties",
     "Return all properties of a PCB component (position, rotation, layer, value, footprint).",
@@ -224,9 +203,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Add Component Annotation Tool
-  // ------------------------------------------------------
   server.tool(
     "add_component_annotation",
     "Add a text annotation/comment near a PCB component: places a PCB_TEXT at the component's position (plus optional offset) on a silkscreen or comments layer. Use offset to sit the label beside the part instead of on top of it.",
@@ -254,9 +230,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     passthrough("add_component_annotation"),
   );
 
-  // ------------------------------------------------------
-  // Group Components Tool
-  // ------------------------------------------------------
   server.tool(
     "group_components",
     "Group PCB components into a named PCB_GROUP for easier selection. Refuses (creating nothing) if any reference is unknown. A component already in another group is moved into the new one; a group left empty by that move is removed — both reported.",
@@ -290,9 +263,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     passthrough("replace_component"),
   );
 
-  // ------------------------------------------------------
-  // Get Component Pads Tool
-  // ------------------------------------------------------
   server.tool(
     "get_component_pads",
     "Return all pads of a component with exact positions, nets and sizes — use before routing; pass pad for just one.",
@@ -370,9 +340,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     passthrough("edit_component_pad"),
   );
 
-  // ------------------------------------------------------
-  // Get Component List Tool
-  // ------------------------------------------------------
   server.tool(
     "get_component_list",
     "Return a list of all components on the PCB, optionally filtered by layer or bounding box region.",
@@ -396,9 +363,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Place Component Array Tool
-  // ------------------------------------------------------
   server.tool(
     "place_component_array",
     "Place a rectangular grid array of identical components on the PCB with configurable row/column spacing.",
@@ -450,9 +414,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Align Components Tool
-  // ------------------------------------------------------
   server.tool(
     "align_components",
     "Align multiple PCB components onto a common line: 'horizontal' shares one Y, 'vertical' shares one X, 'edge' snaps to a board edge. With `spacing` the parts are also evenly spaced (no overlap); with `referenceComponent` that part stays fixed and both the shared axis and the spacing sequence are anchored to it.",
@@ -545,9 +506,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
     },
   );
 
-  // ------------------------------------------------------
-  // Duplicate Component Tool
-  // ------------------------------------------------------
   server.tool(
     "duplicate_component",
     "Duplicate an existing PCB component at an offset position, optionally with a new reference designator.",
@@ -577,7 +535,6 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   );
 
   logger.info("Component management tools registered");
-  // Auto-place components by connectivity
   server.tool(
     "auto_place_components",
     "Auto-place components with a connectivity-driven greedy heuristic: connected parts cluster, decoupling caps " +

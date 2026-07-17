@@ -166,7 +166,6 @@ class TestHandleAddSchematicWireRouting:
             self.iface = KiCADInterface.__new__(KiCADInterface)
         self.sch_path = _make_temp_sch()
         yield
-        # cleanup
         shutil.rmtree(self.sch_path.parent, ignore_errors=True)
 
     @patch("commands.wire_manager.WireManager.add_wire", return_value=True)

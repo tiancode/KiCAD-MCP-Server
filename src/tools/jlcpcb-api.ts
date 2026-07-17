@@ -16,7 +16,6 @@ import {
 
 export function registerJLCPCBApiTools(server: McpServer, callKicadScript: CommandFunction) {
   const passthrough = makePassthrough(callKicadScript);
-  // Download JLCPCB parts database
   server.tool(
     "download_jlcpcb_database",
     `Populate the local JLCPCB parts DB (used by search_jlcpcb_parts) via the public JLCSearch API (tscircuit) — no credentials.
@@ -48,7 +47,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     },
   );
 
-  // Search JLCPCB parts
   server.tool(
     "search_jlcpcb_parts",
     `Search the local JLCPCB catalog (download_jlcpcb_database first). 'query' is AND full-text over description+MPN; synonym/format mismatches can miss — a no-match auto-retries OR-style, flagged fuzzy. category/manufacturer only work with the jlcparts-built DB (scripts/download_jlcpcb.py); with the older JLCSearch DB they fold into text search — check the returned warning. Zero-stock results auto-retry without the stock filter (flagged out_of_stock_only), so empty = not in the catalog. Cost Basic < Preferred < Extended (Basic: no setup fee, ~350 parts; Extended: ~$3/unique part; Preferred: stocked Extended) — try Basic → Preferred → All (no combined Basic+Preferred; two calls); never conclude absence from a Basic-only miss.`,
@@ -131,7 +129,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     },
   );
 
-  // Get JLCPCB part details
   server.tool(
     "get_jlcpcb_part",
     "Get detailed information about a specific JLCPCB part by LCSC number",
@@ -175,7 +172,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     },
   );
 
-  // Download a part's datasheet PDF
   server.tool(
     "download_jlcpcb_datasheet",
     `Download a JLCPCB/LCSC part's datasheet PDF by LCSC number to <output_dir>/<lcsc>.pdf. Uses the local DB's stored CDN link, falling back to https://www.lcsc.com/datasheet/<lcsc>.pdf; verified to be a real PDF before keeping. Requires network. Returns saved path, source URL, bytes, and source (db | lcsc_fallback | cached).`,
@@ -216,7 +212,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     },
   );
 
-  // Get JLCPCB database statistics
   server.tool(
     "get_jlcpcb_database_stats",
     "Get statistics about the local JLCPCB parts database",
@@ -241,7 +236,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     },
   );
 
-  // Suggest alternative parts
   server.tool(
     "suggest_jlcpcb_alternatives",
     "Suggest similar JLCPCB parts that may be cheaper, better stocked, or Basic library type — for cost optimization or out-of-stock parts.",
@@ -276,7 +270,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
     },
   );
 
-  // Import LCSC/JLCPCB parts as placeable KiCAD symbols + footprints
   server.tool(
     "import_jlcpcb_symbols",
     `Generate KiCAD symbols + footprints for LCSC parts via easyeda2kicad into the shared "easyeda" cache library. Batch a whole BOM: cached parts are skipped, one bad id never aborts the rest. Then place with add_schematic_component(symbol="easyeda:<name from response>"). Needs easyeda2kicad + network.`,
@@ -319,7 +312,6 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
       return formatKicadResult(result);
     },
   );
-  // BOM availability check against the local JLCPCB catalog
   server.tool(
     "check_bom_availability",
     "Check each BOM line of the loaded board against the local JLCPCB catalog (download_jlcpcb_database first): " +

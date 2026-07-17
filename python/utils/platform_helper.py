@@ -52,13 +52,11 @@ class PlatformHelper:
         paths = []
 
         if PlatformHelper.is_windows():
-            # Windows: Check Program Files
             program_files = [
                 Path("C:/Program Files/KiCad"),
                 Path("C:/Program Files (x86)/KiCad"),
             ]
             for pf in program_files:
-                # Check multiple KiCAD versions
                 for version in ["10.0", "9.0", "9.1", "8.0"]:
                     # KiCad 10.0+ Windows: bin/Lib/site-packages
                     path = pf / version / "bin" / "Lib" / "site-packages"
@@ -70,7 +68,6 @@ class PlatformHelper:
                         paths.append(path)
 
         elif PlatformHelper.is_linux():
-            # Linux: Check common installation paths
             candidates = [
                 Path("/usr/lib/kicad/lib/python3/dist-packages"),
                 Path("/usr/share/kicad/scripting/plugins"),
@@ -78,7 +75,6 @@ class PlatformHelper:
                 Path.home() / ".local/lib/kicad/lib/python3/dist-packages",
             ]
 
-            # Also check based on Python version
             py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
             candidates.extend(
                 [
@@ -101,14 +97,12 @@ class PlatformHelper:
             paths = [p for p in candidates if p.exists()]
 
         elif PlatformHelper.is_macos():
-            # macOS: Check multiple KiCAD application bundle locations
             kicad_app_paths = [
                 Path("/Applications/KiCad/KiCad.app"),
                 Path("/Applications/KiCAD/KiCad.app"),  # Alternative capitalization
                 Path.home() / "Applications" / "KiCad" / "KiCad.app",  # User Applications
             ]
 
-            # Check Python framework paths in each KiCAD installation
             for kicad_app in kicad_app_paths:
                 if kicad_app.exists():
                     for version in ["3.9", "3.10", "3.11", "3.12", "3.13"]:
@@ -391,7 +385,6 @@ class PlatformHelper:
         return paths_added
 
 
-# Convenience function for quick platform detection
 def detect_platform() -> dict:
     """
     Detect platform and return useful information

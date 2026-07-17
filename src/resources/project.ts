@@ -22,9 +22,6 @@ export function registerProjectResources(
 ): void {
   logger.info("Registering project resources");
 
-  // ------------------------------------------------------
-  // Project Information Resource
-  // ------------------------------------------------------
   server.resource("project_info", "kicad://project/info", async (uri) => {
     logger.debug("Retrieving project information");
     const result = await callKicadScript("get_project_info", {});
@@ -42,13 +39,9 @@ export function registerProjectResources(
   // existed (UNKNOWN_COMMAND on every read). Use kicad://project/info or
   // kicad://project/summary instead.
 
-  // ------------------------------------------------------
-  // Project Summary Resource
-  // ------------------------------------------------------
   server.resource("project_summary", "kicad://project/summary", async (uri) => {
     logger.debug("Generating project summary");
 
-    // Get project info
     const infoResult = await callKicadScript("get_project_info", {});
     if (!infoResult.success) {
       return resourceFailure(
@@ -59,7 +52,6 @@ export function registerProjectResources(
       );
     }
 
-    // Get board info
     const boardResult = await callKicadScript("get_board_info", {});
     if (!boardResult.success) {
       return resourceFailure(
@@ -81,7 +73,6 @@ export function registerProjectResources(
       );
     }
 
-    // Combine all information into a summary
     const summary = {
       project: infoResult.project,
       board: boardSummary(boardResult),

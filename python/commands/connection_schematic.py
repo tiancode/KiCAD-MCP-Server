@@ -7,7 +7,6 @@ from skip import Schematic
 
 logger = logging.getLogger(__name__)
 
-# Import new wire and pin managers
 try:
     from commands.pin_locator import PinLocator
     from commands.wire_manager import WireManager
@@ -1232,13 +1231,11 @@ class ConnectionManager:
 
             for wire in (schematic.wire if hasattr(schematic, "wire") else []):
                 if hasattr(wire, "pts") and hasattr(wire.pts, "xy"):
-                    # Get all points in this wire (polyline)
                     wire_points = []
                     for point in wire.pts.xy:
                         if hasattr(point, "value"):
                             wire_points.append([float(point.value[0]), float(point.value[1])])
 
-                    # Check if any wire point touches a label
                     wire_connected = False
                     for wire_pt in wire_points:
                         for label_pt in net_label_positions:
@@ -1248,7 +1245,6 @@ class ConnectionManager:
                         if wire_connected:
                             break
 
-                    # If this wire is connected to the net, add all its points
                     if wire_connected:
                         for pt in wire_points:
                             connected_wire_points.add((pt[0], pt[1]))
@@ -1295,19 +1291,15 @@ class ConnectionManager:
                 # If we have PinLocator and schematic_path, do accurate pin matching
                 if locator and schematic_path:
                     try:
-                        # Get all pins for this symbol
                         pins = locator.get_symbol_pins(schematic_path, lib_id)
                         if not pins:
                             continue
 
-                        # Check each pin
                         for pin_num, pin_data in pins.items():
-                            # Get pin location
                             pin_loc = locator.get_pin_location(schematic_path, ref, pin_num)
                             if not pin_loc:
                                 continue
 
-                            # Check if pin coincides with any match point
                             for wire_pt_tup in all_match_points:
                                 if points_coincide(pin_loc, list(wire_pt_tup)):
                                     connections.append({"component": ref, "pin": pin_num})

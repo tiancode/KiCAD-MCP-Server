@@ -54,7 +54,6 @@ class PadsMixin:
 
             unit = normalize_unit(params.get("unit", "mm"))
 
-            # Find the component
             module = self.board.FindFootprintByReference(reference)
             if not module:
                 return {
@@ -68,7 +67,6 @@ class PadsMixin:
                 pos = pad.GetPosition()
                 size = pad.GetSize()
 
-                # Get pad shape as string
                 shape_map = {
                     pcbnew.PAD_SHAPE_CIRCLE: "circle",
                     pcbnew.PAD_SHAPE_RECT: "rect",
@@ -80,7 +78,6 @@ class PadsMixin:
                 }
                 shape = shape_map.get(pad.GetShape(), "unknown")
 
-                # Get pad type
                 type_map = {
                     pcbnew.PAD_ATTRIB_PTH: "through_hole",
                     pcbnew.PAD_ATTRIB_SMD: "smd",
@@ -115,7 +112,6 @@ class PadsMixin:
                     }
                 )
 
-            # Get component position for reference
             comp_pos = module.GetPosition()
 
             return {
@@ -160,7 +156,6 @@ class PadsMixin:
                     "errorDetails": "pad (or padName / padNumber) parameter is required",
                 }
 
-            # Find the component
             module = self.board.FindFootprintByReference(reference)
             if not module:
                 return {
@@ -169,10 +164,8 @@ class PadsMixin:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            # Find the specific pad
             pad = module.FindPadByNumber(str(pad_name))
             if not pad:
-                # List available pads in error message
                 available_pads = [p.GetNumber() for p in module.Pads()]
                 return {
                     "success": False,

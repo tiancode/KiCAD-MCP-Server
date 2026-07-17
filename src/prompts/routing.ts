@@ -17,9 +17,6 @@ import { logger } from "../logger.js";
 export function registerRoutingPrompts(server: McpServer): void {
   logger.info("Registering routing prompts");
 
-  // ------------------------------------------------------
-  // Routing Strategy Prompt
-  // ------------------------------------------------------
   server.prompt(
     "routing_strategy",
     {
@@ -74,9 +71,6 @@ Provide a comprehensive routing strategy that addresses these aspects, with spec
     }),
   );
 
-  // ------------------------------------------------------
-  // Differential Pair Routing Prompt
-  // ------------------------------------------------------
   server.prompt(
     "differential_pair_routing",
     {
@@ -130,9 +124,6 @@ Based on the provided information, suggest specific routing approaches for these
     }),
   );
 
-  // ------------------------------------------------------
-  // High-Speed Routing Prompt
-  // ------------------------------------------------------
   server.prompt(
     "high_speed_routing",
     {
@@ -187,9 +178,6 @@ Based on the provided information, suggest specific routing approaches for these
     }),
   );
 
-  // ------------------------------------------------------
-  // Power Distribution Prompt
-  // ------------------------------------------------------
   server.prompt(
     "power_distribution",
     {
@@ -244,9 +232,6 @@ Based on the provided information, suggest a comprehensive power distribution st
     }),
   );
 
-  // ------------------------------------------------------
-  // Via Usage Prompt
-  // ------------------------------------------------------
   server.prompt(
     "via_usage",
     {

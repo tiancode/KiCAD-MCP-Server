@@ -53,7 +53,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Add net label
   server.tool(
     "add_schematic_net_label",
     "Add a net label. KiCad connects a label to a pin ONLY at the exact pin endpoint (0.01 mm off breaks it). " +
@@ -162,7 +161,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Connect pin to net
   server.tool(
     "connect_to_net",
     "Connect a component pin to a named net via a wire stub + net label at the pin endpoint. " +
@@ -197,7 +195,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Get net connections
   server.tool(
     "get_net_connections",
     "Get all connections for a named net",
@@ -232,7 +229,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Get wire connections
   server.tool(
     "get_wire_connections",
     "Return the net plus all wires and pins connected at a point (reference + pin, OR x/y in mm). " +
@@ -281,7 +277,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Get pin locations for a schematic component
   server.tool(
     "get_schematic_pin_locations",
     "Return the exact x/y coordinates of every pin on a schematic component. Use before add_schematic_net_label or add_schematic_wire.",
@@ -356,7 +351,6 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
-  // Delete wire from schematic
   server.tool(
     "delete_schematic_wire",
     "Remove a wire from the schematic by start and end coordinates.",

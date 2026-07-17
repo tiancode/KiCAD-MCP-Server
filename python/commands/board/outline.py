@@ -182,7 +182,6 @@ class BoardOutlineCommands:
             # Convert to internal units (nanometers)
             scale = unit_to_nm_scale(unit)
 
-            # Create drawing for edge cuts
             edge_layer = self.board.GetLayerID("Edge.Cuts")
 
             if shape == "rectangle":
@@ -198,7 +197,6 @@ class BoardOutlineCommands:
                 center_x_nm = int(center_x * scale)
                 center_y_nm = int(center_y * scale)
 
-                # Create rectangle
                 self._add_rect_edges(center_x_nm, center_y_nm, width_nm, height_nm, edge_layer)
 
             elif shape == "rounded_rectangle":
@@ -215,7 +213,6 @@ class BoardOutlineCommands:
                 center_y_nm = int(center_y * scale)
                 corner_radius_nm = int(corner_radius * scale)
 
-                # Create rounded rectangle
                 self._add_rounded_rect(
                     center_x_nm,
                     center_y_nm,
@@ -237,7 +234,6 @@ class BoardOutlineCommands:
                 center_y_nm = int(center_y * scale)
                 radius_nm = int(radius * scale)
 
-                # Create circle
                 circle = pcbnew.PCB_SHAPE(self.board)
                 circle.SetShape(pcbnew.SHAPE_T_CIRCLE)
                 circle.SetCenter(pcbnew.VECTOR2I(center_x_nm, center_y_nm))
@@ -261,7 +257,6 @@ class BoardOutlineCommands:
                     y_nm = int(point["y"] * scale)
                     polygon_points.append(pcbnew.VECTOR2I(x_nm, y_nm))
 
-                # Add lines for polygon
                 for i in range(len(polygon_points)):
                     self._add_edge_line(
                         polygon_points[i],
@@ -360,7 +355,6 @@ class BoardOutlineCommands:
                 fp_name = footprint_lib_id
             module.SetFPID(pcbnew.LIB_ID(lib_name, fp_name))
 
-            # Create the pad for the hole
             pad = pcbnew.PAD(module)
             pad.SetNumber(1)
             pad.SetShape(pcbnew.PAD_SHAPE_CIRCLE)
@@ -411,10 +405,8 @@ class BoardOutlineCommands:
             fab.SetWidth(int(0.1 * nm_per_mm))
             module.Add(fab)
 
-            # Position the mounting hole
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
 
-            # Add to board
             self.board.Add(module)
 
             return {
@@ -471,7 +463,6 @@ class BoardOutlineCommands:
             size_nm = int(size * scale)
             thickness_nm = int(thickness * scale)
 
-            # Get layer ID
             layer_id = self.board.GetLayerID(layer)
             if layer_id < 0:
                 return {
@@ -480,7 +471,6 @@ class BoardOutlineCommands:
                     "errorDetails": f"Layer '{layer}' does not exist",
                 }
 
-            # Create text
             pcb_text = pcbnew.PCB_TEXT(self.board)
             pcb_text.SetText(text)
             pcb_text.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
@@ -499,7 +489,6 @@ class BoardOutlineCommands:
 
             pcb_text.SetMirrored(mirror)
 
-            # Add to board
             self.board.Add(pcb_text)
 
             return {
@@ -562,7 +551,6 @@ class BoardOutlineCommands:
     ) -> None:
         """Add a rounded rectangle to the edge cuts layer"""
         if radius_nm <= 0:
-            # If no radius, create regular rectangle
             self._add_rect_edges(center_x_nm, center_y_nm, width_nm, height_nm, layer)
             return
 
@@ -589,7 +577,6 @@ class BoardOutlineCommands:
             center_x_nm - half_width + radius_nm, center_y_nm + half_height - radius_nm
         )
 
-        # Add arcs for corners
         self._add_corner_arc(top_left_center, radius_nm, 180, 270, layer)
         self._add_corner_arc(top_right_center, radius_nm, 270, 0, layer)
         self._add_corner_arc(bottom_right_center, radius_nm, 0, 90, layer)
@@ -630,7 +617,6 @@ class BoardOutlineCommands:
         layer: int,
     ) -> None:
         """Add an arc for a rounded corner"""
-        # Create arc for corner
         arc = pcbnew.PCB_SHAPE(self.board)
         arc.SetShape(pcbnew.SHAPE_T_ARC)
         arc.SetCenter(center)

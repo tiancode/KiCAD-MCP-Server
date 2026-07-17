@@ -287,9 +287,7 @@ class LibraryManager:
         try:
             footprints = []
 
-            # List all .kicad_mod files
             for fp_file in lib_dir.glob("*.kicad_mod"):
-                # Remove .kicad_mod extension
                 footprint_name = fp_file.stem
                 footprints.append(footprint_name)
 
@@ -318,7 +316,6 @@ class LibraryManager:
         Returns:
             Tuple of (library_path, footprint_name) or None if not found
         """
-        # Parse specification
         if ":" in footprint_spec:
             # Format: Library:Footprint
             library_nickname, footprint_name = footprint_spec.split(":", 1)
@@ -328,7 +325,6 @@ class LibraryManager:
                 logger.warning(f"Library not found: {library_nickname}")
                 return None
 
-            # Check if footprint exists
             fp_file = Path(library_path) / f"{footprint_name}.kicad_mod"
             if fp_file.exists():
                 return (library_path, footprint_name)
@@ -339,7 +335,6 @@ class LibraryManager:
             # Format: Footprint (search all libraries)
             footprint_name = footprint_spec
 
-            # Search in all libraries
             for library_nickname, library_path in self.libraries.items():
                 fp_file = Path(library_path) / f"{footprint_name}.kicad_mod"
                 if fp_file.exists():
@@ -550,7 +545,6 @@ class LibraryCommands:
                 pattern, limit * 10 if library_filter else limit
             )
 
-            # Filter by library if specified
             if library_filter:
                 results = [
                     r for r in results if r.get("library", "").lower() == library_filter.lower()
@@ -596,7 +590,6 @@ class LibraryCommands:
             if not footprint_spec:
                 return {"success": False, "message": "Missing footprint parameter"}
 
-            # Try to find the footprint
             result = self.library_manager.find_footprint(footprint_spec)
 
             if not result:
@@ -614,7 +607,6 @@ class LibraryCommands:
                 }
 
             library_path, footprint_name = result
-            # Extract library nickname from path
             library_nickname = None
             for nick, path in self.library_manager.libraries.items():
                 if path == library_path:

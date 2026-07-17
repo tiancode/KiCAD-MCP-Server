@@ -22,7 +22,6 @@ const typeParam = z
   .describe("footprint (fp-lib-table / .pretty) or symbol (sym-lib-table / .kicad_sym)");
 
 export function registerLibraryTools(server: McpServer, callKicadScript: CommandFunction) {
-  // ── list_libraries ────────────────────────────────────────────────────── //
   server.tool(
     "list_libraries",
     "List the nicknames of installed libraries: fp-lib-table (footprint) or global sym-lib-table plus the project's when projectPath is given or a project is open (symbol). Names only — use list_library_contents to see the parts inside one.",
@@ -50,7 +49,6 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // ── search_library_parts ──────────────────────────────────────────────── //
   server.tool(
     "search_library_parts",
     "Search parts in local KiCAD libraries. footprint: pattern-match footprint names. symbol: matches name, LCSC ID, description, manufacturer, MPN or category; exact-name matches rank above description matches; returns symbol refs usable directly in schematics.",
@@ -103,7 +101,6 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // ── list_library_contents ─────────────────────────────────────────────── //
   server.tool(
     "list_library_contents",
     "List the parts inside ONE library identified by its NICKNAME, resolved via the fp-lib-table / global+project sym-lib-table. If you have a .kicad_sym FILE PATH rather than a nickname, use list_symbols_in_library instead.",
@@ -146,7 +143,6 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // ── get_library_part_info ─────────────────────────────────────────────── //
   server.tool(
     "get_library_part_info",
     "Get details for one library part. footprint: description, keywords, pads, layers, courtyard size, attributes. symbol: properties (value, LCSC, MPN, footprint, datasheet) plus the pin list in the symbol's local frame and pin bounding box — enough to plan placement before add_schematic_component.",
@@ -186,7 +182,6 @@ export function registerLibraryTools(server: McpServer, callKicadScript: Command
     },
   );
 
-  // ── register_library ──────────────────────────────────────────────────── //
   server.tool(
     "register_library",
     "Register a library in KiCAD's library table: footprint adds a .pretty directory to fp-lib-table, symbol adds a .kicad_sym file to sym-lib-table. Run after create_footprint / create_symbol when KiCAD shows 'library not found'.",

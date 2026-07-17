@@ -48,11 +48,9 @@ class _ZoneMixin:
                 logger.error("Zone requires at least 3 points")
                 return False
 
-            # Create zone
             zone = Zone()
             zone.type = ZoneType.ZT_COPPER
 
-            # Set layer
             layer_map = {
                 "F.Cu": BoardLayer.BL_F_Cu,
                 "B.Cu": BoardLayer.BL_B_Cu,
@@ -63,7 +61,6 @@ class _ZoneMixin:
             }
             zone.layers = [layer_map.get(layer, BoardLayer.BL_F_Cu)]
 
-            # Set net if specified
             if net_name:
                 nets = board.get_nets()
                 for net in nets:
@@ -71,7 +68,6 @@ class _ZoneMixin:
                         zone.net = net
                         break
 
-            # Set zone properties
             zone.clearance = from_mm(clearance)
             zone.min_thickness = from_mm(min_thickness)
             zone.priority = priority
@@ -87,7 +83,6 @@ class _ZoneMixin:
                 ZoneFillMode.ZFM_HATCHED if fill_mode == "hatched" else ZoneFillMode.ZFM_SOLID
             )
 
-            # Create outline polyline
             outline = PolyLine()
             outline.closed = True
 
@@ -97,7 +92,6 @@ class _ZoneMixin:
                 node = PolyLineNode.from_xy(from_mm(x), from_mm(y))
                 outline.append(node)
 
-            # Set the outline on the zone
             # Note: Zone outline is set via the proto directly since kipy
             # doesn't expose a direct setter for creating new zones
             zone._proto.outline.polygons.add()

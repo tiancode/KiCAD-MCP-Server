@@ -18,9 +18,6 @@ import { CommandFunction, formatKicadResult } from "./tool-response.js";
 export function registerExportTools(server: McpServer, callKicadScript: CommandFunction): void {
   logger.info("Registering export tools");
 
-  // ------------------------------------------------------
-  // Export Gerber Tool
-  // ------------------------------------------------------
   server.tool(
     "export_gerber",
     "Export PCB Gerber manufacturing files to a directory.",
@@ -63,9 +60,6 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     },
   );
 
-  // ------------------------------------------------------
-  // Export PDF Tool
-  // ------------------------------------------------------
   server.tool(
     "export_pdf",
     "Export the PCB layout as a PDF document.",
@@ -93,9 +87,6 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     },
   );
 
-  // ------------------------------------------------------
-  // Export 3D Model Tool
-  // ------------------------------------------------------
   server.tool(
     "export_3d",
     "Export the PCB as a 3D model.",
@@ -129,9 +120,6 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     },
   );
 
-  // ------------------------------------------------------
-  // Export BOM Tool
-  // ------------------------------------------------------
   server.tool(
     "export_bom",
     "Export a Bill of Materials (BOM) from the PCB. Mounting holes and board hardware " +
@@ -191,9 +179,6 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     },
   );
 
-  // ------------------------------------------------------
-  // Export Netlist Tool
-  // ------------------------------------------------------
   server.tool(
     "export_netlist",
     "Export the schematic netlist to a file via kicad-cli. Use when you need a netlist file on disk (e.g. SPICE for simulation); for inline net/component data use generate_netlist.",
@@ -217,9 +202,6 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     },
   );
 
-  // ------------------------------------------------------
-  // Export Position File Tool
-  // ------------------------------------------------------
   server.tool(
     "export_position_file",
     "Export a component placement (pick-and-place) file for PCB assembly.",

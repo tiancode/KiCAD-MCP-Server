@@ -22,7 +22,6 @@ export function registerSchematicComponentTools(
   callKicadScript: CommandFunction,
 ) {
   const passthrough = makePassthrough(callKicadScript);
-  // Create schematic tool
   server.tool(
     "create_schematic",
     "Create a new schematic",
@@ -44,7 +43,6 @@ export function registerSchematicComponentTools(
     passthrough("create_schematic"),
   );
 
-  // Add component to schematic
   server.tool(
     "add_schematic_component",
     "Add a component to the schematic. Symbol format is 'Library:SymbolName' (e.g. 'Device:R'). " +
@@ -186,7 +184,6 @@ export function registerSchematicComponentTools(
     },
   );
 
-  // Delete component from schematic
   server.tool(
     "delete_schematic_component",
     "Remove a placed symbol from a .kicad_sch schematic (keeps its lib_symbols definition). " +
@@ -455,7 +452,6 @@ export function registerSchematicComponentTools(
     },
   );
 
-  // Rotate schematic component
   server.tool(
     "rotate_schematic_component",
     "Rotate a placed symbol in the schematic. Only orthogonal angles are valid (0, 90, 180, 270); " +
@@ -566,7 +562,6 @@ export function registerSchematicComponentTools(
     },
   );
 
-  // Annotate schematic
   server.tool(
     "annotate_schematic",
     "Assign reference designators to unannotated components (R? → R1, R2, ...). " +

@@ -140,7 +140,6 @@ class PlacementMixin:
             if not self.board:
                 return no_board_loaded()
 
-            # Get parameters
             component_id = params.get("componentId")
             position = params.get("position")
             reference = params.get("reference")
@@ -175,12 +174,10 @@ class PlacementMixin:
                         "existingReference": reference,
                     }
 
-            # Find footprint using library manager
             # component_id can be "Library:Footprint" or just "Footprint"
             footprint_result = self.library_manager.find_footprint(component_id)
 
             if not footprint_result:
-                # Try to suggest similar footprints
                 suggestions = self.library_manager.search_footprints(f"*{component_id}*", limit=5)
                 suggestion_text = ""
                 if suggestions:
@@ -196,8 +193,6 @@ class PlacementMixin:
 
             library_path, footprint_name = footprint_result
 
-            # Load footprint from library
-            # Extract library nickname from path
             library_nickname = None
             for nick, path in self.library_manager.libraries.items():
                 if path == library_path:
@@ -211,7 +206,6 @@ class PlacementMixin:
                     "errorDetails": "Could not determine library nickname",
                 }
 
-            # Load the footprint
             module = pcbnew.FootprintLoad(library_path, footprint_name)
             if not module:
                 return {
@@ -220,17 +214,14 @@ class PlacementMixin:
                     "errorDetails": f"Could not load footprint from {library_path}/{footprint_name}",
                 }
 
-            # Set position
             scale = unit_to_nm_scale(position["unit"])
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
 
-            # Set reference if provided
             if reference:
                 module.SetReference(reference)
 
-            # Set value if provided
             if value:
                 module.SetValue(value)
 
@@ -304,7 +295,6 @@ class PlacementMixin:
                     "errorDetails": "reference and position are required",
                 }
 
-            # Find the component
             module = self.board.FindFootprintByReference(reference)
             if not module:
                 return {
@@ -313,7 +303,6 @@ class PlacementMixin:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            # Set new position
             scale = unit_to_nm_scale(position["unit"])
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
@@ -445,7 +434,6 @@ class PlacementMixin:
                     "errorDetails": "reference and angle are required",
                 }
 
-            # Find the component
             module = self.board.FindFootprintByReference(reference)
             if not module:
                 return {
@@ -454,7 +442,6 @@ class PlacementMixin:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            # Set rotation
             rotation_angle = pcbnew.EDA_ANGLE(angle, pcbnew.DEGREES_T)
             module.SetOrientation(rotation_angle)
 
@@ -534,7 +521,6 @@ class PlacementMixin:
                     "errorDetails": "reference is required",
                 }
 
-            # Find the source component
             source = self.board.FindFootprintByReference(reference)
             if not source:
                 return {
@@ -645,7 +631,6 @@ class PlacementMixin:
                     "errorDetails": "reference parameter is required",
                 }
 
-            # Find the component
             module = self.board.FindFootprintByReference(reference)
             if not module:
                 return {
@@ -654,7 +639,6 @@ class PlacementMixin:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            # Update properties
             if new_reference:
                 module.SetReference(new_reference)
             if value:

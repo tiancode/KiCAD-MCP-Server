@@ -17,9 +17,6 @@ import { logger } from "../logger.js";
 export function registerDesignPrompts(server: McpServer): void {
   logger.info("Registering design prompts");
 
-  // ------------------------------------------------------
-  // PCB Layout Review Prompt
-  // ------------------------------------------------------
   server.prompt(
     "pcb_layout_review",
     {
@@ -82,9 +79,6 @@ Based on the provided information, identify potential issues and suggest specifi
     }),
   );
 
-  // ------------------------------------------------------
-  // Layer Stack-up Planning Prompt
-  // ------------------------------------------------------
   server.prompt(
     "layer_stackup_planning",
     {
@@ -143,9 +137,6 @@ Based on the provided requirements, recommend an appropriate layer stack-up, inc
     }),
   );
 
-  // ------------------------------------------------------
-  // Design Rule Development Prompt
-  // ------------------------------------------------------
   server.prompt(
     "design_rule_development",
     {
@@ -204,9 +195,6 @@ Based on the provided project requirements, recommend a comprehensive set of des
     }),
   );
 
-  // ------------------------------------------------------
-  // Component Selection Guidance Prompt
-  // ------------------------------------------------------
   server.prompt(
     "component_selection_guidance",
     {
@@ -269,9 +257,6 @@ Based on the provided circuit requirements, recommend appropriate component type
     }),
   );
 
-  // ------------------------------------------------------
-  // PCB Design Optimization Prompt
-  // ------------------------------------------------------
   server.prompt(
     "pcb_design_optimization",
     {

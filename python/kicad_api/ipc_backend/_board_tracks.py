@@ -46,16 +46,13 @@ class _TrackMixin:
 
             board = self._get_board()
 
-            # Create track
             track = Track()
             track.start = Vector2.from_xy(from_mm(start_x), from_mm(start_y))
             track.end = Vector2.from_xy(from_mm(end_x), from_mm(end_y))
             track.width = from_mm(width)
 
-            # Set layer
             track.layer = _copper_layer_from_name(layer)
 
-            # Set net if specified
             if net_name:
                 nets = board.get_nets()
                 for net in nets:
@@ -161,7 +158,6 @@ class _TrackMixin:
 
             board = self._get_board()
 
-            # Create via
             via = Via()
             via.position = Vector2.from_xy(from_mm(x), from_mm(y))
             via.diameter = from_mm(diameter)
@@ -175,7 +171,6 @@ class _TrackMixin:
             }
             via.type = type_map.get(via_type, ViaType.VT_THROUGH)
 
-            # Set net if specified
             if net_name:
                 nets = board.get_nets()
                 for net in nets:
@@ -228,13 +223,11 @@ class _TrackMixin:
 
             board = self._get_board()
 
-            # Create text
             board_text = BoardText()
             board_text.value = text
             board_text.position = Vector2.from_xy(from_mm(x), from_mm(y))
             board_text.angle = Angle.from_degrees(rotation)
 
-            # Set layer
             layer_map = {
                 "F.SilkS": BoardLayer.BL_F_SilkS,
                 "B.SilkS": BoardLayer.BL_B_SilkS,

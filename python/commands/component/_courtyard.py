@@ -96,7 +96,6 @@ class CourtyardMixin:
                     continue
                 if used_fallback:
                     fallback_refs.add(ref)
-                # Expand by margin
                 if margin_mm:
                     x1, y1, x2, y2 = bbox
                     bbox = (x1 - margin_mm, y1 - margin_mm, x2 + margin_mm, y2 + margin_mm)

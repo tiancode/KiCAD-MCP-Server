@@ -185,10 +185,8 @@ class _CommonMixin:
                 logger.debug(f"Could not get board path from IPC: {e}")
 
             if board_path and os.path.exists(board_path):
-                # Load board via pcbnew
                 pcb_board = pcbnew.LoadBoard(board_path)
             else:
-                # Try to get from pcbnew directly
                 pcb_board = pcbnew.GetBoard()
 
             if not pcb_board:
@@ -197,15 +195,12 @@ class _CommonMixin:
                     reference, "", x, y, rotation, layer, value
                 )
 
-            # Set footprint position and properties
             scale = MM_TO_NM
             loaded_fp.SetPosition(pcbnew.VECTOR2I(int(x * scale), int(y * scale)))
             loaded_fp.SetOrientationDegrees(rotation)
 
-            # Set reference
             loaded_fp.SetReference(reference)
 
-            # Set value if provided
             if value:
                 loaded_fp.SetValue(value)
 
@@ -214,13 +209,11 @@ class _CommonMixin:
                 if not loaded_fp.IsFlipped():
                     loaded_fp.Flip(loaded_fp.GetPosition(), False)
 
-            # Add to board
             pcb_board.Add(loaded_fp)
 
             # Save the board so IPC can see the changes
             pcbnew.SaveBoard(board_path, pcb_board)
 
-            # Refresh IPC view
             try:
                 board.revert()  # Reload from disk to sync IPC
             except Exception as e:
@@ -245,7 +238,6 @@ class _CommonMixin:
 
         except Exception as e:
             logger.error(f"Error placing loaded footprint: {e}")
-            # Fall back to placeholder
             return self._place_placeholder_footprint(reference, "", x, y, rotation, layer, value)
 
     def _place_placeholder_footprint(
@@ -271,18 +263,15 @@ class _CommonMixin:
 
             board = self._get_board()
 
-            # Create footprint
             fp = Footprint()
             fp.position = Vector2.from_xy(from_mm(x), from_mm(y))
             fp.orientation = Angle.from_degrees(rotation)
 
-            # Set layer
             if layer == "B.Cu":
                 fp.layer = BoardLayer.BL_B_Cu
             else:
                 fp.layer = BoardLayer.BL_F_Cu
 
-            # Set reference and value
             if fp.reference_field:
                 fp.reference_field.text.value = reference
             if fp.value_field:
