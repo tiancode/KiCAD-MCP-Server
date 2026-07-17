@@ -1367,6 +1367,7 @@ class KiCADInterface(BoardPersistenceMixin):
             return False
 
         deadline = time.monotonic() + max(1.0, timeout_s)
+        reselect_next = 0.0
         while time.monotonic() < deadline:
             self._try_enable_ipc_backend(force=True)
             if self._ipc_has_open_board_document():
@@ -1375,6 +1376,21 @@ class KiCADInterface(BoardPersistenceMixin):
                 # We just loaded the board fresh from disk (B3).
                 self._clear_swig_landed_if_disk_matches()
                 return True
+            # A spawn-fallback pcbnew serves its own api-<pid>.sock — the
+            # board is invisible to the instance we're connected to (e.g. the
+            # project manager on api.sock). Re-run the connect-time socket
+            # selection, which prefers an instance with a board open;
+            # throttled so a long poll costs a few reconnects, not 30.
+            now = time.monotonic()
+            if now >= reselect_next:
+                reselect_next = now + 2.0
+                backend = getattr(self, "ipc_backend", None)
+                if backend is not None and backend.reselect_preferring_board():
+                    self._refresh_ipc_board_api()
+                    logger.info("Board auto-open landed after IPC socket reselection")
+                    self._auto_open_cooldown_until = 0.0
+                    self._clear_swig_landed_if_disk_matches()
+                    return True
             time.sleep(0.5)
 
         self._auto_open_cooldown_until = time.monotonic() + self._AUTO_OPEN_RETRY_COOLDOWN_S

@@ -87,7 +87,8 @@ export function registerSchematicComponentTools(
         .describe(
           "Default false. When the reference is empty or already used, refuse " +
             "(INVALID_REFERENCE / REFERENCE_EXISTS). Set true to instead auto-number " +
-            "the next free reference of the same prefix (e.g. R3 when R1/R2 exist).",
+            "the next free reference of the same prefix (e.g. R3 when R1/R2 exist). " +
+            "Power symbols keep their '#' prefix (#FLG? → #FLG?01, like the KiCad GUI).",
         ),
     },
     async (args: {
@@ -175,6 +176,10 @@ export function registerSchematicComponentTools(
           text += `\nOFF-PAGE: ${result.offPageWarning}`;
           if (result.offPageUnits) text += ` (units ${JSON.stringify(result.offPageUnits)})`;
         }
+        // Mid-wire pins: segments were broken under pin(s) so the connection
+        // is real per kicad-cli (a pin on a strict wire midpoint does not join).
+        if (result.wiresSplit)
+          text += `\nWire split: ${result.wiresSplit} segment(s) broken under pin(s) landing mid-wire (connection made explicit).`;
         // Append the raw position/snap blocks so structured consumers get them.
         text += `\n${JSON.stringify({ position: pos ?? null, snap: result.snap ?? null })}`;
         return textResult(text, result);
@@ -446,6 +451,10 @@ export function registerSchematicComponentTools(
         if (result.offPageWarning) text += `\nOFF-PAGE: ${result.offPageWarning}`;
         // A4: a move that detached a coincident foreign pin from a shared net.
         if (result.detachWarning) text += `\nDETACHED: ${result.detachWarning}`;
+        // Mid-wire pins: segments were broken under pin(s) so the connection
+        // is real per kicad-cli (a pin on a strict wire midpoint does not join).
+        if (result.wiresSplit)
+          text += `\nWire split: ${result.wiresSplit} segment(s) broken under pin(s) landing mid-wire.`;
         return textResult(text, result);
       }
       return failureResult("Failed to move component", result);
