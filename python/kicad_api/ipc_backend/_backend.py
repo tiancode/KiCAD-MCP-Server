@@ -215,6 +215,42 @@ class IPCBackend(KiCADBackend):
             self._board_api = None  # stale handle; new connection gets a fresh one
             logger.info("Disconnected from KiCAD IPC")
 
+    def reselect_preferring_board(self) -> bool:
+        """Reconnect so the client talks to the KiCad instance that actually
+        has a board open.
+
+        The first KiCad process grabs the well-known ``api.sock``; any second
+        instance (e.g. a standalone ``pcbnew <board>`` spawned next to a
+        running project manager) serves its own ``api-<pid>.sock``. A client
+        already connected to the board-less instance never re-runs the
+        connect-time socket selection, so the PCB-editor gate keeps reporting
+        "no board" even though one is open on the sibling socket. ``connect()``
+        already prefers an instance with a ``.kicad_pcb`` document — this just
+        gives it a fresh chance when the current connection has none.
+
+        No-op (returns True) when the current connection already reports a
+        board. Returns False when no instance with a board could be reached;
+        the client may then be disconnected (the next ``connect()`` heals it).
+        """
+        kicad = self._kicad
+        if kicad is not None and self._connected:
+            try:
+                if has_open_pcb_document(kicad):
+                    return True
+            except Exception as e:
+                logger.debug(f"reselect: board-document check failed: {e}")
+        self.disconnect()
+        try:
+            self.connect()
+        except Exception as e:
+            logger.debug(f"reselect: reconnect failed: {e}")
+            return False
+        try:
+            return bool(self._kicad is not None and has_open_pcb_document(self._kicad))
+        except Exception as e:
+            logger.debug(f"reselect: post-reconnect check failed: {e}")
+            return False
+
     def is_connected(self) -> bool:
         """Check if connected to KiCAD."""
         if not self._connected or not self._kicad:

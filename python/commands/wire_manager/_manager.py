@@ -421,6 +421,45 @@ class WireManager:
         return splits
 
     @staticmethod
+    @serialize_on_path(0)
+    def break_wires_at_points(schematic_path: Path, points: List[List[float]]) -> int:
+        """
+        Split every wire segment passing strictly through one of *points*,
+        then re-sync junctions.  Used when a symbol PIN lands mid-wire: the
+        KiCad GUI joins such pins by breaking the segment under the pin, and
+        kicad-cli ERC/netlist treats a pin on a strict wire midpoint as NOT
+        connected (pin_not_connected) — without the split the connection is
+        silently absent (e.g. a power symbol dropped onto a rail).
+
+        Returns the total number of wire segments split (0 = file untouched).
+        """
+        if not points:
+            return 0
+        schematic_path = Path(schematic_path)
+        try:
+            with open(schematic_path, "r", encoding="utf-8") as f:
+                sch_content = f.read()
+
+            sch_data = sexpdata.loads(sch_content)
+
+            splits = 0
+            for pt in points:
+                splits += WireManager._break_wires_at_point(sch_data, pt)
+
+            if not splits:
+                return 0
+
+            WireManager.sync_junctions(sch_data)
+            output = _serialize_validated(sch_data)
+            atomic_write_text(schematic_path, output)
+            logger.info(f"Broke {splits} wire(s) at pin points in {schematic_path.name}")
+            return splits
+
+        except (OSError, ValueError, AttributeError, KeyError, IndexError):
+            logger.exception(f"Error breaking wires at pin points in {schematic_path}")
+            return 0
+
+    @staticmethod
     def _collect_wire_endpoints(sch_data: list) -> List[Tuple[float, float]]:
         """Return all (x, y) endpoints for every wire in sch_data."""
         endpoints: List[Tuple[float, float]] = []

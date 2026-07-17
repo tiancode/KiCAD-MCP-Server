@@ -782,3 +782,83 @@ class TestReferenceValidation:
         # Reference kept — it's a legit second unit, not an auto-reassignment.
         assert res["component_reference"] == "U1"
         assert "autoAssignedReference" not in res
+
+
+# ---------------------------------------------------------------------------
+# Power-symbol autoAssign: the '#' prefix must survive auto-numbering
+# (#FLG? → #FLG?01, like the KiCad GUI).  A bare "PWR_FLAG1" would turn the
+# instance into a regular (non-power) symbol that ERC/netlist treats as a
+# real component and that sync_schematic_to_board pushes to the PCB.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestPowerSymbolAutoAssign:
+    def _call(
+        self,
+        sch: Path,
+        reference: str,
+        *,
+        comp_type: str = "PWR_FLAG",
+        auto_assign: bool = False,
+        x: float = 60,
+        y: float = 60,
+    ) -> dict:
+        from handlers.schematic_component import handle_add_schematic_component
+
+        params: dict = {
+            "schematicPath": str(sch),
+            "component": {
+                "library": "power",
+                "type": comp_type,
+                "reference": reference,
+                "value": comp_type,
+                "x": x,
+                "y": y,
+                "unit": 1,
+            },
+        }
+        if auto_assign:
+            params["autoAssign"] = True
+        return handle_add_schematic_component(iface=None, params=params)
+
+    def test_duplicate_power_ref_keeps_hash_prefix(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        assert self._call(sch, "#FLG?", x=50, y=50)["success"] is True
+        res = self._call(sch, "#FLG?", x=60, y=60, auto_assign=True)
+        assert res["success"] is True
+        assert res["component_reference"] == "#FLG?01"
+        assert res["component_reference"].startswith("#")
+
+    def test_second_duplicate_power_ref_numbers_up(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        assert self._call(sch, "#FLG?", x=50, y=50)["success"] is True
+        assert self._call(sch, "#FLG?", x=60, y=60, auto_assign=True)["success"] is True
+        res = self._call(sch, "#FLG?", x=70, y=70, auto_assign=True)
+        assert res["success"] is True
+        assert res["component_reference"] == "#FLG?02"
+
+    def test_empty_power_ref_autoassigned_with_hash(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        res = self._call(sch, "", auto_assign=True)
+        assert res["success"] is True
+        assert res["component_reference"] == "#FLG?"
+
+    def test_empty_power_ref_non_flag_symbol(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        res = self._call(sch, "", comp_type="GND", auto_assign=True)
+        assert res["success"] is True
+        assert res["component_reference"] == "#PWR?"
+
+    def test_duplicate_power_ref_rejection_hint_mentions_hash(self, tmp_path: Any) -> None:
+        sch = tmp_path / "t.kicad_sch"
+        shutil.copy(EMPTY_SCH, sch)
+        assert self._call(sch, "#FLG?", x=50, y=50)["success"] is True
+        res = self._call(sch, "#FLG?", x=60, y=60)
+        assert res["success"] is False
+        assert res["errorCode"] == "REFERENCE_EXISTS"
+        assert "#FLG?" in res["message"]

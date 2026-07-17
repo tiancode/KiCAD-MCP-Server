@@ -154,6 +154,7 @@ EXPECTED_WIRE_MANAGER_METHODS = {
     "add_sheet_pin",
     "add_text",
     "add_wire",
+    "break_wires_at_points",
     "create_orthogonal_path",
     "delete_label",
     "delete_no_connect",

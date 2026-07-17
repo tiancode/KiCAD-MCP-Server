@@ -72,6 +72,35 @@ _PAPER_RE = re.compile(r'\(paper\s+"([^"]+)"((?:\s+[-0-9.]+)*)\s*(portrait)?\s*\
 _OFF_PAGE_ABSURD_FACTOR = 10.0
 
 
+def _power_ref_template(ref: str, comp_type: str, library: str) -> str | None:
+    """KiCad power-symbol reference template (``#FLG?``, ``#PWR?``) or None.
+
+    A power symbol must keep a '#'-prefixed reference: a bare ``PWR_FLAG1``
+    drops the '#' and turns the instance into a REGULAR symbol — it loses
+    power semantics for ERC and would be synced to the board as a real
+    component. The template keeps any trailing '?', minus trailing digits,
+    so ``#FLG?01`` requests normalize to ``#FLG?``.
+    """
+    if ref.startswith("#"):
+        return ref.rstrip("0123456789")
+    if not ref and library == "power":
+        # Stock power-lib conventions: PWR_FLAG → #FLG?, everything else
+        # (+5V, GND, VCC, …) → #PWR?.
+        return "#FLG?" if comp_type == "PWR_FLAG" else "#PWR?"
+    return None
+
+
+def _next_free_power_reference(references: List[str], template: str) -> str:
+    """Next free power-symbol ref, numbered like the KiCad GUI (#FLG?01, …)."""
+    used = set(references)
+    if template not in used:
+        return template
+    n = 1
+    while f"{template}{n:02d}" in used:
+        n += 1
+    return f"{template}{n:02d}"
+
+
 def _snap_to_schematic_grid(value: float, grid_mm: float = _SCHEMATIC_GRID_MM) -> float:
     """Snap a millimeter coordinate to the nearest schematic-grid multiple."""
     if grid_mm <= 0:
@@ -173,9 +202,18 @@ def _detect_dangling(
     Given the post-deletion .kicad_sch ``content`` and the deleted symbol's
     pin world positions (mm), returns ``(dangling_wires, dangling_labels)``:
 
-    * a wire is dangling when either endpoint coincided with a deleted pin;
+    * a wire is dangling when an endpoint coincided with a deleted pin AND the
+      wire is a genuine stub: its other end is FREE (nothing there) or lies
+      strictly mid-span of another wire (a spur teed onto a rail). A wire
+      whose far end shares its point with another wire's endpoint is a
+      THROUGH-PATH (e.g. half of a rail split under a mid-wire pin) and is
+      kept — deleting it would silently cut the net. A wire between two pins
+      of the deleted symbol is always dangling;
     * a label is dangling when it sits on a deleted pin OR on an endpoint of a
       dangling wire (the stub's far end, where connect_to_net drops the label).
+
+    Limitation: classification is single-level — a CHAIN of stubs from the
+    deleted pin keeps its non-first links (the GUI leaves everything too).
 
     Reuses the wire_connectivity parsers rather than re-implementing geometry;
     coordinates are reported back in mm.
@@ -210,12 +248,60 @@ def _detect_dangling(
         return {"x": round(pt[0] / _IU_PER_MM, 4), "y": round(pt[1] / _IU_PER_MM, 4)}
 
     dangling_endpoints: List[Tuple[int, int]] = []
-    for w in wires:
+
+    def _far_end_free_or_spur(far_iu: Tuple[int, int], self_idx: int) -> bool:
+        """Classify the endpoint of a candidate stub that did NOT touch the
+        deleted symbol.
+
+        ``True`` (removable stub) when the far end is:
+        * FREE — no other wire endpoint there and not mid-span on any wire
+          (the classic connect_to_net stub ending in empty space / a label), or
+        * SPUR-ANCHORED — lying strictly mid-span of a wire without being any
+          wire's endpoint (a stub teed onto a rail).
+
+        ``False`` (KEEP) when the far end is shared with >=1 other wire
+        endpoint: the wire is part of a through-path (e.g. half of a rail that
+        a mid-wire pin split produced), and removing it would orphan whatever
+        the path feeds (a connector stub, the rest of the rail...).
+        """
+        for j, other in enumerate(wires):
+            if j == self_idx:
+                continue
+            o_start, o_end = other[0], other[-1]
+            if _near(far_iu, [o_start]) or _near(far_iu, [o_end]):
+                return False
+        for j, other in enumerate(wires):
+            if j == self_idx:
+                continue
+            (x1, y1), (x2, y2) = other[0], other[-1]
+            # strictly mid-span (horizontal/vertical), in IU with tolerance
+            if abs(y1 - y2) <= tol_iu and abs(far_iu[1] - y1) <= tol_iu:
+                lo, hi = min(x1, x2), max(x1, x2)
+                if lo + tol_iu < far_iu[0] < hi - tol_iu:
+                    return True
+            if abs(x1 - x2) <= tol_iu and abs(far_iu[0] - x1) <= tol_iu:
+                lo, hi = min(y1, y2), max(y1, y2)
+                if lo + tol_iu < far_iu[1] < hi - tol_iu:
+                    return True
+        return True
+
+    for i, w in enumerate(wires):
         start_iu, end_iu = w[0], w[-1]
-        if _near(start_iu, pin_iu) or _near(end_iu, pin_iu):
-            dangling_wires.append({"start": _mm(start_iu), "end": _mm(end_iu)})
-            dangling_endpoints.append(start_iu)
-            dangling_endpoints.append(end_iu)
+        start_on_pin = _near(start_iu, pin_iu)
+        end_on_pin = _near(end_iu, pin_iu)
+        if not (start_on_pin or end_on_pin):
+            continue
+        # A wire between two pins of the deleted symbol is always orphaned.
+        if start_on_pin and end_on_pin:
+            is_stub = True
+        else:
+            far_iu = end_iu if start_on_pin else start_iu
+            is_stub = _far_end_free_or_spur(far_iu, i)
+        if not is_stub:
+            continue
+        dangling_wires.append({"start": _mm(start_iu), "end": _mm(end_iu)})
+        dangling_endpoints.append(start_iu)
+        dangling_endpoints.append(end_iu)
 
     label_targets = pin_iu + dangling_endpoints
     for pt_iu, name in point_to_label.items():
@@ -586,6 +672,22 @@ def handle_move_schematic_component(
 
         atomic_write_text(schematic_path, sexpdata.dumps(sch_data))
 
+        # Mid-wire pin connections: a pin landing on a STRICT wire midpoint is
+        # not electrically joined per kicad-cli ERC/netlist — only wire
+        # endpoints join. Break any segment left under a moved pin (the KiCad
+        # GUI does the same when a symbol drops onto a wire).
+        wires_split = 0
+        try:
+            from commands.pin_locator import PinLocator
+
+            abs_pins = PinLocator().get_all_symbol_pins(schematic_path, reference)
+            if abs_pins:
+                wires_split = WireManager.break_wires_at_points(
+                    schematic_path, [list(p) for p in abs_pins.values()]
+                )
+        except Exception:  # connectivity sugar must never block the move
+            logger.exception("mid-wire pin split failed for %s", reference)
+
         response: Dict[str, Any] = {
             "success": True,
             "oldPosition": old_position,
@@ -596,6 +698,8 @@ def handle_move_schematic_component(
             "labelsMoved": drag_summary.get("labels_moved", 0),
             "pageSize": page,
         }
+        if wires_split:
+            response["wiresSplit"] = wires_split
         if snapped:
             response["snap"] = {
                 "applied": True,
@@ -870,7 +974,11 @@ def handle_add_schematic_component(
 
         if not ref_str:
             if auto_assign:
-                reference = _next_free_reference(existing_refs, _ref_prefix(""))
+                power_template = _power_ref_template("", comp_type, library)
+                if power_template:
+                    reference = _next_free_power_reference(existing_refs, power_template)
+                else:
+                    reference = _next_free_reference(existing_refs, _ref_prefix(""))
             else:
                 return {
                     "success": False,
@@ -898,8 +1006,14 @@ def handle_add_schematic_component(
                     legit_new_unit = True
             if not legit_new_unit:
                 if auto_assign:
-                    reference = _next_free_reference(existing_refs, _ref_prefix(ref_str))
+                    power_template = _power_ref_template(ref_str, comp_type, library)
+                    if power_template:
+                        reference = _next_free_power_reference(existing_refs, power_template)
+                    else:
+                        reference = _next_free_reference(existing_refs, _ref_prefix(ref_str))
                 else:
+                    hint_template = _power_ref_template(ref_str, comp_type, library)
+                    hint = f"{hint_template}<NN>" if hint_template else f"{_ref_prefix(ref_str)}<N>"
                     return {
                         "success": False,
                         "message": (
@@ -907,7 +1021,7 @@ def handle_add_schematic_component(
                             f"schematic. Two symbols sharing a refdes is invalid "
                             f"(KiCad ERC flags 'duplicate reference'). Choose "
                             f"another reference, or set autoAssign=true to place "
-                            f"it as the next free '{_ref_prefix(ref_str)}<N>'."
+                            f"it as the next free '{hint}'."
                         ),
                         "errorCode": "REFERENCE_EXISTS",
                     }
@@ -1040,6 +1154,22 @@ def handle_add_schematic_component(
             _place(unit, x, y)
             unit_positions[unit] = {"x": float(x), "y": float(y)}
 
+        # Mid-wire pin connections: a pin landing on a STRICT wire midpoint is
+        # not electrically joined per kicad-cli ERC/netlist (pin_not_connected)
+        # — only wire endpoints join. The KiCad GUI connects such a pin by
+        # breaking the segment under it; mirror that here so a power symbol
+        # dropped straight onto a rail really drives it. Report the split so
+        # the caller knows the connectivity was made explicit.
+        wires_split = 0
+        try:
+            abs_pins = PinLocator().get_all_symbol_pins(schematic_file, reference)
+            if abs_pins:
+                wires_split = WireManager.break_wires_at_points(
+                    schematic_file, [list(p) for p in abs_pins.values()]
+                )
+        except Exception:  # connectivity sugar must never block placement
+            logger.exception("mid-wire pin split failed for %s", reference)
+
         response: Dict[str, Any] = {
             "success": True,
             "component_reference": reference,
@@ -1049,6 +1179,8 @@ def handle_add_schematic_component(
             "footprintSource": footprint_source,
             "pageSize": page,
         }
+        if wires_split:
+            response["wiresSplit"] = wires_split
         # A6/A11: surface an auto-assigned reference so the caller learns the
         # refdes it actually got (its requested one was empty or taken).
         if reference != requested_reference:

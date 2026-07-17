@@ -25,8 +25,7 @@ def _iface():
     return KiCADInterface.__new__(KiCADInterface)
 
 
-_HEAD = textwrap.dedent(
-    """\
+_HEAD = textwrap.dedent("""\
     (kicad_sch (version 20250114) (generator "test")
       (uuid aaaaaaaa-0000-0000-0000-000000000001)
       (paper "A4")
@@ -49,13 +48,12 @@ _HEAD = textwrap.dedent(
         (property "Reference" "R1" (at 102 98 0) (effects (font (size 1.27 1.27))))
         (property "Value" "10k" (at 102 102 0) (effects (font (size 1.27 1.27))))
       )
-    """
-)
+    """)
 
 
 def _wire(x1, y1, x2, y2, uid):
     return (
-        f'  (wire (pts (xy {x1} {y1}) (xy {x2} {y2})) '
+        f"  (wire (pts (xy {x1} {y1}) (xy {x2} {y2})) "
         f'(stroke (width 0) (type default)) (uuid "{uid}"))'
     )
 
@@ -129,3 +127,71 @@ class TestDeleteDanglingReport:
         assert res["success"] is True
         assert res["dangling"]["wireCount"] == 0
         assert res["dangling"]["labelCount"] == 0
+
+
+@pytest.mark.unit
+class TestDeleteThroughPathPreserved:
+    """A wire touching a deleted pin is NOT necessarily a stub: when its far
+    end is shared with another wire's endpoint it is a through-path (e.g. half
+    of a rail that a mid-wire pin split produced) and must be KEPT — deleting
+    it would silently cut the net. Only free-ended or mid-wire-teed spurs are
+    removed."""
+
+    def _pins(self, sch: Path):
+        pins = PinLocator().get_all_symbol_pins(sch, "R1")
+        assert pins, "expected R1 pins to resolve"
+        return sorted(pins.items())
+
+    def test_through_path_wire_and_label_kept(self, tmp_path):
+        sch = tmp_path / "through.kicad_sch"
+        sch.write_text(_HEAD + ")\n", encoding="utf-8")
+        _num, (px, py) = self._pins(sch)[0]
+        jx = px + 5.08  # junction point continuing the net
+
+        extra = [
+            _wire(px, py, jx, py, "33333333-0000-0000-0000-000000000001"),  # pin → J
+            _wire(
+                jx, py, jx + 10.16, py, "33333333-0000-0000-0000-000000000002"
+            ),  # J → rest of net
+            _label("VCC", jx, py, "33333333-0000-0000-0000-000000000003"),
+        ]
+        sch.write_text(_HEAD + "\n".join(extra) + "\n)\n", encoding="utf-8")
+
+        res = handle_delete_schematic_component(
+            _iface(),
+            {"schematicPath": str(sch), "reference": "R1", "removeDanglingWires": True},
+        )
+        assert res["success"] is True
+        d = res["dangling"]
+        # The pin→J wire is a through-path: reported dangling count must be 0
+        # and both wires + the label at J must survive.
+        assert d["wireCount"] == 0
+        assert d["labelCount"] == 0
+        content = sch.read_text(encoding="utf-8")
+        assert content.count("(wire") == 2
+        assert '(label "VCC"' in content
+        assert '"R1"' not in content
+
+    def test_spur_teed_onto_rail_removed_rail_kept(self, tmp_path):
+        sch = tmp_path / "spur.kicad_sch"
+        sch.write_text(_HEAD + ")\n", encoding="utf-8")
+        _num, (px, py) = self._pins(sch)[0]
+        # A vertical rail wire passes through the stub's tee point (mid-span).
+        tx = px + 5.08
+        extra = [
+            _wire(px, py, tx, py, "44444444-0000-0000-0000-000000000001"),  # pin → tee pt
+            _wire(tx, py - 5.08, tx, py + 5.08, "44444444-0000-0000-0000-000000000002"),  # rail
+        ]
+        sch.write_text(_HEAD + "\n".join(extra) + "\n)\n", encoding="utf-8")
+
+        res = handle_delete_schematic_component(
+            _iface(),
+            {"schematicPath": str(sch), "reference": "R1", "removeDanglingWires": True},
+        )
+        assert res["success"] is True
+        d = res["dangling"]
+        # The spur (pin → tee point mid-rail) is removed; the rail survives.
+        assert d["wiresRemoved"] == 1
+        content = sch.read_text(encoding="utf-8")
+        assert content.count("(wire") == 1
+        assert f"(xy {tx} {py - 5.08})" in content
