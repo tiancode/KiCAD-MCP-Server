@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import sexpdata
 from commands.schematic import SchematicManager
@@ -195,25 +195,35 @@ def _unit_offpage(
 
 
 def _detect_dangling(
-    content: str, pin_positions_mm: List[Tuple[float, float]]
+    content: str,
+    pin_positions_mm: List[Tuple[float, float]],
+    schematic_path: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Find wire stubs and net labels orphaned by a deleted symbol (S6).
 
-    Given the post-deletion .kicad_sch ``content`` and the deleted symbol's
-    pin world positions (mm), returns ``(dangling_wires, dangling_labels)``:
+    Given the post-deletion .kicad_sch ``content`` (which ``schematic_path``
+    must already hold on disk — live pins resolve against the file) and the
+    deleted symbol's pin world positions (mm), returns
+    ``(dangling_wires, dangling_labels)``:
 
     * a wire is dangling when an endpoint coincided with a deleted pin AND the
       wire is a genuine stub: its other end is FREE (nothing there) or lies
       strictly mid-span of another wire (a spur teed onto a rail). A wire
       whose far end shares its point with another wire's endpoint is a
       THROUGH-PATH (e.g. half of a rail split under a mid-wire pin) and is
-      kept — deleting it would silently cut the net. A wire between two pins
-      of the deleted symbol is always dangling;
+      kept — deleting it would silently cut the net. An endpoint on a LIVE
+      component's pin likewise anchors the wire (removing it would strand
+      that pin). A wire between two pins of the deleted symbol is dangling
+      unless a live pin is stacked on one of them;
     * a label is dangling when it sits on a deleted pin OR on an endpoint of a
-      dangling wire (the stub's far end, where connect_to_net drops the label).
+      dangling wire (the stub's far end, where connect_to_net drops the label)
+      AND its point no longer touches any surviving geometry — a label at a
+      removed spur's tee point still names the rail passing through it and
+      must survive.
 
-    Limitation: classification is single-level — a CHAIN of stubs from the
-    deleted pin keeps its non-first links (the GUI leaves everything too).
+    Limitation: classification is single-level — a multi-segment stub CHAIN
+    from the deleted pin is kept whole, because the first link's far end is
+    anchored by the second link (the GUI leaves everything too).
 
     Reuses the wire_connectivity parsers rather than re-implementing geometry;
     coordinates are reported back in mm.
@@ -227,6 +237,7 @@ def _detect_dangling(
         from commands.wire_connectivity import (
             _IU_PER_MM,
             _parse_labels_sexp,
+            _parse_symbol_instances_sexp,
             _parse_wires_sexp,
             _to_iu,
         )
@@ -238,6 +249,23 @@ def _detect_dangling(
         logger.debug("dangling detection: could not parse schematic", exc_info=True)
         return dangling_wires, dangling_labels
 
+    # Pins of every SURVIVING symbol: an endpoint sitting on one is anchored,
+    # and a label touching one still carries that pin's net. Best-effort — an
+    # empty list degrades to wire-only anchoring.
+    live_pin_iu: List[Tuple[int, int]] = []
+    if schematic_path is not None:
+        try:
+            from commands.pin_locator import PinLocator
+
+            locator = PinLocator()
+            for ref in sorted({i["ref"] for i in _parse_symbol_instances_sexp(sexp)}):
+                for xy in (locator.get_all_symbol_pins(Path(schematic_path), ref) or {}).values():
+                    if xy and len(xy) >= 2:
+                        live_pin_iu.append(_to_iu(float(xy[0]), float(xy[1])))
+        except Exception:
+            logger.debug("dangling detection: live-pin collection failed", exc_info=True)
+            live_pin_iu = []
+
     tol_iu = round(0.05 * _IU_PER_MM)  # 0.05 mm — pins/stubs share exact grid pts
     pin_iu = [_to_iu(px, py) for px, py in pin_positions_mm]
 
@@ -247,7 +275,19 @@ def _detect_dangling(
     def _mm(pt: Tuple[int, int]) -> Dict[str, float]:
         return {"x": round(pt[0] / _IU_PER_MM, 4), "y": round(pt[1] / _IU_PER_MM, 4)}
 
+    def _strictly_midspan(pt: Tuple[int, int], wire: List[Tuple[int, int]]) -> bool:
+        """pt lies strictly between a wire's endpoints (H/V, IU tolerance)."""
+        (x1, y1), (x2, y2) = wire[0], wire[-1]
+        if abs(y1 - y2) <= tol_iu and abs(pt[1] - y1) <= tol_iu:
+            lo, hi = min(x1, x2), max(x1, x2)
+            return lo + tol_iu < pt[0] < hi - tol_iu
+        if abs(x1 - x2) <= tol_iu and abs(pt[0] - x1) <= tol_iu:
+            lo, hi = min(y1, y2), max(y1, y2)
+            return lo + tol_iu < pt[1] < hi - tol_iu
+        return False
+
     dangling_endpoints: List[Tuple[int, int]] = []
+    dangling_idx: set = set()
 
     def _far_end_free_or_spur(far_iu: Tuple[int, int], self_idx: int) -> bool:
         """Classify the endpoint of a candidate stub that did NOT touch the
@@ -259,11 +299,13 @@ def _detect_dangling(
         * SPUR-ANCHORED — lying strictly mid-span of a wire without being any
           wire's endpoint (a stub teed onto a rail).
 
-        ``False`` (KEEP) when the far end is shared with >=1 other wire
-        endpoint: the wire is part of a through-path (e.g. half of a rail that
-        a mid-wire pin split produced), and removing it would orphan whatever
-        the path feeds (a connector stub, the rest of the rail...).
+        ``False`` (KEEP) when the far end sits on a live component's pin, or
+        is shared with >=1 other wire endpoint: the wire feeds that pin / is
+        part of a through-path (e.g. half of a rail that a mid-wire pin split
+        produced), and removing it would orphan whatever it feeds.
         """
+        if _near(far_iu, live_pin_iu):
+            return False
         for j, other in enumerate(wires):
             if j == self_idx:
                 continue
@@ -273,16 +315,8 @@ def _detect_dangling(
         for j, other in enumerate(wires):
             if j == self_idx:
                 continue
-            (x1, y1), (x2, y2) = other[0], other[-1]
-            # strictly mid-span (horizontal/vertical), in IU with tolerance
-            if abs(y1 - y2) <= tol_iu and abs(far_iu[1] - y1) <= tol_iu:
-                lo, hi = min(x1, x2), max(x1, x2)
-                if lo + tol_iu < far_iu[0] < hi - tol_iu:
-                    return True
-            if abs(x1 - x2) <= tol_iu and abs(far_iu[0] - x1) <= tol_iu:
-                lo, hi = min(y1, y2), max(y1, y2)
-                if lo + tol_iu < far_iu[1] < hi - tol_iu:
-                    return True
+            if _strictly_midspan(far_iu, other):
+                return True
         return True
 
     for i, w in enumerate(wires):
@@ -291,21 +325,38 @@ def _detect_dangling(
         end_on_pin = _near(end_iu, pin_iu)
         if not (start_on_pin or end_on_pin):
             continue
-        # A wire between two pins of the deleted symbol is always orphaned.
         if start_on_pin and end_on_pin:
-            is_stub = True
+            # Wire between two pins of the deleted symbol: orphaned unless a
+            # LIVE pin is stacked on one of them (the wire still feeds it).
+            is_stub = not (_near(start_iu, live_pin_iu) or _near(end_iu, live_pin_iu))
         else:
+            near_iu = start_iu if start_on_pin else end_iu
             far_iu = end_iu if start_on_pin else start_iu
-            is_stub = _far_end_free_or_spur(far_iu, i)
+            # A live pin stacked on the deleted pin's point keeps the wire too.
+            is_stub = not _near(near_iu, live_pin_iu) and _far_end_free_or_spur(far_iu, i)
         if not is_stub:
             continue
         dangling_wires.append({"start": _mm(start_iu), "end": _mm(end_iu)})
         dangling_endpoints.append(start_iu)
         dangling_endpoints.append(end_iu)
+        dangling_idx.add(i)
+
+    surviving = [w for j, w in enumerate(wires) if j not in dangling_idx]
+
+    def _still_connected(pt: Tuple[int, int]) -> bool:
+        """Point still touches live geometry — a surviving wire's endpoint or
+        strict mid-span, or a live component's pin. A label here keeps naming
+        a real net and must not be removed with the stub."""
+        if _near(pt, live_pin_iu):
+            return True
+        for w in surviving:
+            if _near(pt, [w[0], w[-1]]) or _strictly_midspan(pt, w):
+                return True
+        return False
 
     label_targets = pin_iu + dangling_endpoints
     for pt_iu, name in point_to_label.items():
-        if _near(pt_iu, label_targets):
+        if _near(pt_iu, label_targets) and not _still_connected(pt_iu):
             dangling_labels.append({"name": name, "position": _mm(pt_iu)})
 
     return dangling_wires, dangling_labels
@@ -824,7 +875,7 @@ def handle_delete_schematic_component(
         # attached to the now-deleted symbol's pins (S6). A GUI delete leaves
         # these behind as orphans; we always REPORT them, and remove them only
         # when removeDanglingWires=true (default false keeps KiCad-GUI parity).
-        dangling_wires, dangling_labels = _detect_dangling(content, pin_positions_mm)
+        dangling_wires, dangling_labels = _detect_dangling(content, pin_positions_mm, sch_file)
 
         removed_wires = 0
         removed_labels = 0
@@ -863,8 +914,12 @@ def handle_delete_schematic_component(
                     f"stub(s) and {removed_labels} net label(s)."
                 )
             else:
+                # Careful wording: multi-segment stub CHAINS are kept whole
+                # (single-level classification), so "nothing removable" does
+                # not mean "nothing attached".
                 response["message"] = (
-                    f"Removed {reference} (no attached wire stubs or labels found)."
+                    f"Removed {reference} (no removable dangling wires or labels; "
+                    f"anchored or chained wires, if any, were kept)."
                 )
         else:
             if dangling_wires or dangling_labels:
@@ -875,9 +930,7 @@ def handle_delete_schematic_component(
                     f"remove them."
                 )
             else:
-                response["message"] = (
-                    f"Removed {reference} (no attached wire stubs or labels found)."
-                )
+                response["message"] = f"Removed {reference} (no dangling wires or labels detected)."
         return response
 
     except Exception as e:
