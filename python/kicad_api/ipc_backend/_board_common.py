@@ -36,6 +36,16 @@ class _CommonMixin:
                 raise ConnectionError(f"No board open in KiCAD: {e}")
         return self._board
 
+    def invalidate_board(self) -> None:
+        """Drop the cached kipy Board wrapper so the next :meth:`_get_board`
+        re-fetches the CURRENT document from the client.
+
+        The wrapper is otherwise cached for the connection's lifetime, so after
+        a same-instance board switch (or a reselect heal) it keeps serving the
+        OLD board's document — which made the board-identity gate refuse forever
+        and post-heal reads return stale data (finding 2)."""
+        self._board = None
+
     #: Default label shown in KiCad's undo history when the caller didn't
     #: supply one.  Single source of truth — handlers pass through
     #: ``None`` rather than copy-substituting their own default.

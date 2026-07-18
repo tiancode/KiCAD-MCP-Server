@@ -201,13 +201,18 @@ def _detect_dangling(
     content: str,
     pin_positions_mm: List[Tuple[float, float]],
     schematic_path: Optional[Path] = None,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+    List[Dict[str, float]],
+]:
     """Find wire stubs and net labels orphaned by a deleted symbol (S6).
 
     Given the post-deletion .kicad_sch ``content`` (which ``schematic_path``
     must already hold on disk — live pins resolve against the file) and the
     deleted symbol's pin world positions (mm), returns
-    ``(dangling_wires, dangling_labels)``:
+    ``(dangling_wires, dangling_labels, kept_wires, dangling_endpoints)``:
 
     * a wire is dangling when an endpoint coincided with a deleted pin AND the
       wire is a genuine stub: its other end is FREE (nothing there) or lies
@@ -218,6 +223,14 @@ def _detect_dangling(
       component's pin likewise anchors the wire (removing it would strand
       that pin). A wire between two pins of the deleted symbol is dangling
       unless a live pin is stacked on one of them;
+    * ``kept_wires`` are the wires that touched a deleted pin but were KEPT
+      (anchored on a live pin / through-path / stacked live pin) — each carries
+      a ``reason`` so a caller isn't told "nothing was attached" when a wire
+      was found and deliberately preserved (the connect_to_net L-wire bug);
+    * ``dangling_endpoints`` are the now-free points where a kept wire's end
+      sat on a deleted pin and nothing live remains there — the wire end is a
+      genuine dangling endpoint (what check_schematic_layout flags as an
+      orphaned wire) even though the wire body was kept;
     * a label is dangling when it sits on a deleted pin OR on an endpoint of a
       dangling wire (the stub's far end, where connect_to_net drops the label)
       AND its point no longer touches any surviving geometry — a label at a
@@ -233,8 +246,10 @@ def _detect_dangling(
     """
     dangling_wires: List[Dict[str, Any]] = []
     dangling_labels: List[Dict[str, Any]] = []
+    kept_wires: List[Dict[str, Any]] = []
+    dangling_endpoints_mm: List[Dict[str, float]] = []
     if not pin_positions_mm:
-        return dangling_wires, dangling_labels
+        return dangling_wires, dangling_labels, kept_wires, dangling_endpoints_mm
 
     try:
         from commands.wire_connectivity import (
@@ -250,24 +265,31 @@ def _detect_dangling(
         point_to_label, _ = _parse_labels_sexp(sexp)
     except Exception:  # best-effort — never let detection break the delete
         logger.debug("dangling detection: could not parse schematic", exc_info=True)
-        return dangling_wires, dangling_labels
+        return dangling_wires, dangling_labels, kept_wires, dangling_endpoints_mm
 
     # Pins of every SURVIVING symbol: an endpoint sitting on one is anchored,
     # and a label touching one still carries that pin's net. Best-effort — an
-    # empty list degrades to wire-only anchoring.
+    # empty list degrades to wire-only anchoring. ``live_pin_details`` maps the
+    # IU point to the owning (ref, pin) so a kept-wire reason can name it.
     live_pin_iu: List[Tuple[int, int]] = []
+    live_pin_details: Dict[Tuple[int, int], Tuple[str, str]] = {}
     if schematic_path is not None:
         try:
             from commands.pin_locator import PinLocator
 
             locator = PinLocator()
             for ref in sorted({i["ref"] for i in _parse_symbol_instances_sexp(sexp)}):
-                for xy in (locator.get_all_symbol_pins(Path(schematic_path), ref) or {}).values():
+                for pin_num, xy in (
+                    locator.get_all_symbol_pins(Path(schematic_path), ref) or {}
+                ).items():
                     if xy and len(xy) >= 2:
-                        live_pin_iu.append(_to_iu(float(xy[0]), float(xy[1])))
+                        pt = _to_iu(float(xy[0]), float(xy[1]))
+                        live_pin_iu.append(pt)
+                        live_pin_details.setdefault(pt, (ref, str(pin_num)))
         except Exception:
             logger.debug("dangling detection: live-pin collection failed", exc_info=True)
             live_pin_iu = []
+            live_pin_details = {}
 
     tol_iu = round(0.05 * _IU_PER_MM)  # 0.05 mm — pins/stubs share exact grid pts
     pin_iu = [_to_iu(px, py) for px, py in pin_positions_mm]
@@ -277,6 +299,12 @@ def _detect_dangling(
 
     def _mm(pt: Tuple[int, int]) -> Dict[str, float]:
         return {"x": round(pt[0] / _IU_PER_MM, 4), "y": round(pt[1] / _IU_PER_MM, 4)}
+
+    def _live_pin_ref(pt: Tuple[int, int]) -> Optional[Tuple[str, str]]:
+        for t, detail in live_pin_details.items():
+            if abs(pt[0] - t[0]) <= tol_iu and abs(pt[1] - t[1]) <= tol_iu:
+                return detail
+        return None
 
     def _strictly_midspan(pt: Tuple[int, int], wire: List[Tuple[int, int]]) -> bool:
         """pt lies strictly between a wire's endpoints (H/V, IU tolerance)."""
@@ -292,35 +320,35 @@ def _detect_dangling(
     dangling_endpoints: List[Tuple[int, int]] = []
     dangling_idx: set = set()
 
-    def _far_end_free_or_spur(far_iu: Tuple[int, int], self_idx: int) -> bool:
-        """Classify the endpoint of a candidate stub that did NOT touch the
-        deleted symbol.
+    def _far_end_anchor(far_iu: Tuple[int, int], self_idx: int) -> Optional[str]:
+        """Reason a candidate stub's far end anchors the wire, or None (removable).
 
-        ``True`` (removable stub) when the far end is:
-        * FREE — no other wire endpoint there and not mid-span on any wire
-          (the classic connect_to_net stub ending in empty space / a label), or
-        * SPUR-ANCHORED — lying strictly mid-span of a wire without being any
-          wire's endpoint (a stub teed onto a rail).
+        Returns None when the far end is FREE — no other wire endpoint there and
+        not mid-span on any wire (the classic connect_to_net stub ending in empty
+        space / a label) — or SPUR-ANCHORED (lying strictly mid-span of a wire
+        without being any wire's endpoint, a stub teed onto a rail): both are
+        removable stubs.
 
-        ``False`` (KEEP) when the far end sits on a live component's pin, or
-        is shared with >=1 other wire endpoint: the wire feeds that pin / is
-        part of a through-path (e.g. half of a rail that a mid-wire pin split
+        Returns a human reason (KEEP) when the far end sits on a live component's
+        pin, or is shared with >=1 other wire endpoint: the wire feeds that pin /
+        is part of a through-path (e.g. half of a rail that a mid-wire pin split
         produced), and removing it would orphan whatever it feeds.
         """
-        if _near(far_iu, live_pin_iu):
-            return False
+        live = _live_pin_ref(far_iu)
+        if live is not None:
+            return f"far end anchors on {live[0]} pin {live[1]}"
         for j, other in enumerate(wires):
             if j == self_idx:
                 continue
             o_start, o_end = other[0], other[-1]
             if _near(far_iu, [o_start]) or _near(far_iu, [o_end]):
-                return False
+                return "far end is a through-path shared with another wire (removing it would cut the net)"
         for j, other in enumerate(wires):
             if j == self_idx:
                 continue
             if _strictly_midspan(far_iu, other):
-                return True
-        return True
+                return None
+        return None
 
     for i, w in enumerate(wires):
         start_iu, end_iu = w[0], w[-1]
@@ -328,21 +356,55 @@ def _detect_dangling(
         end_on_pin = _near(end_iu, pin_iu)
         if not (start_on_pin or end_on_pin):
             continue
+        keep_reason: Optional[str] = None
         if start_on_pin and end_on_pin:
             # Wire between two pins of the deleted symbol: orphaned unless a
             # LIVE pin is stacked on one of them (the wire still feeds it).
-            is_stub = not (_near(start_iu, live_pin_iu) or _near(end_iu, live_pin_iu))
+            stacked = _live_pin_ref(start_iu) or _live_pin_ref(end_iu)
+            if stacked is not None:
+                keep_reason = f"a live {stacked[0]} pin {stacked[1]} is stacked on the deleted pin"
         else:
             near_iu = start_iu if start_on_pin else end_iu
             far_iu = end_iu if start_on_pin else start_iu
             # A live pin stacked on the deleted pin's point keeps the wire too.
-            is_stub = not _near(near_iu, live_pin_iu) and _far_end_free_or_spur(far_iu, i)
-        if not is_stub:
-            continue
-        dangling_wires.append({"start": _mm(start_iu), "end": _mm(end_iu)})
-        dangling_endpoints.append(start_iu)
-        dangling_endpoints.append(end_iu)
-        dangling_idx.add(i)
+            stacked = _live_pin_ref(near_iu)
+            if stacked is not None:
+                keep_reason = f"a live {stacked[0]} pin {stacked[1]} is stacked on the deleted pin"
+            else:
+                keep_reason = _far_end_anchor(far_iu, i)
+        if keep_reason is None:
+            dangling_wires.append({"start": _mm(start_iu), "end": _mm(end_iu)})
+            dangling_endpoints.append(start_iu)
+            dangling_endpoints.append(end_iu)
+            dangling_idx.add(i)
+        else:
+            # The wire was attached to a deleted pin but is KEPT (anchored).
+            # Report it truthfully, plus each deleted-pin endpoint that is now a
+            # free dangling wire end (nothing live remains there).
+            kept: Dict[str, Any] = {
+                "start": _mm(start_iu),
+                "end": _mm(end_iu),
+                "reason": keep_reason,
+            }
+            dangling_here: List[Dict[str, float]] = []
+            for ep, on_pin in ((start_iu, start_on_pin), (end_iu, end_on_pin)):
+                if not on_pin:
+                    continue
+                # Free end when nothing LIVE remains at the deleted pin's point:
+                # no live pin, and no OTHER wire endpoint there.
+                if _live_pin_ref(ep) is not None:
+                    continue
+                shared = any(
+                    j != i and (_near(ep, [o[0]]) or _near(ep, [o[-1]]))
+                    for j, o in enumerate(wires)
+                )
+                if shared:
+                    continue
+                dangling_here.append(_mm(ep))
+            if dangling_here:
+                kept["danglingEndpoints"] = dangling_here
+                dangling_endpoints_mm.extend(dangling_here)
+            kept_wires.append(kept)
 
     surviving = [w for j, w in enumerate(wires) if j not in dangling_idx]
 
@@ -362,7 +424,45 @@ def _detect_dangling(
         if _near(pt_iu, label_targets) and not _still_connected(pt_iu):
             dangling_labels.append({"name": name, "position": _mm(pt_iu)})
 
-    return dangling_wires, dangling_labels
+    return dangling_wires, dangling_labels, kept_wires, dangling_endpoints_mm
+
+
+def _collect_external_attached_wires(
+    sch_data: list, old_to_new: Dict[Tuple[float, float], Tuple[float, float]]
+) -> List[Dict[str, Any]]:
+    """Wires with exactly one endpoint on a rotated pin (its OLD position).
+
+    These "external" wires (far end elsewhere on the sheet) get their pin-side
+    endpoint dragged to follow the pin, but their far end does not rotate — so
+    the rotation can leave them running diagonally.  A wire whose BOTH ends sit
+    on rotated pins (internal to the component) rotates cleanly and is excluded.
+    Returns ``[{"start": {x, y}, "end": {x, y}}]`` in mm.
+    """
+    from commands.wire_dragger import WireDragger
+
+    old_pts = set(old_to_new.keys())
+    if not old_pts:
+        return []
+    out: List[Dict[str, Any]] = []
+    _endpoint_count, wires = WireDragger._wire_endpoint_index(sch_data)
+    for eps_pts in wires:
+        a = (round(eps_pts[0][0], 6), round(eps_pts[0][1], 6))
+        b = (round(eps_pts[-1][0], 6), round(eps_pts[-1][1], 6))
+        a_on = a in old_pts
+        b_on = b in old_pts
+        # Exactly one endpoint on a rotated pin => an external attached wire.
+        if a_on != b_on:
+            # Report POST-rotation geometry: drag_wires moves the pin-side
+            # endpoint to the pin's NEW position while the far end stays put.
+            # Map the pin-side endpoint through old_to_new so cleanup guidance
+            # points at where the wire actually is, not the vacated OLD pin
+            # coordinate (finding 9).
+            if a_on:
+                a = old_to_new[a]
+            else:
+                b = old_to_new[b]
+            out.append({"start": {"x": a[0], "y": a[1]}, "end": {"x": b[0], "y": b[1]}})
+    return out
 
 
 def _apply_grid_snap(x: float, y: float, params: Dict[str, Any]) -> Tuple[float, float, bool]:
@@ -563,8 +663,22 @@ def handle_rotate_schematic_component(
                 continue
             old_to_new[old_xy] = new_xy
 
+        # Wires attached to a rotated pin whose far end will NOT rotate with the
+        # pin (a rotation is not a rigid translation: drag_wires bends the
+        # pin-side endpoint to follow while the far end stays put).  Connectivity
+        # is preserved, but the geometry may need review — collect them BEFORE
+        # the drag mutates their coordinates so we can report them.
+        attached_wires = _collect_external_attached_wires(sch_data, old_to_new)
+
         # Drag connected wires to follow pins
         drag_summary = WireDragger.drag_wires(sch_data, old_to_new)
+
+        # Relocate any net label sitting directly on a rotated pin so it travels
+        # to the pin's NEW position — parity with move_schematic_component.  A
+        # label left at the OLD pin coordinate silently drops the component off
+        # its net (kicad-cli ERC then reports "Pin not connected" / "Label not
+        # connected"); this is the exact rotate regression the fix targets.
+        labels_moved = WireDragger.move_labels_at_points(sch_data, old_to_new)
 
         # Update the symbol's rotation and mirror token in sexpdata
         WireDragger.update_symbol_rotation_mirror(
@@ -582,7 +696,19 @@ def handle_rotate_schematic_component(
             "mirror": effective_mirror,
             "wiresMoved": drag_summary.get("endpoints_moved", 0),
             "wiresRemoved": drag_summary.get("wires_removed", 0),
+            "labelsMoved": labels_moved,
         }
+        # Report attached wires that were kept but whose far end did not rotate,
+        # so the caller can tidy up any now-diagonal geometry (labels already
+        # followed their pins above and are NOT listed here).
+        if attached_wires:
+            result["attachedWires"] = attached_wires
+            result["warning"] = (
+                f"{reference}: {len(attached_wires)} wire(s) attached to a rotated pin were "
+                f"kept and their pin-side endpoint followed the rotation, but the far end did "
+                f"not rotate. Connectivity is preserved; verify the wire geometry (re-route if "
+                f"it now runs diagonally)."
+            )
         # Surface the normalization so the caller knows -90 landed as 270, etc.
         if requested_angle != normalized_angle:
             result["requestedAngle"] = requested_angle
@@ -878,7 +1004,12 @@ def handle_delete_schematic_component(
         # attached to the now-deleted symbol's pins (S6). A GUI delete leaves
         # these behind as orphans; we always REPORT them, and remove them only
         # when removeDanglingWires=true (default false keeps KiCad-GUI parity).
-        dangling_wires, dangling_labels = _detect_dangling(content, pin_positions_mm, sch_file)
+        # ``kept_wires`` are wires attached to a deleted pin that were KEPT
+        # (anchored) — reported truthfully so the caller isn't told "nothing was
+        # attached" when a wire was found and deliberately preserved.
+        dangling_wires, dangling_labels, kept_wires, dangling_endpoints = _detect_dangling(
+            content, pin_positions_mm, sch_file
+        )
 
         removed_wires = 0
         removed_labels = 0
@@ -901,6 +1032,14 @@ def handle_delete_schematic_component(
             "labelCount": len(dangling_labels),
             "removed": remove_dangling,
         }
+        # Kept (anchored) wires + the now-free endpoints they left behind. These
+        # are additive to the historical wires/labels contract: a caller can see
+        # a wire WAS attached and kept, and where cleanup may still be needed.
+        if kept_wires:
+            dangling["keptWires"] = kept_wires
+            dangling["keptWireCount"] = len(kept_wires)
+        if dangling_endpoints:
+            dangling["danglingEndpoints"] = dangling_endpoints
         response: Dict[str, Any] = {
             "success": True,
             "reference": reference,
@@ -908,21 +1047,35 @@ def handle_delete_schematic_component(
             "schematic": str(sch_file),
             "dangling": dangling,
         }
+        # Suffix describing wires kept + dangling endpoints, appended to every
+        # message so the report is truthful even when nothing was removable.
+        kept_suffix = ""
+        if kept_wires:
+            kept_suffix = (
+                f" Kept {len(kept_wires)} attached wire(s) that anchor on live geometry "
+                f"(see dangling.keptWires)"
+            )
+            if dangling_endpoints:
+                kept_suffix += (
+                    f"; {len(dangling_endpoints)} now-dangling endpoint(s) may need cleanup "
+                    f"(see dangling.danglingEndpoints)"
+                )
+            kept_suffix += "."
         if remove_dangling:
             dangling["wiresRemoved"] = removed_wires
             dangling["labelsRemoved"] = removed_labels
             if dangling_wires or dangling_labels:
                 response["message"] = (
                     f"Removed {reference} and cleaned up {removed_wires} attached wire "
-                    f"stub(s) and {removed_labels} net label(s)."
+                    f"stub(s) and {removed_labels} net label(s).{kept_suffix}"
                 )
             else:
-                # Careful wording: multi-segment stub CHAINS are kept whole
-                # (single-level classification), so "nothing removable" does
-                # not mean "nothing attached".
+                # Careful wording: multi-segment stub CHAINS and anchored wires
+                # are kept whole (single-level classification), so "nothing
+                # removable" does not mean "nothing attached" — kept_suffix says so.
                 response["message"] = (
                     f"Removed {reference} (no removable dangling wires or labels; "
-                    f"anchored or chained wires, if any, were kept)."
+                    f"anchored or chained wires, if any, were kept).{kept_suffix}"
                 )
         else:
             if dangling_wires or dangling_labels:
@@ -930,10 +1083,12 @@ def handle_delete_schematic_component(
                     f"Removed {reference}, but left {len(dangling_wires)} attached wire "
                     f"stub(s) and {len(dangling_labels)} net label(s) behind as orphans "
                     f"(matches a KiCad-GUI delete). Pass removeDanglingWires=true to also "
-                    f"remove them."
+                    f"remove them.{kept_suffix}"
                 )
             else:
-                response["message"] = f"Removed {reference} (no dangling wires or labels detected)."
+                response["message"] = (
+                    f"Removed {reference} (no dangling wires or labels detected).{kept_suffix}"
+                )
         return response
 
     except Exception as e:

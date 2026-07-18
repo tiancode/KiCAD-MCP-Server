@@ -182,6 +182,47 @@ def test_no_free_direction_refuses_with_structured_error(tmp_path: Path) -> None
 
 
 @pytest.mark.unit
+def test_collision_refusal_hint_omits_force(tmp_path: Path) -> None:
+    """Finding 10: connect_to_net has no force param, so its label_collision
+    refusal must NOT tell the caller to pass force=true (a dead remedy) — even
+    after enrich_failure runs (which only fills an EMPTY hint)."""
+    from utils.failure import enrich_failure
+
+    p = _build(tmp_path, _placed("C1", 100, 100, 1))
+    loc = PinLocator().get_pin_location(str(p), "C1", "1")
+    ang = PinLocator().get_pin_angle(str(p), "C1", "1")
+    cands = ConnectionManager._stub_candidates(loc, float(ang))
+    blockers = "".join(_label(f"OTHER{i}", e[0][0], e[0][1]) for i, e in enumerate(cands))
+
+    p = _build(tmp_path, _placed("C1", 100, 100, 1), blockers)
+    res = ConnectionManager.connect_to_net(p, "C1", "1", "MYNET")
+
+    assert res["success"] is False
+    assert "label_collision" in res
+    assert res.get("hint")  # a per-site hint is set
+    enriched = enrich_failure("connect_to_net", res)
+    assert enriched["errorCode"] == "LABEL_COLLISION"
+    assert "force" not in enriched["hint"].lower()
+
+
+@pytest.mark.unit
+def test_add_net_label_collision_hint_keeps_force() -> None:
+    """The generic LABEL_COLLISION hint (force=true) still applies to tools that
+    DO support force — add_schematic_net_label sets no site hint, so
+    enrich_failure fills the force remedy for it."""
+    from utils.failure import enrich_failure
+
+    res = {
+        "success": False,
+        "message": "collision",
+        "label_collision": {"point": [0, 0], "existing_net": "GND"},
+    }
+    enriched = enrich_failure("add_schematic_net_label", res)
+    assert enriched["errorCode"] == "LABEL_COLLISION"
+    assert "force" in enriched["hint"].lower()
+
+
+@pytest.mark.unit
 def test_same_net_at_point_is_not_a_collision(tmp_path: Path) -> None:
     # A label of the SAME net at the auto-chosen point is a legitimate join, not
     # a collision — the connection uses the default stub (no relocation).

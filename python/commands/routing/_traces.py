@@ -43,7 +43,8 @@ class TraceMixin:
 
             netinfo = self.board.GetNetInfo()
             nets_map = netinfo.NetsByName()
-            if nets_map.has_key(name):
+            already_existed = bool(nets_map.has_key(name))
+            if already_existed:
                 net = nets_map[name]
             else:
                 net = pcbnew.NETINFO_ITEM(self.board, name)
@@ -64,13 +65,22 @@ class TraceMixin:
                 if resolved is not None:
                     net.SetClass(resolved)
 
+            netcode = net.GetNetCode()
+            if already_existed:
+                # Idempotent no-op: the net was already present.  Say so
+                # instead of "Added net", which implies a fresh net.
+                message = f"Net '{name}' already exists (netcode {netcode})"
+            else:
+                message = f"Added net: {name}"
+
             return {
                 "success": True,
-                "message": f"Added net: {name}",
+                "message": message,
+                "already_existed": already_existed,
                 "net": {
                     "name": name,
                     "class": net_class if net_class else "Default",
-                    "netcode": net.GetNetCode(),
+                    "netcode": netcode,
                 },
             }
 

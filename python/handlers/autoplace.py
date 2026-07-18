@@ -8,6 +8,7 @@ and applies the returned positions. dryRun previews without moving.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from utils.responses import no_board_loaded
@@ -18,6 +19,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger("kicad_interface")
 
 _NM = 1_000_000
+
+# Reference prefixes for mechanical / non-electrical footprints that
+# auto-placement must never relocate by default: mounting holes (H / MH, the
+# scheme add_mounting_hole uses), fiducials (FID), and test points (TP).
+_MECHANICAL_REF_PREFIXES = frozenset({"H", "MH", "FID", "TP"})
+_REF_PREFIX_RE = re.compile(r"^[A-Za-z]+")
+
+
+def _looks_mechanical(reference: str, footprint_id: str) -> bool:
+    """True when a footprint looks mechanical by its footprint id or reference.
+
+    A ``MountingHole`` footprint id (e.g. ``MountingHole:MountingHole_3.2mm_M3``)
+    or a reference whose letter prefix is one of ``H``/``MH``/``FID``/``TP``
+    marks a mechanical part. Callers combine this with "has no pad on a net" so
+    a netted test point is never treated as mechanical.
+    """
+    if "mountinghole" in (footprint_id or "").lower():
+        return True
+    match = _REF_PREFIX_RE.match(reference or "")
+    prefix = match.group(0).upper() if match else ""
+    return prefix in _MECHANICAL_REF_PREFIXES
+
+
+def _footprint_id(fp: Any) -> str:
+    """Best-effort footprint library id string (empty when unavailable)."""
+    try:
+        return str(fp.GetFPIDAsString())
+    except (AttributeError, RuntimeError, TypeError):
+        try:
+            return str(fp.GetFPID().GetLibItemName())
+        except (AttributeError, RuntimeError, TypeError):
+            return ""
 
 
 def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,6 +74,11 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
         only_refs = set(params.get("components") or [])
         fixed_refs = set(params.get("fixedRefs") or [])
         dry_run = bool(params.get("dryRun", False))
+        # Mechanical footprints (mounting holes, fiducials, netless test points)
+        # must stay at their fixed positions by default — relocating them into
+        # the component cluster moved real M3 holes and created courtyard
+        # overlaps (E2E finding). includeMechanical: true opts back in.
+        include_mechanical = bool(params.get("includeMechanical", False))
 
         import pcbnew
 
@@ -82,6 +120,7 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
                     "reference": ref,
                     "value": fp.GetValue(),
                     "nets": nets,
+                    "footprint_id": _footprint_id(fp),
                     "width": (bb.GetRight() - bb.GetLeft()) / _NM,
                     "height": (bb.GetBottom() - bb.GetTop()) / _NM,
                     "x": center_x,
@@ -95,9 +134,19 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
         decoupling = detect_decoupling(raw)
 
         components = []
+        skipped_mechanical: List[str] = []
         for item in raw:
             ref = item["reference"]
             fixed = ref in fixed_refs or item["locked"] or (only_refs and ref not in only_refs)
+            # A netless mechanical footprint that would otherwise be relocated is
+            # held fixed (so it still acts as an obstacle for the placed parts)
+            # and reported as skipped, unless includeMechanical was passed. Parts
+            # already fixed for another reason aren't double-reported.
+            is_mechanical = not item["nets"] and _looks_mechanical(ref, item["footprint_id"])
+            if is_mechanical and not include_mechanical:
+                if not fixed:
+                    skipped_mechanical.append(ref)
+                fixed = True
             components.append(
                 PlaceableComponent(
                     reference=ref,
@@ -135,14 +184,19 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
         )
 
         moved = 0
+        skipped_set = set(skipped_mechanical)
         if not dry_run:
             for placement in result.get("placements", []):
-                fp = modules.get(placement["reference"])
+                ref = placement["reference"]
+                # Skipped mechanical parts stay exactly where they are.
+                if ref in skipped_set:
+                    continue
+                fp = modules.get(ref)
                 if fp is None:
                     continue
                 # placement x/y is the keepout-box CENTER; convert back to the
                 # footprint anchor using the offset recorded at extraction.
-                off_x, off_y = anchor_offsets.get(placement["reference"], (0.0, 0.0))
+                off_x, off_y = anchor_offsets.get(ref, (0.0, 0.0))
                 fp.SetPosition(
                     pcbnew.VECTOR2I(
                         int((placement["x"] + off_x) * _NM),
@@ -155,6 +209,7 @@ def handle_auto_place_components(iface: "KiCADInterface", params: Dict[str, Any]
             "success": True,
             "dryRun": dry_run,
             "moved": moved,
+            "skipped_mechanical": sorted(skipped_mechanical),
             **result,
         }
     except Exception as e:  # API boundary; bucket: catch + return

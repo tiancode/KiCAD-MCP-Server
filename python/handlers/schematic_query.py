@@ -253,12 +253,25 @@ def handle_get_net_connections(iface: "KiCADInterface", params: Dict[str, Any]) 
 
         connections = get_connections_for_net(schematic, schematic_path, net_name)
         power = get_power_attachments_for_net(schematic, schematic_path, net_name)
-        return {
+        result = {
             "success": True,
             "connections": connections,
             "power_symbols": power["power_symbols"],
             "power_flags": power["power_flags"],
         }
+        # F6: a power symbol on the net BY NAME whose pin is physically dangling
+        # (no wire/label/coincident pin) fails kicad-cli ERC ("Pin not
+        # connected") even though it looks like a net member here. Surface it as
+        # a top-level warning so a caller isn't misled into shipping it.
+        floating_warnings = [
+            f"{p['ref']} pin {p.get('pin', '1')} is on net {net_name} by name but physically "
+            f"dangling — use connect_to_net({p['ref']}, {p.get('pin', '1')}, {net_name}) to wire it."
+            for p in power["power_symbols"]
+            if p.get("floating")
+        ]
+        if floating_warnings:
+            result["warnings"] = floating_warnings
+        return result
     except Exception as e:
         logger.error(f"Error getting net connections: {str(e)}")
         return {"success": False, "message": str(e)}

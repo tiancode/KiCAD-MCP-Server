@@ -132,6 +132,28 @@ def test_edit_outline_replaces_contour() -> None:
     assert outline.Append.call_count == 4
 
 
+def test_edit_outline_bad_unit_leaves_zone_untouched() -> None:
+    """Finding 3: a bad unit on a later outline point must be refused BEFORE
+    the zone's contour is destroyed — RemoveAllContours/NewOutline/Append must
+    never run, or the next auto-save would persist a wiped-out outline."""
+    z1 = _stub_zone("uuid-1", "GND", 0)
+    host = _Host([z1])
+
+    pts = [
+        {"x": 21, "y": 21},
+        {"x": 69, "y": 21, "unit": "banana"},  # invalid unit on point 2
+        {"x": 69, "y": 49},
+    ]
+    result = host.edit_copper_pour({"uuid": "uuid-1", "outline": pts})
+
+    assert result["success"] is False
+    assert result["errorCode"] == "VALIDATION"
+    outline = z1.Outline.return_value
+    outline.RemoveAllContours.assert_not_called()
+    outline.NewOutline.assert_not_called()
+    outline.Append.assert_not_called()
+
+
 def test_edit_refuses_when_no_property_given() -> None:
     z1 = _stub_zone("uuid-1", "GND", 0)
     host = _Host([z1])

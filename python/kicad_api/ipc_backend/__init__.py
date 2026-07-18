@@ -10,6 +10,15 @@ from ._board_core import IPCBoardAPI
 from ._helpers import (
     get_open_documents_compat,
     has_open_pcb_document,
+    normalize_board_path,
+    open_pcb_document_paths,
 )
 
-__all__ = ["IPCBackend", "IPCBoardAPI", "get_open_documents_compat", "has_open_pcb_document"]
+__all__ = [
+    "IPCBackend",
+    "IPCBoardAPI",
+    "get_open_documents_compat",
+    "has_open_pcb_document",
+    "normalize_board_path",
+    "open_pcb_document_paths",
+]

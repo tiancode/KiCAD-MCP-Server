@@ -65,6 +65,9 @@ class _RecordingAPI:
     def add_polygon(self, **kwargs):
         return self._record("add_polygon", kwargs)
 
+    def delete_shapes(self, **kwargs):
+        return self._record("delete_shapes", kwargs)
+
 
 def test_add_segment_nested_form():
     api = _RecordingAPI()
@@ -166,3 +169,72 @@ def test_handlers_fail_without_ipc():
         out = getattr(iface, f"_handle_{cmd}")({})
         assert out["success"] is False
         assert "IPC" in out["message"]
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_delete_shape_blank_id_is_validation_not_internal_error(blank):
+    """An explicitly-passed but blank id must be a truthful VALIDATION refusal
+    (never INTERNAL_ERROR), and the API must not be called."""
+    api = _RecordingAPI()
+    iface = _make_iface(api)
+    out = iface._handle_delete_shape({"id": blank})
+    assert out["success"] is False
+    assert out["errorCode"] == "VALIDATION"
+    assert "non-empty" in out["message"]
+    assert api.last is None  # never reached the delete
+
+
+def test_delete_shape_no_criteria_is_validation():
+    api = _RecordingAPI()
+    iface = _make_iface(api)
+    out = iface._handle_delete_shape({})
+    assert out["success"] is False
+    assert out["errorCode"] == "VALIDATION"
+    assert api.last is None
+
+
+def test_delete_shape_blank_id_survives_enrich_failure():
+    """enrich_failure must keep the handler's VALIDATION code (not re-stamp it
+    INTERNAL_ERROR)."""
+    from utils.failure import enrich_failure
+
+    api = _RecordingAPI()
+    iface = _make_iface(api)
+    out = iface._handle_delete_shape({"id": ""})
+    enriched = enrich_failure("delete_shape", out)
+    assert enriched["errorCode"] == "VALIDATION"
+
+
+def test_delete_shape_real_id_reaches_api():
+    api = _RecordingAPI()
+    iface = _make_iface(api)
+    out = iface._handle_delete_shape({"id": "shape-42"})
+    assert out["success"] is True
+    cmd, kwargs = api.last
+    assert cmd == "delete_shapes"
+    assert kwargs["ids"] == ["shape-42"]
+
+
+def test_delete_shape_blank_id_with_ids_deletes_via_ids():
+    """Finding 8: a blank `id` alongside a usable ids[] must NOT regress to a
+    VALIDATION refusal — the ids[] selector is honored."""
+    api = _RecordingAPI()
+    iface = _make_iface(api)
+    out = iface._handle_delete_shape({"id": "", "ids": ["shape-7"]})
+    assert out["success"] is True
+    cmd, kwargs = api.last
+    assert cmd == "delete_shapes"
+    assert kwargs["ids"] == ["shape-7"]
+
+
+def test_delete_shape_null_id_with_filter_proceeds():
+    """Finding 8: a null `id` alongside a layer filter (+ all) proceeds instead
+    of refusing — clients serialize omitted fields as null."""
+    api = _RecordingAPI()
+    iface = _make_iface(api)
+    out = iface._handle_delete_shape({"id": None, "layer": "F.SilkS", "all": True})
+    assert out["success"] is True
+    cmd, kwargs = api.last
+    assert cmd == "delete_shapes"
+    assert kwargs["layer"] == "F.SilkS"
+    assert kwargs["delete_all"] is True

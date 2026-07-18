@@ -171,6 +171,7 @@ class PlacementMixin:
                             f"reference to add a new footprint."
                         ),
                         "errorDetails": "place_component creates new footprints; it never overwrites.",
+                        "errorCode": "DUPLICATE_REFERENCE",
                         "existingReference": reference,
                     }
 
@@ -214,7 +215,10 @@ class PlacementMixin:
                     "errorDetails": f"Could not load footprint from {library_path}/{footprint_name}",
                 }
 
-            scale = unit_to_nm_scale(position["unit"])
+            # ``unit`` is optional in the tool schema — default to mm (an
+            # unrecognised non-None value raises InvalidUnitError -> VALIDATION).
+            unit = position.get("unit") or "mm"
+            scale = unit_to_nm_scale(unit)
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
             module.SetPosition(pcbnew.VECTOR2I(x_nm, y_nm))
@@ -266,7 +270,7 @@ class PlacementMixin:
                 "component": {
                     "reference": module.GetReference(),
                     "value": module.GetValue(),
-                    "position": {"x": position["x"], "y": position["y"], "unit": position["unit"]},
+                    "position": {"x": position["x"], "y": position["y"], "unit": unit},
                     "rotation": rotation,
                     "layer": layer,
                 },
@@ -303,7 +307,10 @@ class PlacementMixin:
                     "errorDetails": f"Could not find component: {reference}",
                 }
 
-            scale = unit_to_nm_scale(position["unit"])
+            # ``unit`` is optional in the tool schema — default to mm (an
+            # unrecognised non-None value raises InvalidUnitError -> VALIDATION).
+            unit = position.get("unit") or "mm"
+            scale = unit_to_nm_scale(unit)
             x_nm = int(position["x"] * scale)
             y_nm = int(position["y"] * scale)
 
@@ -330,7 +337,7 @@ class PlacementMixin:
                     "success": False,
                     "message": (
                         f"Target position ({position['x']}, {position['y']}) "
-                        f"{position['unit']} is far outside the board outline "
+                        f"{unit} is far outside the board outline "
                         f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
                         f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm) — more than "
                         f"{int(_OFF_BOARD_ABSURD_FACTOR)}× a board dimension away. "
@@ -351,7 +358,7 @@ class PlacementMixin:
                     "success": False,
                     "message": (
                         f"Target position ({position['x']}, {position['y']}) "
-                        f"{position['unit']} is outside the board outline "
+                        f"{unit} is outside the board outline "
                         f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
                         f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm). Refusing to move "
                         f"{reference} off the board; pass allowOffBoard:true to "
@@ -406,7 +413,7 @@ class PlacementMixin:
                 # flag that the footprint now sits outside the outline.
                 response["offBoardWarning"] = (
                     f"{reference} moved to ({position['x']}, {position['y']}) "
-                    f"{position['unit']}, which is outside the board outline "
+                    f"{unit}, which is outside the board outline "
                     f"(x {bbox[0]:.4g}–{bbox[2]:.4g} mm, "
                     f"y {bbox[1]:.4g}–{bbox[3]:.4g} mm). The move still applied, but "
                     f"the footprint now sits off the board; move it back onto the "

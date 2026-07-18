@@ -29,14 +29,14 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.string().optional(),
+          unit: z.enum(["mm", "mil", "inch"]).optional(),
         })
         .describe("Start position"),
       mid: z
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.string().optional(),
+          unit: z.enum(["mm", "mil", "inch"]).optional(),
         })
         .optional()
         .describe("Arc midpoint — when given, routes an arc through it"),
@@ -44,7 +44,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.string().optional(),
+          unit: z.enum(["mm", "mil", "inch"]).optional(),
         })
         .describe("End position"),
       layer: z.string().describe("PCB layer"),
@@ -77,7 +77,7 @@ export function registerRoutingTools(server: McpServer, callKicadScript: Command
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.string().optional(),
+          unit: z.enum(["mm", "mil", "inch"]).optional(),
         })
         .describe("Via position"),
       net: z.string().describe("Net name"),

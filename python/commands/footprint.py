@@ -24,6 +24,31 @@ def _fmt(v: float) -> str:
     return f"{v:g}"
 
 
+def _normalize_wh(value: Any) -> Optional[Dict[str, float]]:
+    """Normalise a size/drill spec to ``{"w", "h"}``.
+
+    Accepts a bare number (round/square), ``{"w", "h"}`` (this tool's native
+    shape) or ``{"x", "y"}`` (the shape edit_component_pad / get_component_pads
+    use) so the two pad editors take the same arguments.  Returns ``None`` when
+    unparseable so an omitted field stays omitted.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return {"w": float(value), "h": float(value)}
+    if isinstance(value, dict):
+        w = value.get("w", value.get("x"))
+        h = value.get("h", value.get("y"))
+        if w is None and h is None:
+            return None
+        if w is None:
+            w = h
+        if h is None:
+            h = w
+        return {"w": float(w), "h": float(h)}
+    return None
+
+
 class FootprintCreator:
     """
     Creates and edits KiCAD .kicad_mod footprint files via text generation.
@@ -195,6 +220,14 @@ class FootprintCreator:
         -------
         dict with "success", "updated", "pad_number"
         """
+        # Accept size/drill as {"w","h"}, {"x","y"} or a bare number and
+        # normalise to the {"w","h"} shape the writer below expects — the two
+        # pad editors (edit_component_pad / edit_footprint_pad) previously
+        # disagreed on the key names for the same concept.
+        size = _normalize_wh(size)
+        if isinstance(drill, dict):
+            drill = _normalize_wh(drill)
+
         path = Path(footprint_path)
         if not path.exists():
             return {"success": False, "error": f"File not found: {footprint_path}"}

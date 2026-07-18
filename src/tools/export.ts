@@ -10,6 +10,15 @@ import { logger } from "../logger.js";
 import { CommandFunction, formatKicadResult } from "./tool-response.js";
 
 /**
+ * A case-insensitive enum: accepts any casing on input and normalizes to the
+ * canonical (given) values before validation, so "csv" and "CSV" both pass.
+ * The advertised JSON schema still shows the canonical values.
+ */
+function upperEnum<T extends [string, ...string[]]>(values: T) {
+  return z.preprocess((v) => (typeof v === "string" ? v.toUpperCase() : v), z.enum(values));
+}
+
+/**
  * Register export tools with the MCP server
  *
  * @param server MCP server instance
@@ -133,7 +142,9 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
       "plus a warning (never silently dropped).",
     {
       outputPath: z.string().describe("Path to save the BOM file"),
-      format: z.enum(["CSV", "XML", "HTML", "JSON"]).describe("BOM file format"),
+      format: upperEnum(["CSV", "XML", "HTML", "JSON"]).describe(
+        "BOM file format (case-insensitive)",
+      ),
       groupByValue: z
         .boolean()
         .optional()
@@ -207,7 +218,9 @@ export function registerExportTools(server: McpServer, callKicadScript: CommandF
     "Export a component placement (pick-and-place) file for PCB assembly.",
     {
       outputPath: z.string().describe("Path to save the position file"),
-      format: z.enum(["CSV", "ASCII"]).optional().describe("File format (default: CSV)"),
+      format: upperEnum(["CSV", "ASCII"])
+        .optional()
+        .describe("File format (case-insensitive, default: CSV)"),
       units: z.enum(["mm", "mil", "inch"]).optional().describe("Units to use (default: mm)"),
       side: z
         .enum(["top", "bottom", "both"])

@@ -26,6 +26,15 @@ const PadSize = z.object({
   h: z.number().describe("Height in mm"),
 });
 
+// The pad editors take size/drill in matching shapes: {w,h} (native here),
+// {x,y} (what edit_component_pad / get_component_pads use) or a bare number
+// (round/square). Normalised to {w,h} in Python so both editors agree.
+const PadSizeFlexible = z.union([
+  z.number().describe("Uniform size in mm (round/square)"),
+  z.object({ w: z.number(), h: z.number() }),
+  z.object({ x: z.number(), y: z.number() }),
+]);
+
 const PadSchema = z.object({
   number: z.string().describe("Pad number / name, e.g. '1', '2', 'A1'"),
   type: z.enum(["smd", "thru_hole", "np_thru_hole"]).describe("Pad type"),
@@ -107,15 +116,11 @@ export function registerFootprintTools(server: McpServer, callKicadScript: Comma
     {
       footprintPath: z.string().describe("Full path to the .kicad_mod file"),
       padNumber: z.union([z.string(), z.number()]).describe("Pad number to edit, e.g. '1' or 2"),
-      size: PadSize.optional().describe("New pad size in mm"),
+      size: PadSizeFlexible.optional().describe("New pad size in mm (number, or {w,h} / {x,y})"),
       at: PadPosition.optional().describe("New pad position in mm"),
-      drill: z
-        .union([
-          z.number().describe("Round drill diameter in mm"),
-          z.object({ w: z.number(), h: z.number() }).describe("Oval drill"),
-        ])
-        .optional()
-        .describe("New drill size (for THT pads)"),
+      drill: PadSizeFlexible.optional().describe(
+        "New drill in mm (number = round; {w,h} or {x,y} = oval) — for THT pads",
+      ),
       shape: z.enum(["rect", "circle", "oval", "roundrect"]).optional().describe("New pad shape"),
     },
     passthrough("edit_footprint_pad"),

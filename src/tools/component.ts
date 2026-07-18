@@ -26,9 +26,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
       .object({
         x: z.number(),
         y: z.number(),
-        unit: z.enum(["mm", "inch", "mil"]),
+        unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit (default mm)"),
       })
-      .describe("Position coordinates and unit"),
+      .describe("Position coordinates (unit defaults to mm)"),
     reference: z.string().optional().describe("Optional desired reference (e.g., 'R5')"),
     value: z.string().optional().describe("Optional component value (e.g., '10k')"),
     footprint: z.string().optional().describe("Optional specific footprint name"),
@@ -42,7 +42,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
 
   type PlaceComponentArgs = {
     componentId: string;
-    position: { x: number; y: number; unit: "mm" | "inch" | "mil" };
+    position: { x: number; y: number; unit?: "mm" | "inch" | "mil" };
     reference?: string;
     value?: string;
     footprint?: string;
@@ -75,9 +75,9 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.enum(["mm", "inch", "mil"]),
+          unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit (default mm)"),
         })
-        .describe("New position coordinates and unit"),
+        .describe("New position coordinates (unit defaults to mm)"),
       rotation: z.number().optional().describe("Optional new rotation in degrees"),
       layer: z
         .string()
@@ -303,6 +303,7 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
   const padSizeSchema = z.union([
     z.number().describe("Uniform size (round/square)"),
     z.object({ x: z.number(), y: z.number() }),
+    z.object({ w: z.number(), h: z.number() }),
   ]);
   server.tool(
     "edit_component_pad",
@@ -322,8 +323,10 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .enum(["smd", "through_hole", "thru_hole", "npth", "connector"])
         .optional()
         .describe("Filter matches by pad type (or sole selector)"),
-      size: padSizeSchema.optional().describe("New copper size in mm"),
-      drill: padSizeSchema.optional().describe("New drill in mm (number = round, {x,y} = oval)"),
+      size: padSizeSchema.optional().describe("New copper size in mm (number, or {x,y} / {w,h})"),
+      drill: padSizeSchema
+        .optional()
+        .describe("New drill in mm (number = round; {x,y} or {w,h} = oval)"),
       shape: z.enum(["circle", "rect", "oval", "roundrect"]).optional().describe("New pad shape"),
       newPadNumber: z
         .union([z.string(), z.number()])
@@ -372,14 +375,17 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.enum(["mm", "inch", "mil"]),
+          unit: z.enum(["mm", "inch", "mil"]).optional().describe("Unit (default mm)"),
         })
-        .describe("Starting position"),
+        .describe("Starting (top-left) position"),
       rows: z.number().describe("Number of rows"),
       columns: z.number().describe("Number of columns"),
-      rowSpacing: z.number().describe("Spacing between rows"),
-      columnSpacing: z.number().describe("Spacing between columns"),
-      startReference: z.string().optional().describe("Starting reference (e.g., 'R1')"),
+      rowSpacing: z.number().describe("Spacing between rows (mm)"),
+      columnSpacing: z.number().describe("Spacing between columns (mm)"),
+      startReference: z
+        .string()
+        .optional()
+        .describe("Starting reference; a trailing number is the first index (e.g. 'C5' → C5,C6,…)"),
       footprint: z.string().optional().describe("Footprint name"),
       value: z.string().optional().describe("Component value"),
       rotation: z.number().optional().describe("Rotation in degrees"),
@@ -564,6 +570,13 @@ export function registerComponentTools(server: McpServer, callKicadScript: Comma
         .boolean()
         .optional()
         .describe("Compute placements without moving footprints (default false)"),
+      includeMechanical: z
+        .boolean()
+        .optional()
+        .describe(
+          "Also relocate netless mechanical footprints (mounting holes H/MH, fiducials FID, test points TP). " +
+            "Default false: they stay fixed and are reported in skipped_mechanical",
+        ),
     },
     passthrough("auto_place_components"),
   );

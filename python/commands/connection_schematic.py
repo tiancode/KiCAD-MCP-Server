@@ -7,6 +7,17 @@ from skip import Schematic
 
 logger = logging.getLogger(__name__)
 
+# connect_to_net has NO ``force`` parameter, so the generic LABEL_COLLISION hint
+# (which tells the caller to "pass force=true") is a dead remedy here — agents
+# loop on it.  Set this accurate per-site hint on every connect_to_net collision
+# refusal so enrich_failure's generic fallback (which only fills an EMPTY hint)
+# never applies.  (finding 10)
+_CONNECT_LABEL_COLLISION_HINT = (
+    "connect_to_net has no override for this collision. Move the component to a "
+    "clear spot, pick a different pin/net, or wire it manually (add_schematic_wire "
+    "+ add_schematic_net_label) so the stub avoids the conflicting net."
+)
+
 try:
     from commands.pin_locator import PinLocator
     from commands.wire_manager import WireManager
@@ -143,6 +154,31 @@ class ConnectionManager:
                     err_result["pin_not_found"] = True
                     err_result["valid_pins"] = diag.get("valid_pins", [])
                 return err_result
+
+            # Idempotency (F-connect): a regular pin that already carries a
+            # same-net label at its endpoint is already on the net (kicad-cli
+            # ERC treats a label placed on a pin endpoint as connected, the same
+            # via:"label" membership get_wire_connections reports). Re-running
+            # connect_to_net must NOT stack a redundant duplicate stub + label —
+            # return the already_connected response with no geometry written.
+            # Power ports have their own already_connected handling below.
+            if not is_power_port and ConnectionManager._pin_has_net_label(
+                schematic_path, pin_loc, net_name
+            ):
+                logger.info(
+                    f"{component_ref}/{pin_name} already carries a '{net_name}' label at its "
+                    f"pin; skipping redundant connect_to_net (idempotent)."
+                )
+                return {
+                    "success": True,
+                    "already_connected": True,
+                    "via": "label",
+                    "pin_location": pin_loc,
+                    "message": (
+                        f"{component_ref}/{pin_name} is already on net '{net_name}' via a label "
+                        f"at its pin endpoint; no duplicate wire or label was added."
+                    ),
+                }
 
             # A1: a foreign REAL-component pin coincident with the target pin
             # means the net we are about to name would silently capture that pin
@@ -290,7 +326,12 @@ class ConnectionManager:
                         f"also blocked. Move the component or wire it manually."
                     )
                 logger.error(msg)
-                return {"success": False, "message": msg, "label_collision": payload}
+                return {
+                    "success": False,
+                    "message": msg,
+                    "label_collision": payload,
+                    "hint": _CONNECT_LABEL_COLLISION_HINT,
+                }
             stub_end, chosen_angle, _chosen_len = chosen
             relocated = not (
                 abs(stub_end[0] - default_end[0]) < 1e-6
@@ -361,6 +402,7 @@ class ConnectionManager:
                                 "point": foreign.get("point"),
                                 "existing_net": foreign.get("net"),
                             },
+                            "hint": _CONNECT_LABEL_COLLISION_HINT,
                         }
 
             logger.info(f"Connected {component_ref}/{pin_name} to net '{net_name}'")
@@ -440,6 +482,27 @@ class ConnectionManager:
                 continue
             out.append((ix / _IU_PER_MM, iy / _IU_PER_MM, net))
         return out
+
+    @staticmethod
+    def _pin_has_net_label(
+        schematic_path: Path,
+        pin_loc: List[float],
+        net_name: str,
+        tol: float = 0.05,
+    ) -> bool:
+        """True if a label / power-port pin naming ``net_name`` sits on ``pin_loc``.
+
+        Reuses :meth:`_existing_net_points` (net labels + power-port pins, PWR_FLAG
+        sentinel excluded). A same-net label already at the pin endpoint means the
+        pin is on the net (via:"label"); connect_to_net can then no-op instead of
+        stacking a duplicate stub + label.
+        """
+        for px, py, net in ConnectionManager._existing_net_points(schematic_path):
+            if net != net_name:
+                continue
+            if abs(px - pin_loc[0]) <= tol and abs(py - pin_loc[1]) <= tol:
+                return True
+        return False
 
     @staticmethod
     def _stub_candidates(
@@ -777,6 +840,7 @@ class ConnectionManager:
                     "success": False,
                     "message": msg,
                     "label_collision": {"point": pt, "existing_net": blocker.get("net")},
+                    "hint": _CONNECT_LABEL_COLLISION_HINT,
                 }
             msg = (
                 f"Cannot wire floating power pin {power_ref} to net '{net_name}': every route "

@@ -169,10 +169,19 @@ class TestGetPoint:
         pt = rc._get_point({"x": 1, "y": 1, "unit": "mil"})
         assert (pt.x, pt.y) == (25_400, 25_400)
 
-    def test_other_unit_scale(self, real_vector2i):
+    def test_inch_scale(self, real_vector2i):
         rc = RoutingCommands()
-        pt = rc._get_point({"x": 1, "y": 1, "unit": "in"})
+        pt = rc._get_point({"x": 1, "y": 1, "unit": "inch"})
         assert (pt.x, pt.y) == (25_400_000, 25_400_000)
+
+    def test_unknown_unit_raises(self, real_vector2i):
+        # An unrecognised unit ("in" is NOT a canonical unit — it's mm/mil/inch)
+        # must be refused, not silently treated as inch (the historical bug).
+        from utils.units import InvalidUnitError
+
+        rc = RoutingCommands()
+        with pytest.raises(InvalidUnitError):
+            rc._get_point({"x": 1, "y": 1, "unit": "in"})
 
     def test_invalid_spec_raises(self, real_vector2i):
         rc = RoutingCommands()

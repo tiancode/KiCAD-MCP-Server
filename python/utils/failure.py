@@ -8,6 +8,8 @@ routes every handler result through enrich_failure to stamp a stable
 
 from typing import Any, Dict, Optional, Tuple
 
+from utils.units import InvalidUnitError
+
 # ----- Failure classification -----
 # Every handler failure ultimately flows back through KiCADInterface.handle_command.
 # Rather than rewrite the ~165 handlers that return a bare
@@ -31,6 +33,14 @@ def classify_failure(
     text = f"{message}\n{details}".lower()
 
     # Exception-type signals are more reliable than string matching.
+    # A bad ``unit`` is user input, not a server fault — refuse with VALIDATION.
+    # (Handlers that catch it via ``failed()`` already stamp VALIDATION at the
+    # source; this covers the dispatcher-level catch for any path that doesn't.)
+    if isinstance(exc, InvalidUnitError):
+        return (
+            "VALIDATION",
+            "Use a valid unit: 'mm', 'mil' or 'inch' (omit for the default 'mm').",
+        )
     if isinstance(exc, KeyError):
         missing = str(exc).strip("'\"")
         return (
@@ -133,6 +143,16 @@ def _hint_for_reconcile(result: "Dict[str, Any]") -> str:
 # practice (each gate sets exactly one).
 _NEEDS_FLAGS: "Tuple[Tuple[str, str, Any], ...]" = (
     (
+        "wrong_board",
+        "WRONG_BOARD_OPEN",
+        lambda r: (
+            "KiCAD has a DIFFERENT board open over IPC than the project the MCP "
+            "session is on. Open the correct board in KiCAD (or let the server "
+            "auto-open it), or close the foreign board so its instance releases "
+            "the IPC socket, then retry."
+        ),
+    ),
+    (
         "needs_pcb_editor",
         "PCB_EDITOR_REQUIRED",
         lambda r: "Ask the user to open the board in KiCAD's PCB editor, then retry.",
@@ -164,6 +184,22 @@ _NEEDS_FLAGS: "Tuple[Tuple[str, str, Any], ...]" = (
         lambda r: (
             "Fill the copper zone(s) first: call "
             "copper_pour(action=refill, force=true), then retry."
+        ),
+    ),
+    (
+        "label_collision",
+        "LABEL_COLLISION",
+        lambda r: (
+            "The chosen point already carries a different net. Pick another point/pin, "
+            "or pass force=true to place it anyway (this shorts the two nets)."
+        ),
+    ),
+    (
+        "pin_connected",
+        "PIN_ALREADY_CONNECTED",
+        lambda r: (
+            "The pin is already connected to a net. A no-connect flag here is "
+            "contradictory; remove the connection or pass force=true to override."
         ),
     ),
 )

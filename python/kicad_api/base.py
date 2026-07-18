@@ -16,9 +16,16 @@ class KiCADBackend(ABC):
     """Abstract base class for KiCAD API backends"""
 
     @abstractmethod
-    def connect(self) -> bool:
+    def connect(
+        self, socket_path: Optional[str] = None, prefer_board_path: Optional[str] = None
+    ) -> bool:
         """
         Connect to KiCAD
+
+        Args:
+            socket_path: optional explicit socket to connect to.
+            prefer_board_path: when several instances are reachable, prefer the
+                one whose open board matches this path.
 
         Returns:
             True if connection successful, False otherwise

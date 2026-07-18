@@ -181,9 +181,14 @@ def test_get_net_connections_plus5v_exposes_power_symbol_and_flag(sch: Path) -> 
     assert {"component": "R1", "pin": "1"} in res["connections"]
     assert not any(r.startswith("#") for r in refs)
 
-    # Side-channels make the power attachment verifiable.
-    assert res["power_symbols"] == [{"ref": "#PWR01", "pin": "1", "value": "+5V"}]
+    # Side-channels make the power attachment verifiable. #PWR01 is wired to
+    # R1/1, so it is NOT floating (F6).
+    assert res["power_symbols"] == [
+        {"ref": "#PWR01", "pin": "1", "value": "+5V", "floating": False}
+    ]
     assert res["power_flags"] == [{"ref": "#FLG01", "pin": "1", "attachment": "label"}]
+    # A wired power symbol raises no floating warning.
+    assert "warnings" not in res
 
 
 @pytest.mark.unit
@@ -195,7 +200,9 @@ def test_get_net_connections_gnd_flag_attached_by_wire(sch: Path) -> None:
     assert {"component": "R1", "pin": "2"} in res["connections"]
     assert not any(r.startswith("#") for r in refs)
 
-    assert res["power_symbols"] == [{"ref": "#PWR02", "pin": "1", "value": "GND"}]
+    assert res["power_symbols"] == [
+        {"ref": "#PWR02", "pin": "1", "value": "GND", "floating": False}
+    ]
     assert res["power_flags"] == [{"ref": "#FLG02", "pin": "1", "attachment": "wire"}]
 
 
@@ -261,7 +268,9 @@ def test_get_power_attachments_for_net_filters_by_net(sch: Path) -> None:
     schematic = SchematicManager.load_schematic(str(sch))
 
     plus5 = get_power_attachments_for_net(schematic, str(sch), "+5V")
-    assert plus5["power_symbols"] == [{"ref": "#PWR01", "pin": "1", "value": "+5V"}]
+    assert plus5["power_symbols"] == [
+        {"ref": "#PWR01", "pin": "1", "value": "+5V", "floating": False}
+    ]
     assert plus5["power_flags"] == [{"ref": "#FLG01", "pin": "1", "attachment": "label"}]
 
     # A power port on a DIFFERENT rail must not leak into +5V.
@@ -289,5 +298,8 @@ def test_flag_coincident_with_power_port_pin(tmp_path: Path) -> None:
     assert flags == [{"ref": "#FLG03", "pin": "1", "net": "+12V", "attachment": "pin_coincident"}]
 
     attach = get_power_attachments_for_net(schematic, str(p), "+12V")
-    assert attach["power_symbols"] == [{"ref": "#PWR03", "pin": "1", "value": "+12V"}]
+    # #PWR03 shares its pin with #FLG03 (coincident) → physically connected.
+    assert attach["power_symbols"] == [
+        {"ref": "#PWR03", "pin": "1", "value": "+12V", "floating": False}
+    ]
     assert attach["power_flags"] == [{"ref": "#FLG03", "pin": "1", "attachment": "pin_coincident"}]

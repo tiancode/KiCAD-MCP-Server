@@ -227,6 +227,48 @@ def handle_connect_to_net(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         }
 
 
+def _no_connect_conflict(
+    schematic_path: Any, position: Any, tol: float = 0.05
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(net_name, via)`` for live connectivity at ``position``, else ``(None, None)``.
+
+    A no-connect flag on a pin that already has a wire endpoint or a net label at
+    its endpoint is contradictory (KiCad ERC: 'pin connected but marked
+    no-connect'). Labels / power-port pins (via :meth:`ConnectionManager._existing_net_points`,
+    PWR_FLAG sentinel excluded) are reported with their net name (``via="label"``);
+    a bare wire endpoint reports ``(None, "wire")``.
+    """
+    from commands.connection_schematic import ConnectionManager
+    from commands.wire_manager import WireManager
+
+    if isinstance(position, dict):
+        px, py = float(position.get("x", 0)), float(position.get("y", 0))
+    else:
+        px, py = float(position[0]), float(position[1])
+
+    # A net label / power-port pin AT the point carries a real net name.
+    try:
+        for lx, ly, net in ConnectionManager._existing_net_points(Path(schematic_path)):
+            if abs(lx - px) <= tol and abs(ly - py) <= tol:
+                return net, "label"
+    except Exception as e:
+        logger.debug(f"no-connect label-conflict scan failed: {e}")
+
+    # A wire endpoint AT the point is a physical connection (net may be unnamed).
+    try:
+        import sexpdata as _sx
+
+        with open(schematic_path, "r", encoding="utf-8") as f:
+            sch_data = _sx.loads(f.read())
+        for ex, ey in WireManager._collect_wire_endpoints(sch_data):
+            if abs(ex - px) <= tol and abs(ey - py) <= tol:
+                return None, "wire"
+    except Exception as e:
+        logger.debug(f"no-connect wire-conflict scan failed: {e}")
+
+    return None, None
+
+
 def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:
     """Add a no-connect flag (X marker) to an unconnected pin in the schematic."""
     logger.info("Adding no-connect flag to schematic")
@@ -237,6 +279,7 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         position = params.get("position")
         component_ref = params.get("componentRef")
         pin_number = params.get("pinNumber")
+        force = bool(params.get("force"))
 
         if not schematic_path:
             return {"success": False, "message": "schematicPath is required"}
@@ -247,6 +290,28 @@ def handle_add_no_connect(iface: "KiCADInterface", params: Dict[str, Any]) -> Di
         )
         if error is not None:
             return error
+
+        # Guard: refuse to mark a CONNECTED pin no-connect (contradictory state
+        # KiCad ERC flags as "pin connected but marked no-connect") unless the
+        # caller explicitly forces it. Reports the existing net + how it attaches.
+        if not force:
+            conflict_net, conflict_via = _no_connect_conflict(schematic_path, position)
+            if conflict_via is not None:
+                target = (
+                    f"{component_ref}/{pin_number}"
+                    if component_ref and pin_number is not None
+                    else f"pin at {position}"
+                )
+                net_desc = f"net '{conflict_net}'" if conflict_net else "a wire"
+                return {
+                    "success": False,
+                    "message": (
+                        f"{target} is already connected to {net_desc} (via {conflict_via}); a "
+                        f"no-connect flag here is contradictory — KiCad ERC would flag 'pin "
+                        f"connected but marked no-connect'. Pass force=true to add it anyway."
+                    ),
+                    "pin_connected": {"net": conflict_net, "via": conflict_via},
+                }
 
         success = WireManager.add_no_connect(Path(schematic_path), position)
         if success:

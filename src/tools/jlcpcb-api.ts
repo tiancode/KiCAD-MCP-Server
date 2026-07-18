@@ -256,10 +256,14 @@ This path is slow (~40-60 min) and leaves category/manufacturer BLANK. RECOMMEND
               p.price_breaks && p.price_breaks.length > 0
                 ? ` - $${p.price_breaks[0].price}/ea`
                 : "";
-            const savings =
-              result.reference_price && p.price_breaks && p.price_breaks.length > 0
-                ? ` (${((1 - p.price_breaks[0].price / result.reference_price) * 100).toFixed(0)}% cheaper)`
-                : "";
+            let savings = "";
+            if (result.reference_price && p.price_breaks && p.price_breaks.length > 0) {
+              // Positive pct => cheaper than the reference; negative => pricier.
+              // Label each with the correct sign+word instead of "-3% cheaper".
+              const pct = (1 - p.price_breaks[0].price / result.reference_price) * 100;
+              savings =
+                pct >= 0 ? ` (${pct.toFixed(0)}% cheaper)` : ` (${(-pct).toFixed(0)}% pricier)`;
+            }
             return `${i + 1}. ${p.lcsc}: ${p.mfr_part} [${p.library_type}]${priceInfo}${savings}\n   ${p.description}\n   Stock: ${p.stock}`;
           })
           .join("\n\n");

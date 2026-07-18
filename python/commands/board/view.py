@@ -6,7 +6,7 @@ import base64
 import io
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import pcbnew
 from PIL import Image
@@ -14,6 +14,42 @@ from utils.responses import failed, no_board_loaded
 from utils.units import unit_to_nm_scale
 
 logger = logging.getLogger("kicad_interface")
+
+# Target long-edge (px) for the DEFAULT preview (no explicit width/height): a
+# full-sheet plot renders the board into a corner, so an 800x600 canvas leaves
+# the auto-cropped board at ~100 px — unreadable. We re-render at a higher
+# resolution so the cropped board reaches roughly this size, bounded by
+# _MAX_VIEW_RENDER_PX so a tiny-board-on-a-big-sheet can't blow up memory.
+_DEFAULT_VIEW_TARGET_PX = 1000
+_MAX_VIEW_RENDER_PX = 5000
+
+
+def _alpha_crop(image_bytes: bytes, margin_px: int) -> Tuple[bytes, Optional[Tuple[int, int]]]:
+    """Crop a rendered PNG to its non-transparent content + margin.
+
+    Returns ``(cropped_bytes, (content_w, content_h))`` describing the cropped
+    image, or ``(original_bytes, None)`` when there is nothing worth cropping
+    (no content, or the content already fills the canvas).
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        bbox = img.getbbox()
+        if bbox is None:
+            return image_bytes, None
+        x0, y0, x1, y1 = bbox
+        x0 = max(0, x0 - margin_px)
+        y0 = max(0, y0 - margin_px)
+        x1 = min(img.width, x1 + margin_px)
+        y1 = min(img.height, y1 + margin_px)
+        if (x1 - x0) > 10 and (y1 - y0) > 10:
+            img = img.crop((x0, y0, x1, y1))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue(), (x1 - x0, y1 - y0)
+        return image_bytes, None
+    except Exception as crop_err:
+        logger.debug(f"Auto-crop to board failed (continuing): {crop_err}")
+        return image_bytes, None
 
 
 def _fit_within_box(img: "Image.Image", max_w: int, max_h: int) -> "Image.Image":
@@ -239,8 +275,16 @@ class BoardViewCommands:
             else:
                 from cairosvg import svg2png
 
-                image_bytes = svg2png(url=temp_svg, output_width=width, output_height=height)
+                # Read the SVG once so we can re-render it at a higher
+                # resolution below without touching the (now removed) temp file.
+                with open(temp_svg, "rb") as f:
+                    svg_data = f.read()
                 os.remove(temp_svg)
+
+                render_w, render_h = int(width), int(height)
+                image_bytes = svg2png(
+                    bytestring=svg_data, output_width=render_w, output_height=render_h
+                )
 
                 # Auto-crop: KiCAD's plot canvas spans the full sheet; if
                 # the Edge.Cuts outline occupies only a corner, the raster
@@ -249,23 +293,33 @@ class BoardViewCommands:
                 # content + margin. Works for any KiCAD SVG variant since
                 # we crop on rendered pixels, not on SVG coordinates.
                 if crop_to_board:
-                    try:
-                        img = Image.open(io.BytesIO(image_bytes))
-                        bbox = img.getbbox()
-                        if bbox is not None:
-                            x0, y0, x1, y1 = bbox
-                            m = crop_margin_px
-                            x0 = max(0, x0 - m)
-                            y0 = max(0, y0 - m)
-                            x1 = min(img.width, x1 + m)
-                            y1 = min(img.height, y1 + m)
-                            if (x1 - x0) > 10 and (y1 - y0) > 10:
-                                img = img.crop((x0, y0, x1, y1))
-                                buf = io.BytesIO()
-                                img.save(buf, format="PNG")
-                                image_bytes = buf.getvalue()
-                    except Exception as crop_err:
-                        logger.debug(f"Auto-crop to board failed (continuing): {crop_err}")
+                    image_bytes, content_dims = _alpha_crop(image_bytes, crop_margin_px)
+
+                    # Default preview (no explicit size): the cropped board is
+                    # only a fraction of the full-sheet canvas, so at 800x600 it
+                    # lands at ~100 px. Re-render the SVG scaled up so the
+                    # cropped board reaches ~_DEFAULT_VIEW_TARGET_PX on its long
+                    # edge, bounded by _MAX_VIEW_RENDER_PX. Explicit width/height
+                    # keep the requested size (handled by the fit pass below).
+                    if not size_requested and content_dims is not None:
+                        long_edge = max(content_dims)
+                        render_long = max(render_w, render_h)
+                        if long_edge > 0 and render_long > 0:
+                            scale = min(
+                                _DEFAULT_VIEW_TARGET_PX / long_edge,
+                                _MAX_VIEW_RENDER_PX / render_long,
+                            )
+                            if scale > 1.05:
+                                render_w = int(render_w * scale)
+                                render_h = int(render_h * scale)
+                                image_bytes = svg2png(
+                                    bytestring=svg_data,
+                                    output_width=render_w,
+                                    output_height=render_h,
+                                )
+                                image_bytes, _ = _alpha_crop(
+                                    image_bytes, int(crop_margin_px * scale)
+                                )
 
                 # Honor an explicitly requested width/height even after the
                 # crop-to-board resize discarded it. The board is fitted

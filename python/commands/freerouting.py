@@ -780,6 +780,165 @@ class FreeroutingCommands:
             }
         return {"ok": True, "board": board, "board_path": board_path, "external": False}
 
+    def _apply_project_netclasses(self, board: Any) -> Dict[str, Any]:
+        """Sync the sibling ``.kicad_pro`` net classes onto ``board`` before DSN
+        export so the exported DSN carries per-class width/clearance rules.
+
+        Root cause (E2E finding): ``create_netclass`` / ``assign_net_to_class``
+        persist net classes and their memberships to the ``.kicad_pro`` project
+        JSON (the canonical store in KiCad 9/10), but a headless
+        ``pcbnew.LoadBoard`` does not reliably reconstruct those classes into the
+        BOARD the Specctra exporter reads — so autoroute routed every net at the
+        board default width (0.2 mm), ignoring the Power (0.5 mm) / USB (0.3 mm)
+        classes the user created. This reads the project ``net_settings`` and
+        applies each class (track width, clearance, via sizes) plus its net
+        memberships to the live board via the pcbnew NETCLASS API, so
+        ``ExportSpecctraDSN`` emits per-class ``(rule (width …))`` blocks.
+
+        Best-effort and never raises: KiCad's SWIG NETCLASS / NETINFO setters
+        vary across 9.x / 10.x, so every setter is guarded. Returns a summary
+        ``{"applied": bool, "classes": [...], "assignedNets": int}`` for the
+        autoroute response.
+        """
+        from commands.routing._nets import resolve_netclass_name
+        from utils import kicad_pro
+
+        summary: Dict[str, Any] = {"applied": False, "classes": [], "assignedNets": 0}
+
+        try:
+            project_file = kicad_pro.project_path_for_board(board)
+            if not project_file or not os.path.exists(project_file):
+                return summary
+            data, _ = kicad_pro.load_kicad_pro(project_file)
+        except Exception as e:
+            logger.debug("autoroute: could not read project net classes: %s", e)
+            return summary
+
+        net_settings = data.get("net_settings")
+        if not isinstance(net_settings, dict):
+            return summary
+        classes = net_settings.get("classes")
+        if not isinstance(classes, list):
+            return summary
+
+        try:
+            net_classes = board.GetNetClasses()
+        except Exception:
+            return summary
+        if net_classes is None:
+            return summary
+
+        import pcbnew
+
+        scale = 1_000_000  # mm -> nm
+
+        def _find(name: str) -> Any:
+            if hasattr(net_classes, "Find"):
+                try:
+                    return net_classes.Find(name)
+                except Exception:
+                    return None
+            try:
+                return net_classes[name] if name in net_classes else None
+            except Exception:
+                return None
+
+        def _add(name: str, netclass: Any) -> None:
+            if hasattr(net_classes, "Add"):
+                try:
+                    net_classes.Add(netclass)
+                    return
+                except Exception:
+                    pass
+            try:
+                net_classes[name] = netclass
+            except Exception:
+                pass
+
+        # .kicad_pro class key (mm float) -> NETCLASS setter method name.
+        setters = (
+            ("track_width", "SetTrackWidth"),
+            ("clearance", "SetClearance"),
+            ("via_diameter", "SetViaDiameter"),
+            ("via_drill", "SetViaDrill"),
+            ("microvia_diameter", "SetMicroViaDiameter"),
+            ("microvia_drill", "SetMicroViaDrill"),
+            ("diff_pair_width", "SetDiffPairWidth"),
+            ("diff_pair_gap", "SetDiffPairGap"),
+        )
+
+        nc_by_name: Dict[str, Any] = {}
+        applied_classes: List[Dict[str, Any]] = []
+        for cls in classes:
+            if not isinstance(cls, dict):
+                continue
+            name = cls.get("name")
+            if not name:
+                continue
+            netclass = _find(name)
+            if netclass is None:
+                try:
+                    netclass = pcbnew.NETCLASS(name)
+                except Exception:
+                    continue
+                _add(name, netclass)
+            for key, method_name in setters:
+                value = cls.get(key)
+                if value is None:
+                    continue
+                method = getattr(netclass, method_name, None)
+                if method is None:
+                    continue
+                try:
+                    method(int(float(value) * scale))
+                except Exception:
+                    pass
+            nc_by_name[name] = netclass
+            applied_classes.append({"name": name, "trackWidth": cls.get("track_width")})
+
+        # Apply net -> class membership so each exported class block lists its
+        # nets; without this the class carries a width but no members and the
+        # exporter still routes every net at the board default.
+        assigned = 0
+        nets_map: Any = None
+        try:
+            nets_map = board.GetNetInfo().NetsByName()
+            net_names = list(nets_map.keys()) if hasattr(nets_map, "keys") else []
+        except Exception:
+            net_names = []
+        for net_name in net_names:
+            cls_name = resolve_netclass_name(net_settings, net_name)
+            netclass = nc_by_name.get(cls_name) if cls_name else None
+            if netclass is None:
+                continue
+            try:
+                net = nets_map[net_name]
+            except Exception:
+                continue
+            setter = getattr(net, "SetClass", None)
+            if callable(setter):
+                try:
+                    setter(netclass)
+                    assigned += 1
+                except Exception:
+                    pass
+
+        # Reconcile net<->class relationships when the board exposes the hook
+        # (signature differs across KiCad versions — try both).
+        sync = getattr(board, "SynchronizeNetsAndNetClasses", None)
+        if callable(sync):
+            for args in ((), (True,)):
+                try:
+                    sync(*args)
+                    break
+                except Exception:
+                    continue
+
+        summary["applied"] = bool(applied_classes)
+        summary["classes"] = applied_classes
+        summary["assignedNets"] = assigned
+        return summary
+
     def _strip_dsn_file(
         self, dsn_path: str, include_pre_routes: bool, include_planes: bool
     ) -> Dict[str, Any]:
@@ -1015,6 +1174,12 @@ class FreeroutingCommands:
         dsn_path = os.path.join(board_dir, f"{board_stem}.dsn")
         ses_path = os.path.join(board_dir, f"{board_stem}.ses")
         best_ses_path = os.path.join(board_dir, f"{board_stem}_best.ses")
+
+        # Apply the sibling .kicad_pro net classes (widths/clearances +
+        # memberships) to the freshly-loaded board so the exported DSN carries
+        # per-class rules — a headless LoadBoard does not reliably reconstruct
+        # them, so autoroute otherwise routed every net at the board default.
+        netclasses_applied = self._apply_project_netclasses(route_board)
 
         # Step 1: Export DSN from the freshly-loaded route board (once)
         logger.info(f"Exporting DSN to {dsn_path}")
@@ -1260,6 +1425,8 @@ class FreeroutingCommands:
             }
             if strip_info["wiring_removed"] or strip_info["planes_removed"]:
                 response["dsn_prerouting_stripped"] = strip_info
+            if netclasses_applied.get("applied"):
+                response["netclasses_applied"] = netclasses_applied
             # B5: reload the open project board (same-file) or note that the
             # open board was untouched (external file); add routed_board_path.
             response.update(self._finalize_board(board_path, external))
@@ -1339,6 +1506,8 @@ class FreeroutingCommands:
             }
             if strip_info["wiring_removed"] or strip_info["planes_removed"]:
                 partial["dsn_prerouting_stripped"] = strip_info
+            if netclasses_applied.get("applied"):
+                partial["netclasses_applied"] = netclasses_applied
             partial.update(self._finalize_board(board_path, external))
             return partial
 

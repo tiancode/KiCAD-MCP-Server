@@ -400,6 +400,7 @@ class KiCADInterface(BoardPersistenceMixin):
         "add_no_connect": "schematic_wire",
         "add_schematic_hierarchical_label": "schematic_wire",
         "add_schematic_net_label": "schematic_wire",
+        "add_schematic_net_labels": "schematic_wire",
         "add_schematic_sheet": "schematic_wire",
         "add_schematic_wire": "schematic_wire",
         "add_sheet_pin": "schematic_wire",
@@ -503,6 +504,12 @@ class KiCADInterface(BoardPersistenceMixin):
         # silently invalidate the other.  These two flags let us refuse
         # cross-backend writes until the user reconciles them.
         self._ipc_writes_pending = False  # IPC mutated KiCad memory; disk stale
+        # Per-board snapshot of _ipc_writes_pending, keyed by absolute board
+        # path.  Switching projects (open_project A→B→A) stashes the outgoing
+        # board's pending-IPC-writes flag here and restores the incoming board's,
+        # so A's unsaved-IPC-writes gate survives a round-trip through B instead
+        # of being dropped (finding 1).
+        self._ipc_writes_pending_by_board: Dict[str, bool] = {}
         self._swig_writes_landed = False  # SWIG wrote disk; KiCad memory stale
         self._ipc_change_callback_registered = False
         self.use_ipc = USE_IPC_BACKEND
@@ -807,6 +814,30 @@ class KiCADInterface(BoardPersistenceMixin):
             except Exception as e:
                 logger.debug(f"Could not register IPC change callback: {e}")
         return True
+
+    def _invalidate_ipc_board_cache(self) -> None:
+        """Drop the cached kipy Board wrappers (IPCBoardAPI._board + the
+        IPCBackend board-api cache) so the next identity check and read re-fetch
+        the CURRENT document.
+
+        Both are cached for the connection's lifetime, so after a same-instance
+        board switch / reselect heal they keep serving the stale document — the
+        WRONG_BOARD_OPEN lockout and stale post-heal reads (finding 2)."""
+        api = getattr(self, "ipc_board_api", None)
+        if api is not None:
+            try:
+                api.invalidate_board()
+            except Exception:
+                try:
+                    api._board = None  # noqa: SLF001 — our own wrapper
+                except Exception:
+                    pass
+        backend = getattr(self, "ipc_backend", None)
+        if backend is not None and hasattr(backend, "invalidate_board_cache"):
+            try:
+                backend.invalidate_board_cache()
+            except Exception as e:
+                logger.debug(f"invalidate_board_cache failed: {e}")
 
     def _on_ipc_change(self, change_type: str, details: Dict[str, Any]) -> None:
         """Track which side has unsaved/uncommitted writes for the conflict gate.
@@ -1240,7 +1271,10 @@ class KiCADInterface(BoardPersistenceMixin):
 
             backend = ipc_backend or IPCBackend()
             if not backend.is_connected():
-                backend.connect()
+                # Prefer the KiCad instance whose open board matches the
+                # project the MCP session is on, so a second instance on
+                # api-<pid>.sock doesn't pin us to a foreign board (P1).
+                backend.connect(prefer_board_path=self._expected_project_board_path())
 
             self.ipc_backend = backend
             self.use_ipc = True
@@ -1275,6 +1309,32 @@ class KiCADInterface(BoardPersistenceMixin):
         KiCad auto-launch and the board auto-open that completes it."""
         return os.environ.get("KICAD_AUTO_LAUNCH", "").strip().lower() != "false"
 
+    def _project_board_path_from_current_project(self) -> Optional[str]:
+        """Resolve the ``.kicad_pcb`` from the remembered ``_current_project_path``.
+
+        Independent of the live board / IPC document — lets the board-identity
+        gate and the auto-open path know the *expected* board even before a SWIG
+        board is loaded.  Resolves a ``.kicad_pro`` / ``.kicad_pcb`` path to its
+        ``.kicad_pcb`` sibling, or the single ``.kicad_pcb`` in a project dir.
+        """
+        project_dir = getattr(self, "_current_project_path", None)
+        if not project_dir:
+            return None
+        project_dir = Path(project_dir)
+        if project_dir.suffix in (".kicad_pro", ".kicad_pcb"):
+            pcb = project_dir.with_suffix(".kicad_pcb")
+            return str(pcb) if pcb.is_file() else None
+        if not project_dir.is_dir():
+            return None
+        for pro in sorted(project_dir.glob("*.kicad_pro")):
+            pcb = pro.with_suffix(".kicad_pcb")
+            if pcb.is_file():
+                return str(pcb)
+        pcbs = sorted(project_dir.glob("*.kicad_pcb"))
+        if len(pcbs) == 1:
+            return str(pcbs[0])
+        return None
+
     def _board_path_for_auto_open(self) -> Optional[Path]:
         """Best-known .kicad_pcb path for auto-opening the PCB editor.
 
@@ -1286,23 +1346,8 @@ class KiCADInterface(BoardPersistenceMixin):
         path = self._current_board_path()
         if path and os.path.isfile(path):
             return Path(path)
-        project_dir = getattr(self, "_current_project_path", None)
-        if not project_dir:
-            return None
-        project_dir = Path(project_dir)
-        if project_dir.suffix in (".kicad_pro", ".kicad_pcb"):
-            pcb = project_dir.with_suffix(".kicad_pcb")
-            return pcb if pcb.is_file() else None
-        if not project_dir.is_dir():
-            return None
-        for pro in sorted(project_dir.glob("*.kicad_pro")):
-            pcb = pro.with_suffix(".kicad_pcb")
-            if pcb.is_file():
-                return pcb
-        pcbs = sorted(project_dir.glob("*.kicad_pcb"))
-        if len(pcbs) == 1:
-            return pcbs[0]
-        return None
+        pcb = self._project_board_path_from_current_project()
+        return Path(pcb) if pcb else None
 
     def _try_auto_open_board(self, timeout_s: float = 15.0) -> bool:
         """Best-effort: make the running KiCad open the current board so the
@@ -1389,7 +1434,9 @@ class KiCADInterface(BoardPersistenceMixin):
             if now >= reselect_next:
                 reselect_next = now + 2.0
                 backend = getattr(self, "ipc_backend", None)
-                if backend is not None and backend.reselect_preferring_board():
+                if backend is not None and backend.reselect_preferring_board(
+                    prefer_board_path=self._expected_project_board_path()
+                ):
                     self._refresh_ipc_board_api()
                     logger.info("Board auto-open landed after IPC socket reselection")
                     self._auto_open_cooldown_until = 0.0
@@ -1504,6 +1551,12 @@ class KiCADInterface(BoardPersistenceMixin):
             if reason == self._pcb_editor_gate_reason():
                 return self._pcb_editor_gate_response()
             return {"success": False, "_ipc_reason": reason}
+        # Board-identity gate (P1): a foreign board open over IPC is refused —
+        # for reads AND writes — before the cross-backend conflict check, so a
+        # foreign board never triggers the (destructive) auto-reconcile heal.
+        identity = self._ipc_board_identity_gate()
+        if identity is not None:
+            return identity
         if not read_only:
             conflict = self._cross_backend_conflict(attempting="ipc")
             if conflict is not None:
@@ -1801,6 +1854,17 @@ class KiCADInterface(BoardPersistenceMixin):
                 # write it already includes.
                 self._consume_pending_fresh_open_clear()
 
+                # Board-identity gate (P1): the board document open over IPC
+                # must be the project the MCP session is on — never silently
+                # read/mutate a foreign board (a second KiCad instance on
+                # api-<pid>.sock the initial socket scan missed).  Runs BEFORE
+                # the cross-backend conflict / auto-reconcile so a foreign board
+                # can't trigger a destructive revert.  Covers reads too — a read
+                # of the wrong board is as wrong as a write.
+                identity = self._ipc_board_identity_gate(command)
+                if identity is not None:
+                    return identity
+
                 # Cross-backend conflict: refuse IPC writes when SWIG has
                 # landed content on disk that KiCad memory doesn't include
                 # (an IPC save here would overwrite it).  Read-only queries
@@ -1878,9 +1942,16 @@ class KiCADInterface(BoardPersistenceMixin):
             # the closed editor frame is the real blocker).
             ipc_only_reconcile_info: Optional[Dict[str, Any]] = None
             if handler is not None and command in self._IPC_ONLY_MUTATING_COMMANDS:
-                conflict = self._cross_backend_conflict(attempting="ipc")
-                if conflict is not None:
-                    ipc_only_reconcile_info = self._auto_reconcile_swig_to_ipc(conflict)
+                # Never auto-reconcile (revert KiCad from disk) against a FOREIGN
+                # board — that would clobber the wrong project.  Only run the
+                # lossless swig_to_ipc heal once IPC is confirmed on this
+                # project's board (or healed to it); otherwise skip it and let
+                # the handler's own require_ipc_board_op return the wrong_board
+                # refusal.
+                if self._ipc_board_identity_gate(command) is None:
+                    conflict = self._cross_backend_conflict(attempting="ipc")
+                    if conflict is not None:
+                        ipc_only_reconcile_info = self._auto_reconcile_swig_to_ipc(conflict)
 
             # N1: before serving a SWIG-path board command (read OR mutation),
             # reload the SWIG board if the on-disk file has newer content —
@@ -1987,6 +2058,25 @@ class KiCADInterface(BoardPersistenceMixin):
                                         "board, then retry."
                                     ),
                                 }
+                        # Detect a genuine board SWITCH (open a DIFFERENT
+                        # .kicad_pcb) before swapping the reference, so the
+                        # cross-backend gate state that belonged to the previous
+                        # board can be dropped below.
+                        prev_board_path = None
+                        if previous_board is not None and self._is_board_healthy(previous_board):
+                            try:
+                                prev_board_path = os.path.abspath(previous_board.GetFileName())
+                            except Exception:
+                                prev_board_path = None
+                        new_board_path = None
+                        try:
+                            new_board_path = os.path.abspath(candidate.GetFileName())
+                        except Exception:
+                            new_board_path = None
+                        board_switched = bool(
+                            prev_board_path and new_board_path and prev_board_path != new_board_path
+                        )
+
                         # Commit the validated board.
                         self.board = candidate
                         self.project_commands.board = candidate
@@ -2001,6 +2091,29 @@ class KiCADInterface(BoardPersistenceMixin):
                         # pending changes if KiCad held them through the
                         # reload, and we can't assume otherwise from here.
                         self._swig_writes_landed = False
+                        # Board-scoped gate state (fix D): a SWITCH to a
+                        # different board means the previous board's pending IPC
+                        # writes / auto-open state must NOT gate ops on the newly
+                        # opened one (E2E P2: project-B SWIG/IPC writes false-
+                        # refused project-A ops, with a reconcile hint that would
+                        # clobber the OTHER project).  A same-board reopen keeps
+                        # _ipc_writes_pending (KiCad may still hold unsaved edits).
+                        if board_switched:
+                            # Board-scope the pending-IPC-writes flag instead of
+                            # dropping it: stash the outgoing board's state and
+                            # restore the incoming board's.  Without this, an
+                            # A→B→A round-trip loses A's unsaved-IPC-writes gate,
+                            # so a SWIG mutation on A would pass the cross-backend
+                            # gate and clobber KiCad's still-unsaved memory
+                            # (finding 1).
+                            by_board = getattr(self, "_ipc_writes_pending_by_board", None)
+                            if by_board is None:
+                                by_board = {}
+                                self._ipc_writes_pending_by_board = by_board
+                            by_board[prev_board_path] = self._ipc_writes_pending
+                            self._ipc_writes_pending = by_board.get(new_board_path, False)
+                            self._auto_open_cooldown_until = 0.0
+                            self._pending_fresh_open_clear = None
                     elif command == "save_project":
                         self._record_board_signature()
                         self._last_auto_save_status = None
@@ -2264,6 +2377,166 @@ class KiCADInterface(BoardPersistenceMixin):
                 pass
 
         return None
+
+    def _expected_project_board_path(self) -> Optional[str]:
+        """The .kicad_pcb the MCP session is scoped to, INDEPENDENT of the IPC document.
+
+        This is the board the caller opened (open_project / create_project) or
+        is otherwise working on — the board-identity gate compares it against
+        whatever document KiCad has open over IPC to detect a foreign board (a
+        second KiCad instance, or a board switched in the UI). Deliberately
+        NEVER reads the IPC document: doing so would make the identity check a
+        tautology in pure-IPC mode.
+
+        Returns None when the MCP has no notion of an expected board yet
+        (pure-IPC attach with no open_project) — the gate then allows the op
+        (current behaviour), because there is nothing to compare against.
+        """
+        # 1. The SWIG board open_project/create_project loaded is ground truth
+        #    for the opened project on BOTH backends (the dispatcher sets
+        #    self.board on open/create even in IPC mode).
+        board = getattr(self, "board", None)
+        if board is not None and self._is_board_healthy(board):
+            try:
+                path = board.GetFileName()
+            except Exception:
+                path = None
+            if isinstance(path, str) and path:
+                return os.path.abspath(path)
+        # 2. Fall back to the remembered project path → its .kicad_pcb sibling.
+        return self._project_board_path_from_current_project()
+
+    def _ipc_document_board_path(self) -> Optional[str]:
+        """The .kicad_pcb path of the board KiCad currently has open over IPC.
+
+        Reads ONLY the IPC document (not the SWIG board), so the board-identity
+        gate can compare it against the expected project board.  Returns None
+        when IPC isn't connected or no board document path is readable.
+
+        The board path is read from a LIVE source — ``open_pcb_document_paths``
+        against the connected kipy client — as the authority, falling back to
+        the cached ``IPCBoardAPI`` Board wrapper only when the live read yields
+        nothing (e.g. unit tests that install a fake board API without a client).
+        The cached wrapper is held for the connection's lifetime, so after a
+        same-instance board switch it keeps reporting the OLD document — which
+        made the identity gate refuse forever even after the user opened the
+        correct board (finding 2).
+        """
+        backend = getattr(self, "ipc_backend", None)
+        client = getattr(backend, "_kicad", None) if backend is not None else None
+        if client is not None:
+            try:
+                from kicad_api.ipc_backend._helpers import open_pcb_document_paths
+
+                paths = open_pcb_document_paths(client)
+                if paths:
+                    return paths[0]
+            except Exception:
+                pass
+
+        ipc_api = getattr(self, "ipc_board_api", None)
+        if ipc_api is None:
+            return None
+        try:
+            board = ipc_api._get_board()  # noqa: SLF001 — our own wrapper
+            doc = getattr(board, "document", None)
+            if doc is None:
+                return None
+            from kicad_api.ipc_backend._helpers import _doc_board_path
+
+            path = _doc_board_path(doc)
+            return path or None
+        except Exception:
+            return None
+
+    def _ipc_board_identity_conflict(
+        self, command: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Refuse an IPC board op when IPC is bound to a DIFFERENT board than
+        the MCP project the caller opened.
+
+        Root cause (E2E P1): with KiCad already running project A, opening
+        project B in the MCP and launching a second pcbnew spawned an
+        ``api-<pid>.sock`` the socket auto-detect didn't scan, so IPC stayed
+        bound to A.  Every IPC-routed read/mutation for B then silently
+        operated on A (one even reporting ``auto_reconciled: true``) —
+        claimed-success-wrong-state.
+
+        Returns a structured refusal (``wrong_board`` → WRONG_BOARD_OPEN via
+        enrich_failure) when the two boards differ; None when they match, when
+        the expected board is unknown (pure-IPC attach with no open_project),
+        or when the IPC document path can't be read (fail-open on incomplete
+        info — the editor-frame gate already ensured a board doc is open).
+        """
+        expected = self._expected_project_board_path()
+        if not expected:
+            return None
+        ipc_path = self._ipc_document_board_path()
+        if not ipc_path:
+            return None
+        from kicad_api.ipc_backend import normalize_board_path
+
+        exp_norm = normalize_board_path(expected)
+        ipc_norm = normalize_board_path(ipc_path)
+        if exp_norm is None or ipc_norm is None or exp_norm == ipc_norm:
+            return None
+        label = f"'{command}'" if command else "This IPC board operation"
+        return {
+            "success": False,
+            "wrong_board": {"ipc_board": ipc_path, "expected": expected},
+            "command": command,
+            "message": (
+                f"{label} was refused: KiCAD has a DIFFERENT board open over IPC "
+                f"({ipc_path}) than the project the MCP session is on ({expected}). "
+                "Operating on it would silently mutate or read the wrong file. Open "
+                "the correct board in KiCAD (the server's auto-open targets it), or "
+                "close the foreign board so its instance releases the socket, then "
+                "retry. The MCP will not operate on a foreign document."
+            ),
+        }
+
+    def _try_reselect_to_expected_board(self) -> bool:
+        """Re-attach IPC to the KiCad instance whose open board matches the MCP
+        project (a second pcbnew on ``api-<pid>.sock`` the initial scan missed).
+
+        This is the launch-a-second-instance self-heal: after
+        manage_kicad_ui(launch) spawns instance 2 with board B on
+        ``api-<pid>.sock``, the next attach finds and picks it.  Returns True
+        when a reselect landed (the caller re-checks board identity).
+        """
+        expected = self._expected_project_board_path()
+        if not expected:
+            return False
+        backend = getattr(self, "ipc_backend", None)
+        if backend is None or not hasattr(backend, "reselect_preferring_board"):
+            return False
+        # We only get here because the identity gate saw a conflict, so the
+        # cached Board wrapper is stale.  Drop it up front — whether or not the
+        # reselect reconnects — so the post-heal identity re-check and the
+        # subsequent read re-fetch the CURRENT document (finding 2).
+        self._invalidate_ipc_board_cache()
+        try:
+            healed = backend.reselect_preferring_board(prefer_board_path=expected)
+        except Exception as e:
+            logger.debug(f"reselect to expected board failed: {e}")
+            return False
+        if healed:
+            self._refresh_ipc_board_api()
+        return bool(healed)
+
+    def _ipc_board_identity_gate(self, command: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Board-identity gate with a one-shot self-heal.
+
+        Returns None when IPC is on the expected board (or the expected board
+        is unknown); otherwise attempts to re-attach to the instance holding
+        the project's board and re-checks.  Still-foreign → the structured
+        ``wrong_board`` refusal.
+        """
+        conflict = self._ipc_board_identity_conflict(command)
+        if conflict is None:
+            return None
+        self._try_reselect_to_expected_board()
+        return self._ipc_board_identity_conflict(command)
 
     def _current_project_file_path(self, board_path: Optional[str]) -> Optional[str]:
         """Best-effort project file path for the currently loaded board."""

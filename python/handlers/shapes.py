@@ -171,12 +171,31 @@ def handle_delete_shape(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict
         return gate
     ids = params.get("ids")
     single = params.get("id")
+    bbox = _normalize_bbox(params.get("boundingBox"))
+    # Other usable selectors alongside a (possibly blank) `id`.
+    has_other_selector = (
+        bool(ids) or bool(params.get("layer")) or bool(params.get("kind")) or bbox is not None
+    )
+    # An explicitly-passed but blank id is a bad argument ONLY when it is the
+    # SOLE selector: give it a truthful VALIDATION code (never INTERNAL_ERROR)
+    # with the exact remedy. Clients that serialize optional fields as ""/null
+    # often ALSO pass a valid ids[]/layer/kind/bbox filter — don't regress those
+    # (ignore the falsy id and proceed, the old behavior).
+    blank_id = "id" in params and (
+        single is None or (isinstance(single, str) and not single.strip())
+    )
+    if blank_id and not has_other_selector:
+        return {
+            "success": False,
+            "errorCode": "VALIDATION",
+            "message": "id must be a non-empty string from list_shapes",
+        }
     if single and not ids:
         ids = [single]
-    bbox = _normalize_bbox(params.get("boundingBox"))
     if not ids and not params.get("layer") and not params.get("kind") and bbox is None:
         return {
             "success": False,
+            "errorCode": "VALIDATION",
             "message": (
                 "Select shapes to delete: pass id/ids (from list_shapes) or "
                 "layer / kind / boundingBox filters"

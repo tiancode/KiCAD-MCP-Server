@@ -328,6 +328,114 @@ def _is_power_port(ref: Optional[str], lib_id: Optional[str]) -> bool:
     return str(lib_id or "").startswith("power:")
 
 
+def handle_add_schematic_net_labels(
+    iface: "KiCADInterface", params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Place many net labels in one call (batch of add_schematic_net_label).
+
+    Input ``labels: [{componentRef, pinNumber, netName, ...}]`` plus optional
+    shared ``schematicPath`` / ``force``. Each item reuses the single-label logic
+    (including the Fix-5 collision + idempotency guards). Per-item failures do
+    NOT abort the batch; overall success is True when at least one item was
+    placed (or was already labeled). Reports per-item results + aggregate counts.
+    """
+    logger.info("Adding multiple schematic net labels")
+    try:
+        schematic_path = params.get("schematicPath")
+        labels = params.get("labels")
+        shared_force = params.get("force")
+
+        if not schematic_path and not (
+            isinstance(labels, list) and labels and all(i.get("schematicPath") for i in labels)
+        ):
+            return {"success": False, "message": "schematicPath is required"}
+        if not labels or not isinstance(labels, list):
+            return {
+                "success": False,
+                "message": (
+                    "labels must be a non-empty list of "
+                    "{componentRef, pinNumber, netName} objects"
+                ),
+            }
+
+        results: List[Dict[str, Any]] = []
+        placed = already = collisions = failed = 0
+
+        for item in labels:
+            if not isinstance(item, dict):
+                results.append(
+                    {"error": "each label must be an object with componentRef/pinNumber/netName"}
+                )
+                failed += 1
+                continue
+
+            net = item.get("netName")
+            ref = item.get("componentRef")
+            pin = item.get("pinNumber")
+            single_params: Dict[str, Any] = {
+                "schematicPath": item.get("schematicPath") or schematic_path,
+                "netName": net,
+                "componentRef": ref,
+                "pinNumber": pin,
+            }
+            # Forward optional per-item placement overrides verbatim.
+            for k in ("position", "labelType", "orientation", "snapTolerance"):
+                if item.get(k) is not None:
+                    single_params[k] = item[k]
+            item_force = item.get("force")
+            single_params["force"] = shared_force if item_force is None else item_force
+
+            r = handle_add_schematic_net_label(iface, single_params)
+
+            entry: Dict[str, Any] = {
+                "ref": ref,
+                "pin": (str(pin) if pin is not None else None),
+                "net": net,
+            }
+            if r.get("success"):
+                if r.get("already_labeled"):
+                    entry["already_labeled"] = True
+                    already += 1
+                else:
+                    placed += 1
+                entry["connected_to_pin"] = r.get("connected_to_pin")
+            else:
+                failed += 1
+                if r.get("label_collision"):
+                    entry["label_collision"] = r["label_collision"]
+                    collisions += 1
+                entry["error"] = r.get("message")
+            results.append(entry)
+
+        return {
+            # ≥1 item placed OR already labeled (both mean "on the net") = success.
+            "success": (placed + already) > 0,
+            "results": results,
+            "counts": {
+                "total": len(labels),
+                "placed": placed,
+                "already_labeled": already,
+                "collisions": collisions,
+                "failed": failed,
+            },
+            "message": (
+                f"Labeled {placed} pin(s); {already} already labeled; "
+                f"{failed} failed ({collisions} net collision(s))."
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"Error adding multiple net labels: {str(e)}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+        return {
+            "success": False,
+            "message": str(e),
+            "errorDetails": traceback.format_exc(),
+        }
+
+
 def handle_add_schematic_net_label(
     iface: "KiCADInterface", params: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -370,6 +478,7 @@ def handle_add_schematic_net_label(
         component_ref = params.get("componentRef")
         pin_number = params.get("pinNumber")
         snap_tolerance = float(params.get("snapTolerance", 0.05))
+        force = bool(params.get("force"))
 
         if not all([schematic_path, net_name]):
             return {
@@ -484,9 +593,11 @@ def handle_add_schematic_net_label(
         # is almost certainly a mistake (the pin then carries both names); write
         # it but warn. PWR_FLAG is not a named port, so it never reaches here.
         power_warnings: List[str] = []
+        landing_is_power_port = False
         if landing_pin is not None:
             lib_id_lp, value_lp = _lookup_symbol_lib_value(schematic_path, landing_pin["ref"])
             if _is_power_port(landing_pin["ref"], lib_id_lp):
+                landing_is_power_port = True
                 ref_lp = landing_pin["ref"]
                 if value_lp is not None and net_name == value_lp:
                     logger.info(
@@ -534,6 +645,61 @@ def handle_add_schematic_net_label(
             except Exception as e:
                 logger.debug(f"Pin-angle derivation for label orientation failed: {e}")
                 orientation = 0
+
+        # Fix-5: guard against silently stacking a DIFFERENT-named label / power
+        # pin on an already-labeled point (a silent net short). A SAME-named
+        # label already there is idempotent (already_labeled, no duplicate
+        # written). Power ports are handled by the F4 short-circuit/warning above,
+        # so skip them here. Override the different-net refusal with force=true.
+        if not landing_is_power_port and not force:
+            try:
+                from commands.connection_schematic import ConnectionManager
+
+                net_points = ConnectionManager._existing_net_points(Path(schematic_path))
+            except Exception as e:
+                logger.debug(f"label-collision scan failed: {e}")
+                net_points = []
+            collision_tol = 0.05
+            same_here = False
+            collision: Optional[tuple] = None  # (point, existing_net)
+            for cpx, cpy, cnet in net_points:
+                if (
+                    abs(cpx - float(position[0])) <= collision_tol
+                    and abs(cpy - float(position[1])) <= collision_tol
+                ):
+                    if cnet == net_name:
+                        same_here = True
+                    else:
+                        collision = ([round(cpx, 4), round(cpy, 4)], cnet)
+            if collision is not None:
+                pt, existing_net = collision
+                msg = (
+                    f"Refused to add label '{net_name}' at {list(position)}: a different net "
+                    f"'{existing_net}' is already labeled at {pt}. Two differently-named labels "
+                    f"on one node short those nets together. Pass force=true to add it anyway, "
+                    f"or pick a different point."
+                )
+                logger.error(msg)
+                return {
+                    "success": False,
+                    "message": msg,
+                    "label_collision": {"point": pt, "existing_net": existing_net},
+                }
+            if same_here:
+                logger.info(
+                    f"Label '{net_name}' already present at {list(position)}; "
+                    f"skipping duplicate (idempotent)."
+                )
+                return {
+                    "success": True,
+                    "already_labeled": True,
+                    "connected_to_pin": landing_pin,
+                    "actual_position": list(position),
+                    "message": (
+                        f"A '{net_name}' label is already present at {list(position)}; "
+                        f"no duplicate was written."
+                    ),
+                }
 
         # Collect existing net names BEFORE adding the new label so we can
         # detect case-mismatch collisions against pre-existing nets only.

@@ -608,16 +608,105 @@ def resolve_power_flags(schematic: Any, schematic_path: str) -> List[Dict[str, A
     return results
 
 
+def _annotate_floating_power_symbols(
+    schematic: Any, schematic_path: str, power_symbols: List[Dict[str, Any]]
+) -> None:
+    """Stamp ``floating: bool`` on each power-port symbol (F6, in place).
+
+    A power port joins its net purely by name; its physical pin is DANGLING
+    (kicad-cli ERC: "Pin not connected") when nothing coincides with the pin
+    endpoint — no wire endpoint, no real net label, and no other component pin.
+    A floating power symbol looks like a net member here yet fails ERC, so flag
+    it. PWR_FLAG sentinel filtering is untouched (this only looks at #PWR ports).
+    """
+    if not power_symbols:
+        return
+
+    try:
+        sexp = _load_sexp(schematic_path)
+    except Exception:
+        sexp = None
+
+    # Wire endpoints.
+    wire_pts: Set[Tuple[int, int]] = set()
+    for wire in _parse_wires(schematic):
+        if wire:
+            wire_pts.add(wire[0])
+            wire_pts.add(wire[-1])
+
+    # Real net labels only (power-port pins are excluded — a power symbol does
+    # not physically connect ITSELF, so its own implicit label must not count).
+    label_pts: Set[Tuple[int, int]] = set()
+    if sexp is not None:
+        try:
+            p2l, _ = _parse_labels_sexp(sexp)
+            label_pts = set(p2l.keys())
+        except Exception as e:
+            logger.debug(f"_annotate_floating_power_symbols: label parse failed: {e}")
+
+    # Every component pin keyed by IU point → set of owning references.
+    pin_owner: Dict[Tuple[int, int], Set[str]] = {}
+    locator = PinLocator()
+    if hasattr(schematic, "symbol"):
+        for symbol in schematic.symbol:
+            try:
+                if not hasattr(symbol, "property") or not hasattr(symbol.property, "Reference"):
+                    continue
+                ref = symbol.property.Reference.value
+                if ref.startswith("_TEMPLATE"):
+                    continue
+                for coords in (
+                    locator.get_all_symbol_pins(Path(schematic_path), ref) or {}
+                ).values():
+                    pin_owner.setdefault(_to_iu(float(coords[0]), float(coords[1])), set()).add(ref)
+            except Exception as e:
+                logger.debug(f"_annotate_floating_power_symbols: pin scan for a symbol failed: {e}")
+
+    def _near(pt: Tuple[int, int], pts: Set[Tuple[int, int]]) -> bool:
+        ix, iy = pt
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if (ix + dx, iy + dy) in pts:
+                    return True
+        return False
+
+    def _foreign_pin(ref: str, pt: Tuple[int, int]) -> bool:
+        ix, iy = pt
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                owners = pin_owner.get((ix + dx, iy + dy))
+                if owners and any(o != ref for o in owners):
+                    return True
+        return False
+
+    for ps in power_symbols:
+        ref = ps.get("ref")
+        try:
+            pins = locator.get_all_symbol_pins(Path(schematic_path), ref) or {}
+            pin_coords: Optional[List[float]] = pins.get(str(ps.get("pin", "1"))) or pins.get("1")
+            if not pin_coords:
+                continue
+            pin_iu = _to_iu(float(pin_coords[0]), float(pin_coords[1]))
+            connected = (
+                _near(pin_iu, wire_pts) or _near(pin_iu, label_pts) or _foreign_pin(ref, pin_iu)
+            )
+            ps["floating"] = not connected
+        except Exception as e:
+            logger.debug(f"_annotate_floating_power_symbols: {ref} floating check failed: {e}")
+
+
 def get_power_attachments_for_net(
     schematic: Any, schematic_path: str, net_name: str
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Power-symbol / PWR_FLAG attachment for a single net (verification aid).
 
-    Returns ``{"power_symbols": [{ref, pin, value}],
+    Returns ``{"power_symbols": [{ref, pin, value, floating}],
     "power_flags": [{ref, pin, attachment}]}`` — the power ports whose Value is
-    ``net_name`` and the PWR_FLAG markers whose pin joins ``net_name``.
+    ``net_name`` (each flagged ``floating`` when its pin is physically dangling,
+    F6) and the PWR_FLAG markers whose pin joins ``net_name``.
     """
     power_symbols = _power_symbols_on_net(schematic, net_name)
+    _annotate_floating_power_symbols(schematic, schematic_path, power_symbols)
     power_flags = [
         {"ref": f["ref"], "pin": f["pin"], "attachment": f["attachment"]}
         for f in resolve_power_flags(schematic, schematic_path)

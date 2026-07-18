@@ -97,7 +97,8 @@ class BomMixin:
                 return no_board_loaded()
 
             output_path = params.get("outputPath")
-            format = params.get("format", "CSV")
+            # Accept any case ("csv" == "CSV"); compare/echo the uppercase form.
+            format = str(params.get("format", "CSV")).upper()
             group_by_value = params.get("groupByValue", True)
             # Accept both the schema name (includeAttributes) and the shorthand
             # (attributes) some callers use — the sourcing columns were silently

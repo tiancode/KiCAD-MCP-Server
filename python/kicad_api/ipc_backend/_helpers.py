@@ -4,7 +4,8 @@ Split out of the former monolithic kicad_api/ipc_backend.py.
 """
 
 import logging
-from typing import Any, List
+import os
+from typing import Any, List, Optional
 
 logger = logging.getLogger("kicad_interface")
 
@@ -91,6 +92,62 @@ def has_open_pcb_document(kicad: Any) -> bool:
         if type_name in {"DOCTYPE_PCB", "PCB"}:
             return True
     return False
+
+
+def _doc_board_path(doc: Any) -> str:
+    """Stitch a kipy document's board path (``project.path`` + ``board_filename``).
+
+    kipy returns the board path in two parts — the bare ``board_filename``
+    (relative) and ``document.project.path`` (its directory) — plus, on some
+    call paths / older stubs, a single ``path`` attribute.  Returns "" for a
+    non-PCB document or when no usable filename is present.
+    """
+    fname = getattr(doc, "board_filename", None) or getattr(doc, "path", None) or ""
+    fname = str(fname)
+    if not fname.endswith(".kicad_pcb"):
+        return ""
+    if os.path.isabs(fname):
+        return fname
+    proj = getattr(doc, "project", None)
+    proj_dir = getattr(proj, "path", "") if proj is not None else ""
+    proj_dir = str(proj_dir) if proj_dir else ""
+    return os.path.join(proj_dir, fname) if proj_dir else fname
+
+
+def open_pcb_document_paths(kicad: Any) -> List[str]:
+    """Absolute-ish paths of every ``.kicad_pcb`` document open over IPC.
+
+    Complements :func:`has_open_pcb_document` (which only answers yes/no):
+    the socket-preference and board-identity logic need the actual paths so
+    they can pick the KiCad instance whose open board matches the project the
+    MCP session is scoped to (a second instance on ``api-<pid>.sock`` opened a
+    DIFFERENT board — routing IPC ops to it silently mutates the wrong file).
+    """
+    DocumentType = _document_type_enum()
+    doc_type = DocumentType.DOCTYPE_PCB if DocumentType is not None else None
+    out: List[str] = []
+    for doc in get_open_documents_compat(kicad, doc_type):
+        path = _doc_board_path(doc)
+        if path:
+            out.append(path)
+    return out
+
+
+def normalize_board_path(path: Any) -> Optional[str]:
+    """Canonicalize a ``.kicad_pcb`` path for cross-source identity comparison.
+
+    Returns an absolute, symlink-resolved, case-normalized path string, or
+    ``None`` when ``path`` isn't a usable string.  Used to compare the IPC
+    document's board path against the MCP project's expected board path so a
+    legitimate same-board match doesn't false-refuse over a symlink, a
+    relative vs. absolute form, or (on Windows) case differences.
+    """
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        return os.path.normcase(os.path.realpath(os.path.expanduser(path)))
+    except Exception:
+        return None
 
 
 def normalize_board_layer(raw_layer: Any) -> str:

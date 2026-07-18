@@ -713,14 +713,24 @@ class ZoneMixin:
                         "message": "outline needs at least 3 points",
                         "errorCode": "VALIDATION",
                     }
+                # Convert/validate EVERY point BEFORE mutating the zone: a bad
+                # unit on a later point makes unit_to_nm_scale raise
+                # InvalidUnitError, and if that happened AFTER
+                # RemoveAllContours()/NewOutline() the zone would be left with a
+                # destroyed outline that the next auto-save persists.  Pre-build
+                # the vectors so the raise surfaces as a VALIDATION refusal with
+                # the zone's original outline intact.  (finding: convert-after-mutate)
+                new_vectors = []
+                for point in points:
+                    unit_scale = unit_to_nm_scale(point.get("unit", "mm"))
+                    new_vectors.append(
+                        pcbnew.VECTOR2I(int(point["x"] * unit_scale), int(point["y"] * unit_scale))
+                    )
                 outline = zone.Outline()
                 outline.RemoveAllContours()
                 outline.NewOutline()
-                for point in points:
-                    unit_scale = unit_to_nm_scale(point.get("unit", "mm"))
-                    outline.Append(
-                        pcbnew.VECTOR2I(int(point["x"] * unit_scale), int(point["y"] * unit_scale))
-                    )
+                for vec in new_vectors:
+                    outline.Append(vec)
                 changed.append("outline")
 
             if not changed:

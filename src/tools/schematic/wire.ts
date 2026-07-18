@@ -91,6 +91,12 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         .number()
         .optional()
         .describe("Auto-snap radius in mm for raw positions (default 0.05). 0 disables snapping."),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Place even if the point already carries a DIFFERENT net's label (default refuses with label_collision to avoid a silent short). A same-net label is a no-op (already_labeled).",
+        ),
     },
     async (args: {
       schematicPath: string;
@@ -101,6 +107,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       labelType?: string;
       orientation?: number;
       snapTolerance?: number;
+      force?: boolean;
     }) => {
       // Accept both {x,y} and [x,y] for position (S12); Python expects [x,y].
       const result = await callKicadScript("add_schematic_net_label", {
@@ -115,12 +122,53 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
     },
   );
 
+  server.tool(
+    "add_schematic_net_labels",
+    "Batch net-labeling: place many net labels in one call (cuts per-pin round-trips). " +
+      "Each item = {componentRef, pinNumber, netName}. Reuses add_schematic_net_label per item " +
+      "(same pin-snap + collision guards). Per-item failures don't abort; result has per-item " +
+      "results[] and counts. Overall success when >=1 label was placed.",
+    {
+      schematicPath: z.string().describe("Shared path to the .kicad_sch file for all items."),
+      labels: z
+        .array(
+          z.object({
+            componentRef: z.string().describe("Component reference (e.g. U1, R1)."),
+            pinNumber: z
+              .union([z.string(), z.number()])
+              .describe("Pin number or name on componentRef (e.g. '3', 'SDA')."),
+            netName: z.string().describe("Net name for the label."),
+            force: z.boolean().optional().describe("Per-item override of the shared force flag."),
+          }),
+        )
+        .min(1)
+        .describe("List of pins to label."),
+      force: z
+        .boolean()
+        .optional()
+        .describe("Shared: place even on a different-net collision (default refuses per item)."),
+    },
+    async (args: {
+      schematicPath: string;
+      labels: Array<{
+        componentRef: string;
+        pinNumber: string | number;
+        netName: string;
+        force?: boolean;
+      }>;
+      force?: boolean;
+    }) => {
+      return formatKicadResult(await callKicadScript("add_schematic_net_labels", args));
+    },
+  );
+
   // Add or remove a no-connect flag — replaces add_no_connect and
   // delete_no_connect. Dispatches to the original python commands.
   server.tool(
     "set_no_connect",
     "Add a no-connect flag (X) to an intentionally unconnected pin, suppressing ERC 'Pin not connected' errors; remove=true deletes an existing flag. " +
-      "Prefer componentRef + pinNumber; a raw position [x, y] (mm) must match the pin endpoint exactly.",
+      "Prefer componentRef + pinNumber; a raw position [x, y] (mm) must match the pin endpoint exactly. " +
+      "Refuses (pin_connected) if the pin already has a wire/label unless force=true.",
     {
       schematicPath: z.string().describe("Path to the schematic file"),
       position: xyPointSchema
@@ -140,6 +188,12 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         .boolean()
         .optional()
         .describe("true removes an existing no-connect flag instead of adding one."),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Add the flag even on a pin that already has live connectivity (default refuses).",
+        ),
       tolerance: z
         .number()
         .optional()
@@ -151,6 +205,7 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
       componentRef?: string;
       pinNumber?: string | number;
       remove?: boolean;
+      force?: boolean;
       tolerance?: number;
     }) => {
       const { remove, position, ...rest } = args;
@@ -215,12 +270,20 @@ export function registerSchematicWireTools(server: McpServer, callKicadScript: C
         const powerSymbols = result.power_symbols ?? [];
         if (powerSymbols.length) {
           lines.push("Power symbols:");
-          for (const p of powerSymbols) lines.push(`  - ${p.ref}/${p.pin} (${p.value})`);
+          for (const p of powerSymbols)
+            lines.push(
+              `  - ${p.ref}/${p.pin} (${p.value})${p.floating ? " — DANGLING (on net by name only, physically unconnected)" : ""}`,
+            );
         }
         const powerFlags = result.power_flags ?? [];
         if (powerFlags.length) {
           lines.push("Power flags (PWR_FLAG):");
           for (const p of powerFlags) lines.push(`  - ${p.ref}/${p.pin} [${p.attachment}]`);
+        }
+        const warnings = result.warnings ?? [];
+        if (warnings.length) {
+          lines.push("Warnings:");
+          for (const w of warnings) lines.push(`  ! ${w}`);
         }
         return textResult(lines.join("\n"));
       } else {

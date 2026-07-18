@@ -311,7 +311,12 @@ def handle_check_bom_availability(
             components.append(comp)
 
         if not components:
-            return {"success": False, "message": "Board has no footprints to check"}
+            return {
+                "success": False,
+                "message": "Board has no footprints to check",
+                "errorDetails": "Place components on the board before checking BOM availability.",
+                "errorCode": "EMPTY_BOARD",
+            }
 
         def _search_with_prices(**kw: Any) -> Dict[str, Any]:
             # search_parts_meta returns raw DB rows carrying only price_json;

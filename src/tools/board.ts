@@ -30,7 +30,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
     {
       width: z.number().describe("Board width"),
       height: z.number().describe("Board height"),
-      unit: z.enum(["mm", "mil", "inch"]),
+      unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit (default mm)"),
       clearExisting: z
         .boolean()
         .optional()
@@ -168,7 +168,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.enum(["mm", "mil", "inch"]),
+          unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit (default mm)"),
         })
         .describe("Position of the mounting hole"),
       diameter: z.number().describe("Diameter of the hole"),
@@ -195,7 +195,7 @@ export function registerBoardTools(server: McpServer, callKicadScript: CommandFu
         .object({
           x: z.number(),
           y: z.number(),
-          unit: z.enum(["mm", "mil", "inch"]),
+          unit: z.enum(["mm", "mil", "inch"]).optional().describe("Unit (default mm)"),
         })
         .describe("Position of the text"),
       layer: z.string().describe("Layer to place the text on"),

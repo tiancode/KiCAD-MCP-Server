@@ -356,7 +356,13 @@ def _forward_file_open_to_running_kicad(iface: "KiCADInterface", path: Path) -> 
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             kwargs["start_new_session"] = True
-        subprocess.Popen(argv, **kwargs)
+        proc = subprocess.Popen(argv, **kwargs)
+        # E: a .kicad_pcb spawn is a standalone pcbnew (its own api-<pid>.sock).
+        # Record its PID so manage_kicad_ui(action=quit) can terminate this
+        # second instance the server spawned — otherwise the server has no way
+        # to release the extra board it opened.
+        if is_board:
+            KiCADProcessManager._record_launched_pid(getattr(proc, "pid", None))
         out["fileOpenAttempts"].append({"method": "spawn", "argv": list(argv)})
         out["fileOpenForwarded"] = True
         out["fileOpenMethod"] = "spawn"
@@ -530,7 +536,60 @@ def handle_run_action(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[s
             "namespace (e.g. common.Control.zoomFitScreen); 'pcbnew.EditorControl.*' "
             "does not resolve. Retry with a valid name.",
         )
+
+    # E: a quit action returns RAS_OK even when KiCad never actually quits
+    # (verified no-op on 10.0.4 — the app ignores the request, likely a modal
+    # confirm).  Never report RAS_OK-as-success for a quit without verifying the
+    # process really exited: poll the IPC connection (a real quit tears the
+    # socket down).  Still alive → override to success:false and say so.
+    if isinstance(result, dict) and result.get("success") is True and "quit" in action.lower():
+        if _ipc_still_alive_after(iface, timeout_s=3.0):
+            result["success"] = False
+            result["quitVerified"] = False
+            result["errorCode"] = "QUIT_NOOP"
+            result["message"] = (
+                f"run_action({action!r}) returned RAS_OK but KiCad is still "
+                "running — quit over IPC is a known no-op on KiCad 10.0.4 (the "
+                "app ignores the request, likely awaiting a modal confirmation). "
+                "To close a GUI the server launched, use "
+                "manage_kicad_ui(action=quit); otherwise ask the user to quit "
+                "KiCad (File → Quit)."
+            )
+            result.setdefault(
+                "hint",
+                "Don't trust RAS_OK for quit. Use manage_kicad_ui(action=quit) "
+                "for a server-launched GUI, or have the user close KiCad.",
+            )
+        else:
+            result["quitVerified"] = True
     return result
+
+
+def _ipc_still_alive_after(iface: "KiCADInterface", timeout_s: float = 3.0) -> bool:
+    """True if the IPC connection is still responsive after ``timeout_s``.
+
+    Used to verify a quit action: a real quit tears the socket down, so a
+    connection that stays live means the quit was ignored.  Returns True
+    (assume still alive → surface the no-op) when there's no backend to probe,
+    so we never mislabel an unverifiable quit as successful.
+    """
+    import time as _time
+
+    ipc_backend = getattr(iface, "ipc_backend", None)
+    if ipc_backend is None or not hasattr(ipc_backend, "is_connected"):
+        return True
+    deadline = _time.monotonic() + max(0.0, timeout_s)
+    while _time.monotonic() < deadline:
+        try:
+            if not ipc_backend.is_connected():
+                return False
+        except Exception:
+            return False
+        _time.sleep(0.25)
+    try:
+        return bool(ipc_backend.is_connected())
+    except Exception:
+        return False
 
 
 def handle_quit_kicad_ui(iface: "KiCADInterface", params: Dict[str, Any]) -> Dict[str, Any]:

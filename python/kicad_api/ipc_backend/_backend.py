@@ -14,6 +14,8 @@ from kicad_api.base import APINotAvailableError, BoardAPI, ConnectionError, KiCA
 from ._helpers import (
     get_open_documents_compat,
     has_open_pcb_document,
+    normalize_board_path,
+    open_pcb_document_paths,
 )
 
 logger = logging.getLogger("kicad_interface")
@@ -47,13 +49,32 @@ class IPCBackend(KiCADBackend):
         # has a commit in progress'.
         self._board_api: Any = None
 
-    def connect(self, socket_path: Optional[str] = None) -> bool:
+    def connect(
+        self,
+        socket_path: Optional[str] = None,
+        prefer_board_path: Optional[str] = None,
+    ) -> bool:
         """
         Connect to running KiCAD instance via IPC.
 
         Args:
-            socket_path: Optional socket path. If not provided, will try common locations.
-                        Use format: ipc:///tmp/kicad/api.sock
+            socket_path: Optional socket path. If not provided, will try common
+                        locations. Use format: ipc:///tmp/kicad/api.sock
+            prefer_board_path: When several KiCad instances are reachable (a
+                        second instance opened on ``api-<pid>.sock``), prefer the
+                        one whose open ``.kicad_pcb`` matches this path.  Without
+                        it the loop keeps the legacy "first instance with any
+                        board open" behaviour.
+
+        Socket selection precedence:
+          1. an explicit ``socket_path`` argument (used verbatim);
+          2. the ``KICAD_API_SOCKET`` env var — AUTHORITATIVE: it is tried on
+             its own and, if unreachable, raises rather than silently falling
+             back to a default-socket instance (the documented override
+             contract — a default ``api.sock`` instance used to win over it);
+          3. auto-detection across the known socket dirs, globbing
+             ``api-*.sock`` per-instance sockets and, when ``prefer_board_path``
+             is given, choosing the instance whose open board matches it.
 
         Returns:
             True if connection successful
@@ -69,8 +90,19 @@ class IPCBackend(KiCADBackend):
 
             # Try to connect with provided path or auto-detect
             socket_paths_to_try: List[Optional[str]] = []
+            env_socket = (os.environ.get("KICAD_API_SOCKET") or "").strip()
+            authoritative_socket: Optional[str] = None
             if socket_path:
                 socket_paths_to_try.append(socket_path)
+            elif env_socket:
+                # KICAD_API_SOCKET is an explicit operator override — honour it
+                # BEFORE the default candidate list (the previous code only let
+                # kipy read it in the final None fall-through, so a running
+                # default-socket instance always won and the override was a
+                # no-op).  Try it alone; a failure surfaces a clear error naming
+                # the socket instead of silently attaching elsewhere.
+                authoritative_socket = env_socket
+                socket_paths_to_try.append(env_socket)
             else:
                 # Common socket locations (Unix-like systems only)
                 # Windows uses named pipes, handled by auto-detect
@@ -100,7 +132,8 @@ class IPCBackend(KiCADBackend):
                 # PID-suffixed api-<pid>.sock sockets for additional KiCad
                 # instances (e.g. a standalone pcbnew opened next to the
                 # project manager).  Probe all of them — the selection loop
-                # below prefers whichever instance has a board open.
+                # below prefers whichever instance has the requested board (or,
+                # failing that, any board) open.
                 import glob as _glob
 
                 for d in socket_dirs:
@@ -108,17 +141,23 @@ class IPCBackend(KiCADBackend):
                     for extra in sorted(_glob.glob(os.path.join(d, "api-*.sock"))):
                         socket_paths_to_try.append(f"ipc://{extra}")
 
-                # Final fall-through: ask kipy to auto-detect (uses
-                # KICAD_API_SOCKET env var, or its own default discovery).
+                # Final fall-through: ask kipy to auto-detect (uses its own
+                # default discovery).  KICAD_API_SOCKET is handled above, so it
+                # never reaches here.
                 socket_paths_to_try.append(None)
 
-            # Selection: prefer the first instance that has a .kicad_pcb
-            # document open (it can serve board ops immediately); otherwise
-            # fall back to the first instance that answers ping at all.
+            # Selection, most-specific first:
+            #   1. an instance whose open board == prefer_board_path (exact fix
+            #      for two-instances-open: pick the one on the project's board);
+            #   2. else the first instance with ANY board open (serves board ops
+            #      immediately);
+            #   3. else the first instance that answers ping at all.
             # With a single KiCad running this degenerates to the previous
             # first-connectable behaviour.
+            prefer_norm = normalize_board_path(prefer_board_path)
             last_error = None
-            fallback: Optional[tuple] = None
+            board_fallback: Optional[tuple] = None
+            any_fallback: Optional[tuple] = None
             chosen: Optional[tuple] = None
             for path in socket_paths_to_try:
                 try:
@@ -126,7 +165,7 @@ class IPCBackend(KiCADBackend):
                         logger.debug(f"Trying socket path: {path}")
                         candidate = KiCad(socket_path=path)
                     else:
-                        if fallback is not None:
+                        if any_fallback is not None or board_fallback is not None:
                             continue  # already have a live connection; skip kipy auto-detect
                         logger.debug("Trying auto-detection")
                         candidate = KiCad()
@@ -137,19 +176,33 @@ class IPCBackend(KiCADBackend):
                     logger.debug(f"Failed to connect via {path}: {e}")
                     continue
                 try:
-                    board_open = has_open_pcb_document(candidate)
+                    board_paths = open_pcb_document_paths(candidate)
                 except Exception:
-                    board_open = False
-                if board_open:
+                    board_paths = []
+                if prefer_norm is not None and any(
+                    normalize_board_path(bp) == prefer_norm for bp in board_paths
+                ):
                     chosen = (candidate, path)
                     break
-                if fallback is None:
-                    fallback = (candidate, path)
+                if board_paths and board_fallback is None:
+                    board_fallback = (candidate, path)
+                if any_fallback is None:
+                    any_fallback = (candidate, path)
 
             if chosen is None:
-                chosen = fallback
+                chosen = board_fallback or any_fallback
             if chosen is None:
-                # None of the paths worked
+                # None of the paths worked.  Name the socket when the operator
+                # pointed us at one explicitly (env override / arg) so the
+                # failure is actionable instead of a generic "couldn't connect".
+                if authoritative_socket is not None:
+                    raise ConnectionError(
+                        f"KICAD_API_SOCKET={authoritative_socket} is set but that "
+                        f"KiCAD IPC socket is unreachable: {last_error}. Verify a "
+                        "KiCAD instance is serving that socket (and has the IPC "
+                        "API server enabled), or unset KICAD_API_SOCKET to "
+                        "auto-detect."
+                    )
                 raise ConnectionError(f"Could not connect to KiCAD IPC: {last_error}")
             self._kicad, used_path = chosen
             logger.info(f"Connected via socket: {used_path or 'auto-detected'}")
@@ -215,38 +268,63 @@ class IPCBackend(KiCADBackend):
             self._board_api = None  # stale handle; new connection gets a fresh one
             logger.info("Disconnected from KiCAD IPC")
 
-    def reselect_preferring_board(self) -> bool:
+    def reselect_preferring_board(self, prefer_board_path: Optional[str] = None) -> bool:
         """Reconnect so the client talks to the KiCad instance that actually
-        has a board open.
+        has the wanted board open.
 
         The first KiCad process grabs the well-known ``api.sock``; any second
         instance (e.g. a standalone ``pcbnew <board>`` spawned next to a
         running project manager) serves its own ``api-<pid>.sock``. A client
-        already connected to the board-less instance never re-runs the
-        connect-time socket selection, so the PCB-editor gate keeps reporting
-        "no board" even though one is open on the sibling socket. ``connect()``
-        already prefers an instance with a ``.kicad_pcb`` document — this just
-        gives it a fresh chance when the current connection has none.
+        already connected to the wrong instance never re-runs the connect-time
+        socket selection, so it keeps reading/mutating the wrong board.
+        ``connect()`` picks the instance whose open board matches
+        ``prefer_board_path`` — this gives it a fresh chance.
 
-        No-op (returns True) when the current connection already reports a
-        board. Returns False when no instance with a board could be reached;
-        the client may then be disconnected (the next ``connect()`` heals it).
+        With ``prefer_board_path``:
+          - No-op (True) when the current connection is already on that board.
+          - Otherwise reconnect and re-scan; True only if the reconnected
+            instance is on the requested board (so the caller's board-identity
+            check passes).
+        Without it (legacy call): No-op (True) when the current connection has
+        ANY board open; otherwise reconnect and return True if any board is
+        then reachable.  Returns False when the target instance can't be
+        reached; the client may then be disconnected (the next ``connect()``
+        heals it).
         """
         kicad = self._kicad
+        prefer_norm = normalize_board_path(prefer_board_path)
         if kicad is not None and self._connected:
-            try:
-                if has_open_pcb_document(kicad):
+            if prefer_norm is None:
+                try:
+                    if has_open_pcb_document(kicad):
+                        return True
+                except Exception as e:
+                    logger.debug(f"reselect: board-document check failed: {e}")
+            else:
+                try:
+                    board_paths = open_pcb_document_paths(kicad)
+                except Exception as e:
+                    logger.debug(f"reselect: board-path check failed: {e}")
+                    board_paths = []
+                if any(normalize_board_path(bp) == prefer_norm for bp in board_paths):
                     return True
-            except Exception as e:
-                logger.debug(f"reselect: board-document check failed: {e}")
+                # Current instance is on a different board → reconnect + rescan.
         self.disconnect()
         try:
-            self.connect()
+            if prefer_board_path is None:
+                self.connect()
+            else:
+                self.connect(prefer_board_path=prefer_board_path)
         except Exception as e:
             logger.debug(f"reselect: reconnect failed: {e}")
             return False
         try:
-            return bool(self._kicad is not None and has_open_pcb_document(self._kicad))
+            if self._kicad is None:
+                return False
+            if prefer_norm is None:
+                return bool(has_open_pcb_document(self._kicad))
+            board_paths = open_pcb_document_paths(self._kicad)
+            return any(normalize_board_path(bp) == prefer_norm for bp in board_paths)
         except Exception as e:
             logger.debug(f"reselect: post-reconnect check failed: {e}")
             return False
@@ -363,6 +441,22 @@ class IPCBackend(KiCADBackend):
         if self._board_api is None or self._board_api._kicad is not self._kicad:
             self._board_api = IPCBoardAPI(self._kicad, self._notify_change)
         return self._board_api
+
+    def invalidate_board_cache(self) -> None:
+        """Drop the cached board wrapper so the next read re-fetches the CURRENT
+        document.
+
+        Called after a board-identity conflict / reselect heal: the cached
+        IPCBoardAPI holds a kipy Board wrapper for the connection's lifetime, so
+        without this a same-instance board switch would keep serving the stale
+        document to the gate and to reads (finding 2).  The IPCBoardAPI instance
+        itself is kept (its open-transaction state must survive) — only its
+        cached Board wrapper is invalidated."""
+        if self._board_api is not None:
+            try:
+                self._board_api.invalidate_board()
+            except Exception as e:
+                logger.debug(f"invalidate_board_cache: {e}")
 
     # KiCad-level operations (not specific to one document)
     def run_action(self, action: str) -> Dict[str, Any]:

@@ -70,7 +70,9 @@ class _FakeIPCBackend:
     def __init__(self):
         self.connected = False
 
-    def connect(self):
+    # Mirrors IPCBackend.connect's real signature (socket_path +
+    # prefer_board_path) so the dispatcher's board-preference call works.
+    def connect(self, socket_path=None, prefer_board_path=None):
         self.connected = True
         return True
 
@@ -85,12 +87,12 @@ class _FakeIPCBackend:
 
 
 class _ConnectShouldNotBeCalledIPCBackend(_FakeIPCBackend):
-    def connect(self):
+    def connect(self, socket_path=None, prefer_board_path=None):
         raise AssertionError("IPC reconnect should not be attempted")
 
 
 class _FailingConnectIPCBackend(_FakeIPCBackend):
-    def connect(self):
+    def connect(self, socket_path=None, prefer_board_path=None):
         raise RuntimeError("IPC unavailable")
 
 
